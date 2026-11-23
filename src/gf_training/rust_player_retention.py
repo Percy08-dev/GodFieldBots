@@ -63,7 +63,7 @@ def _ordinary_protected_generations(registry: Json, generation: int, snapshot_po
 
 def protected_files(records: dict[int, Json], registry: Json, *, generation: int,
                     operating: Json | None = None, pending: list[int] | None = None) -> dict[int, set[str]]:
-    """Pure adapter of actual new registry references to the unchanged recipes."""
+    """Adapt actual registry references to the ordinary and shared HPO retention recipes."""
     active = {key: row['binding'] for key, row in registry['service_references'].items()
         if row['status'] != 'released'}
     if operating is not None:
@@ -319,14 +319,16 @@ def _retirement_history_data(state: Json, prepared: Json, intent: Json,
     exit_record, exit_sha = read_control_record(root / f'exit-{invocation}.json', root)
     completion, _ = read_control_record(root / f'completion-{invocation}.json', root)
     validate_completion(completion)
-    validate_prepared(prior, admission)
+    validate_prepared(prior, admission, operation=operation)
     validate_exit(exit_record, admission)
     if (prior_state['run_id'] != state['run_id'] or prior_state['status'] not in ('paused', 'complete')
             or prior_state['invocations'].get(invocation) != entry or prior['state_sha256'] != prior_state_sha
             or prior['state'] != prior_state['status'] or prior['generation_sha256'] != prior_state['generation_sha256']
             or exit_record['prepared_sha256'] != prior_sha or not exit_record['cooperative']
             or exit_record['wait']['exit_code'] != 0 or not exit_record['descendants_reaped'] or exit_record['signals']
-            or completion['kind'] != 'rust-player-training-completion-v1'
+            or completion['kind'] != ('rust-player-initial-pause-completion-v2'
+                if prior['kind'] == 'rust-player-initial-pause-prepared-v2'
+                else 'rust-player-training-completion-v1')
             or completion['state'] != prior_state['status'] or completion['operation_sha256'] != operation_sha
             or completion['prepared_sha256'] != prior_sha or completion['exit_sha256'] != exit_sha
             or completion['state_sha256'] != prior_state_sha

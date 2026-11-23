@@ -170,8 +170,9 @@ def _paused_run(ownership: Any, *, hpo: bool) -> Json:
         raise ContractError('ordinary paused state must be an original owned file')
     state = read_json(path)
     validate_run(state, hpo=hpo)
-    if state['status'] != 'paused' or not state['updates']:
-        raise ContractError('actual paused ordinary run with a committed update required')
+    checkpoint = state['effective_config']['hpo_spec']['operating'].get('checkpoint_evaluation') if hpo else None
+    if state['status'] != 'paused' or not (state['updates'] or checkpoint and 0 in checkpoint['updates']):
+        raise ContractError('actual paused run with a committed checkpoint required')
     return state
 
 
@@ -193,7 +194,8 @@ def _ordinary_resume_snapshot(invocation: LoadedConfig, ownership: Any, state: J
 
 
 def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
-                   hpo_context: Json | None = None, state: Json | None = None) -> tuple[Json, Json]:
+                   hpo_context: Json | None = None, state: Json | None = None,
+                   campaign_record_root: Path | None = None) -> tuple[Json, Json]:
     from gf_common.rust_player import deadline_seconds, hex_identity, validate_operation
     from gf_common.rust_player_clock import validate_operation_clock
     from gf_training.rust_player_supervision import read_control_record
@@ -210,6 +212,14 @@ def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
         raise ContractError('actual paused ordinary config/producer/snapshot differs')
     root = parent / '.rust-player'
     origin_path = root / 'operation-fresh.json'
+    if campaign_record_root is not None:
+        if not hpo:
+            raise ContractError('campaign resume origin requires HPO')
+        origins = [Path(entry['operation_path']) for entry in state['invocations'].values() if entry['mode'] == 'fresh']
+        if (len(origins) != 1 or origins[0].parent != campaign_record_root
+                or not origins[0].name.startswith('operation-')):
+            raise ContractError('paused seed must have one original fresh operation in this supervisor session')
+        root, origin_path = campaign_record_root, origins[0]
     referenced = [entry for entry in state['invocations'].values() if entry['operation_path'] == str(origin_path)]
     if len(referenced) != 1:
         raise ContractError('paused Run5 must reference its actual immutable fresh origin')
@@ -222,7 +232,7 @@ def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
             or origin['execution_request']['mode'] != 'fresh'
             or origin['execution_request'] != referenced[0]['execution_request']
             or origin['run_id'] != state['run_id'] or origin['parent_directory'] != str(parent)
-            or origin['config_path'] != str(root / 'effective-config.json')
+            or origin['config_path'] != str(parent / '.rust-player/effective-config.json')
             or origin['config_sha256'] != loaded.sha256 or origin['runtime_binding_sha256'] != digest(bound)):
         raise ContractError('paused ordinary origin/config/root/operation hash differs')
     if hpo_context is not None and (origin['run_id'] != hpo_context['run_id']
@@ -233,6 +243,8 @@ def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
         raise ContractError('resume requires same experiment/run and distinct operation context')
     clock, _sha = read_control_record(root / f'clock-{origin["operation_id"]}.json', root)
     now = time.monotonic()
+    if campaign_record_root is not None and now >= deadline_seconds(origin['deadlines']['admission_bits']):
+        raise TimeoutError('original checkpoint training admission expired')
     validate_operation_clock(clock, operation=origin, session_clock_binding=clock['clock_binding'],
         session_finish=origin['deadlines']['finish_bits'], boot_id=_boot_id(), now=now)
     if (clock['inputs'] != _inputs(cfg) or clock['post_host_seconds'] != cfg.run.post_host_seconds

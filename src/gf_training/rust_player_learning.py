@@ -989,6 +989,7 @@ class RustGameOperations:
     def prepare(self) -> Any:
         from gf_common.artifacts import json_bound
         from gf_common.domain import digest
+        from gf_common.rust_player import initial_hpo_pause
         from gf_training.group_pack_resources import remaining
         from gf_training.rust_player_supervision import write_control_record
         # run_scope has closed its original borrower FD. The supervisor still
@@ -1019,12 +1020,14 @@ class RustGameOperations:
         close_path = self.control.root / f'close-{invocation}.json'
         close_sha = self._write_protocol(close_path, close, deadline=deadline)
         row = self.registry.records[self.state['updates']]
-        prepared = {'schema_version': 1, 'kind': 'rust-player-prepared-v1', **common,
+        initial = initial_hpo_pause(self.control.operation)
+        prepared = {'schema_version': 2 if initial else 1,
+            'kind': 'rust-player-initial-pause-prepared-v2' if initial else 'rust-player-prepared-v1', **common,
             'config_sha256': self.loaded.sha256, 'state': self.state['status'],
             'committed_update': self.state['updates'], 'generation': self.state['updates'],
             'state_sha256': self.frozen_state_sha256, 'generation_sha256': self.state['generation_sha256'],
             'artifacts_sha256': digest(row['artifact_files']),
-            'source_manifest_sha256': self.last_source_manifest_sha256,
+            'source_manifest_sha256': None if initial else self.last_source_manifest_sha256,
             'close_ack_path': str(close_path), 'close_ack_sha256': close_sha}
         path = self.control.root / f'prepared-{invocation}.json'
         with self.writer.parent_budget.reserve(32 * json_bound(prepared) + 65536):

@@ -520,6 +520,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if formal is not None:
             formal.preflight(loaded)
         model, training = ops.validate_config(config) if ops else config.model, config.training
+        scheduled = config.hpo_spec['operating'].get('checkpoint_evaluation', {}).get('updates', ()) if hpo else ()
+        initial_pause = (mode == 'fresh' and type(pause_after_update) is int
+            and pause_after_update == 0 and 0 in scheduled)
         ordinary_games = ordinary_ppo_update(training).collection_games if rust and not hpo else 16
         if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
             raise ContractError('PPO requires fresh supported model recipe and train split')
@@ -531,7 +534,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             raise ContractError('PPO original deadline caps exceeded')
         if mode not in ('fresh', 'resume'):
             raise ContractError('unsupported PPO mode')
-        if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
+        if mode == 'fresh' and pause_after_update is not None and not initial_pause and (
+                type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
             raise ContractError('invalid absolute pause target')
         preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
         initial_execution = ops.deadlines()['execution_bits'] if rust else operation_started + config.run.execution_seconds
@@ -602,7 +606,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     if ops else validate_chain(directory, require_complete=False, deadline=identity_deadline))
                 if initial_scan is not None:
                     initial_scan.finalize()
-                if state['status'] != 'paused' or state['updates'] == 0:
+                if state['status'] != 'paused' or (state['updates'] == 0 and 0 not in scheduled):
                     raise ContractError('resume requires an explicitly paused committed PPO run')
                 if state['config_sha256'] != loaded.sha256 or state['identity'] != identity or state['device'] != training.device:
                     raise ContractError('resume code/runtime/config/device mismatch')
@@ -616,7 +620,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 pool = controls['snapshot_pool']
                 if controls['collection_position'] != state['updates'] or not hpo and pool != [number for number in range(state['updates'] + 1) if number % 10 == 0][-5:]:
                     raise ContractError('resume collection position/pool mismatch')
-            if pause_after_update is not None and (type(pause_after_update) is not int or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
+            if pause_after_update is not None and not initial_pause and (type(pause_after_update) is not int
+                    or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
                 raise ContractError('pause target must exceed current absolute committed-update count')
             remaining = state['wall_deadline_unix'] - now
             wall = ((invocation_started + state['wall_deadline_unix']) - now) if formal is not None else invocation_started + remaining
@@ -697,7 +702,12 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
                 elif initial['hardware'] != state['hardware']:
                     raise ContractError('resume hardware identity mismatch')
-                while True:
+                if initial_pause:
+                    check_clock()
+                    if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
+                        raise RuntimeError('PPO initialization execution/storage overrun')
+                    final_status = 'paused'
+                while final_status != 'paused':
                     check_clock()
                     usage = measure_owned(execution)
                     if hpo:
@@ -939,10 +949,16 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
                             retain(directory, next_generation, deadline=execution)
                     check_clock()
-                    if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
+                    if time.monotonic() >= execution:
+                        raise RuntimeError('PPO commit/retention execution/storage overrun')
+                    usage = measure_owned(execution)
+                    if usage > training.max_owned_bytes:
                         raise RuntimeError('PPO commit/retention execution/storage overrun')
                     if pause_after_update == next_generation:
-                        final_status = 'paused'
+                        if scheduled and ops.stop(state,config,usage,time.monotonic(),execution,admission):
+                            final_status = 'complete' if state['used_decisions'] == config.hpo_spec['decision_budget'] else 'incomplete'
+                        else:
+                            final_status = 'paused'
                         break
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
                 error = failure

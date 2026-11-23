@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import uuid
+from bisect import bisect_left
 from contextlib import ExitStack
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -24,6 +25,8 @@ from gf_common.card_instance import (
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.group_pack_game import checked_storage_binding
+from gf_common.hpo import validate_update_diagnostics
+from gf_common.hpo_checkpoint_evaluation import persisted_checkpoint_evaluation
 from gf_common.hpo_resident import (
     CACHE_OWNER_KEYS,
     RESIDENT_VARIANT,
@@ -176,11 +179,12 @@ def _checked_hpo_spec(state: Json) -> Json:
     for name in ("effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity"):
         checksum(spec[name])
     timed_native = rust_player and 'post_host_seconds' in spec['operating']
-    operating = closed(spec["operating"], _OPERATING | ({'post_host_seconds'} if timed_native else set()))
+    operating = closed(spec["operating"], _OPERATING | ({'post_host_seconds'} if timed_native else set()),
+        {'checkpoint_evaluation'} if expected_schema in (4, 5, 6) else None)
     for name, value in operating.items():
         if name == 'post_host_seconds':
             _number(value, positive=True)
-        else:
+        elif name != 'checkpoint_evaluation':
             integer(value, 1, 2**63 - 1)
     integer(operating["game_concurrency"], 1, 2**63 - 1)
     integer(operating["max_participant_workers"], 1, 2**63 - 1)
@@ -207,6 +211,10 @@ def _checked_hpo_spec(state: Json) -> Json:
             or timers["run_wall_seconds"] <= timers["base_finalization_seconds"]
             or timers["base_execution_seconds"] + timers["base_finalization_seconds"] > timers["base_wall_seconds"] + .001):
         raise ContractError("HPO original base deadline inputs inconsistent")
+    if 'checkpoint_evaluation' in operating:
+        persisted_checkpoint_evaluation(operating['checkpoint_evaluation'], schema_version=expected_schema,
+            max_updates=operating['max_updates'], run_wall_seconds=timers['run_wall_seconds'],
+            finalization_seconds=timers['base_finalization_seconds'])
     if checksum(state.get("hpo_spec_sha256")) != digest(spec):
         raise ContractError("HPO immutable spec hash mismatch")
     return spec
@@ -389,7 +397,11 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
     if state["completed_updates"] is not None:
         integer(state["completed_updates"], 0, training.max_updates)
     if status == "paused" and not state["updates"]:
-        raise ContractError("HPO pause requires a committed update boundary")
+        checkpoint = spec['operating'].get('checkpoint_evaluation')
+        if (checkpoint is None or 0 not in checkpoint['updates']
+                or used or state['collected_decisions'] or state['optimizer_steps']):
+            raise ContractError('initial HPO pause requires scheduled G0 and zero committed training counts')
+        checksum(state['generation_sha256'])
     if ((status == "running" and reason is not None) or (status == "paused" and reason != "pause")
             or (status == "incomplete" and (reason not in ("update_cap", "time_cap", "storage_cap", "empty_collection") or used == spec["decision_budget"]))
             or (status == "complete" and (used != spec["decision_budget"] or reason is not None
@@ -624,7 +636,7 @@ def protected_hpo_files(state: Json, records: list[Json], registry: Json,
 
 def protected_hpo_files_for_operating(op: Json, records: list[Json], registry: Json,
                                       pending_bindings: list[Json] | None = None) -> dict[int,set[str]]:
-    """Original pure retention policy, given already validated operating values."""
+    """Protect resume and inference files using already validated operating values."""
     count = len(records)
     resumes = {0, *range(max(0, count-op['resume_latest']), count)}
     inference = {0, *resumes, *range(max(0, count-op['inference_latest']), count),
@@ -635,6 +647,11 @@ def protected_hpo_files_for_operating(op: Json, records: list[Json], registry: J
     inference.update(row['generation'] for row in registry['evaluation_references'].values())
     inference.update(row['generation'] for row in registry.get('cache_references', {}).values())
     inference.update(row['generation'] for row in pending_bindings or ())
+    checkpoint = op.get('checkpoint_evaluation')
+    if checkpoint is not None:
+        for key in ('updates', 'retain_updates'):
+            scheduled = checkpoint[key]
+            inference.update(scheduled[:bisect_left(scheduled, count)])
     return {g: set(record['artifact_files']) if g in resumes else
         {name for name in record['artifact_files'] if name == 'inference.json' or name.startswith('weights-')}
         if g in inference else set() for g, record in enumerate(records)}
@@ -1039,7 +1056,8 @@ def _update(directory: Path, state: Json, records: list[Json], current: Json, sc
     metrics = closed(update["metrics"], {"policy_loss", "value_mse", "entropy", "approx_kl", "total_loss",
         "optimizer_steps", "optimizer_step_delta", "collected_decisions", "used_decisions", "parity", "tbptt_length",
         "epochs", "endpoint_evaluations", "context_decisions", "suffix_decisions", "update_seconds"},
-        {"elapsed_seconds", "save_seconds", "peak_cpu_memory_bytes"})
+        {"elapsed_seconds", "save_seconds", "peak_cpu_memory_bytes", "diagnostics"})
+    validate_update_diagnostics(metrics)
     for key in ("policy_loss", "value_mse", "entropy", "approx_kl", "total_loss"):
         finite_number(metrics[key], -1e20, 1e20)
     values = {"optimizer_steps": current["optimizer_steps"], "optimizer_step_delta": delta,

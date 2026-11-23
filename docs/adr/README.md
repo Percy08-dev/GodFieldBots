@@ -23,6 +23,9 @@
 [0064](0064-hpo-storage-and-compression.md) — Accepted。HPOの保存先をTOMLで
 指定し、席交換ペアのHTTP診断と更新JSONにzstdを導入する。過去の更新は元の形式で読む。
 
+[0063](0063-hpo-checkpoint-evaluation.md) — Model4の更新ごとの学習診断と
+HPOの定期チェックポイント評価を追加する。
+
 [0060](0060-rust-player-journal-handoff.md) — 共通のRust対戦経路でJournalを連続取得し、
 全試合が設定上限に収まる収集では、ペアの実行証跡とwriterコンテキストを確定して一括投入する。
 

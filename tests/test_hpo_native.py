@@ -103,6 +103,20 @@ def test_actual_candidate_public_hpo_admission_and_old_markers(candidate):
     assert info['card_instance_contract']==CARD_INSTANCE_CONTRACT
     assert hpo_reader_settings(settings,candidate)==asdict(settings)
     assert hpo_reader_settings(settings,candidate,packed=True)==asdict(settings)
+    assert info['card_instance_hpo_update_diagnostics']=='ppo-update-diagnostics-v1'
+    assert hpo_reader_settings(settings,candidate,require_update_diagnostics=True)==asdict(settings)
+
+
+def test_legacy_native_training_refuses_old_reader_before_native_admission(monkeypatch):
+    from gf_common.hpo import NATIVE_CAPABILITY
+    from gf_training import native_backend
+
+    settings = PreparationConfig(backend='rust', reader='participant-structured-v2')
+    module = SimpleNamespace(build_info=lambda: [('card_instance_hpo', NATIVE_CAPABILITY)])
+    monkeypatch.setattr(native_backend, 'card_instance_reader_settings',
+        lambda *_: pytest.fail('old package reached native reader admission'))
+    with pytest.raises(ContractError, match='diagnostics'):
+        native_backend.hpo_reader_settings(settings, module, require_update_diagnostics=True)
 
 
 def test_new_hpo_storage_refuses_old_native_reader_before_admission(monkeypatch):
@@ -199,6 +213,33 @@ def test_actual_candidate_pending_and_final_same_session_control_quota(candidate
         session.retire_payload()
         with pytest.raises(ValueError): session.authorize_hpo(raw)
     finally: session.close()
+
+
+def test_actual_native_persisted_reader_validates_optional_update_diagnostics(candidate, tmp_path):
+    from gf_models.arrays import atomic_json
+    from gf_models.sharded_arrays import read_json
+    from tests.hpo_lineage_support import rehash_chain
+    from tests.hpo_support import original_hpo_chain
+
+    directory = tmp_path / 'parent'
+    original_hpo_chain(directory, updates=1)
+    path = directory / 'updates/000001.json'
+    update = read_json(path)
+    with_diagnostics = _ffi_open(candidate, directory)
+    with_diagnostics.close()
+    diagnostics = update['metrics'].pop('diagnostics')
+    atomic_json(path, update)
+    rehash_chain(directory)
+    historical = _ffi_open(candidate, directory)
+    historical.close()
+    for field, invalid in [('schema_version', 1.), ('extra', 0), ('clip_fraction', True),
+                           ('explained_variance', 1.1), ('pre_clip_grad_norm_mean', -1.),
+                           ('pre_clip_grad_norm_max', 0.), ('learning_rate', -1.)]:
+        update['metrics']['diagnostics'] = dict(diagnostics, **{field: invalid})
+        atomic_json(path, update)
+        rehash_chain(directory)
+        with pytest.raises(ValueError):
+            _ffi_open(candidate, directory)
 
 
 def test_actual_candidate_oversize_authorization_refuses_before_parse_and_stays_failed(candidate,controlled_parent):

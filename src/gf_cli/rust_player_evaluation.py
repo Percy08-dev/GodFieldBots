@@ -21,8 +21,12 @@ from gf_training.rust_player_evaluation import (
 if TYPE_CHECKING:
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_config import LoadedHPOConfig
+    from gf_cli.hpo_evaluation import _CheckpointRequest
     from gf_cli.hpo_storage import CampaignStore
-    from gf_training.rust_player_completion import ColdFinalizedRustParent
+    from gf_training.rust_player_completion import (
+        ColdFinalizedRustInvocation,
+        ColdFinalizedRustParent,
+    )
     from gf_training.rust_player_supervision import HostControl
 
 
@@ -332,8 +336,9 @@ def _fresh_evaluation_plan(loaded: Any, campaign: Json, parent: Json, binding: A
     from gf_common.domain import RuntimePolicyBinding, clone
     from gf_common.schedule import serialize_schedule
     bindings = {parent['policy_label']: binding, 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')}
-    link = {'schema_version': 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign['campaign_id'],
-        'evaluation_id': evaluation_id, 'gpu_ticket': ticket, 'purpose': 'objective',
+    checkpoint = 'checkpoint_receipt_sha256' in parent
+    link = {'schema_version': 2 if checkpoint else 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign['campaign_id'],
+        'evaluation_id': evaluation_id, 'gpu_ticket': ticket, 'purpose': 'checkpoint' if checkpoint else 'objective',
         'conditions_sha256': campaign['conditions_sha256'], 'left_parent': parent, 'right_parent': None,
         'game_seeds': list(loaded.config.evaluation_game_seeds), 'learner_seats': {}, 'schedule_digest': '0' * 64,
         'policy_registry_digest': digest({key: asdict(value) for key, value in bindings.items()})}
@@ -469,6 +474,7 @@ class _RustEvaluationAttempt:
         self.audit: Any = None
         self.ownership: Any = None
         self.parent: Any = None
+        self.checkpoint_invocation: Any = None
         self.control: Any = None
         self.observation: Any = None
         self.metadata_charge: Any = None
@@ -528,6 +534,8 @@ class _RustEvaluationAttempt:
             self.parent.close()
             self.control.release_parent()
             self.parent_released = True
+        if self.checkpoint_invocation is not None and not self.parent_released:
+            self.release_checkpoint_invocation()
         if self.observation is not None:
             # A started collector needs its original outer proof. An unentered
             # one instead has the actual empty-stage/ledger/job proof above.
@@ -546,6 +554,12 @@ class _RustEvaluationAttempt:
         _discard_failure_graph(self)
         return self.termination
 
+    def release_checkpoint_invocation(self) -> None:
+        self.checkpoint_invocation.close()
+        self.ownership = None
+        self.control.release_parent()
+        self.parent_released = True
+
 
 def _actual_campaign_clock(control: HostControl) -> Json:
     from gf_common.rust_player import validate_campaign_clock
@@ -558,16 +572,61 @@ def _actual_campaign_clock(control: HostControl) -> Json:
     return clock
 
 
-def _expected_fresh_linkage(loaded: LoadedHPOConfig, facts: tuple[Any, ...]) -> Json:
+def _closed_rust_checkpoint(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal, *,
+                            directory: Path, generation: int, invocation: ColdFinalizedRustInvocation,
+                            control: HostControl, deadline: float) -> tuple[Any, ...]:
+    import time
+
+    from gf_cli.hpo_evaluation import _checkpoint_state_facts
+    from gf_common.rust_player import deadline_seconds, safe_component, validate_campaign_awaiting
+    from gf_training.hpo_gpu_lease import _GLOBAL_ROOT, require_resolved_namespace
+    from gf_training.rust_player_evaluation import _policy_binding, rust_checkpoint_facts
+    from gf_training.rust_player_supervision import read_control_record
+
+    state, facts, admission = rust_checkpoint_facts(invocation)
+    bootstrap = _current_context(store, loaded, campaign, proposal, facts['training_seed'], control)
+    if (invocation.cold._control is not control or invocation._parent_directory != directory
+            or admission['context']['campaign_id'] != campaign['campaign_id']):
+        raise ContractError('checkpoint requires the SAME closed Rust invocation and campaign control')
+    awaiting, awaiting_sha = read_control_record(
+        control.root / 'awaiting' / (safe_component(admission['operation_id']) + '.json'), control.root)
+    validate_campaign_awaiting(awaiting)
+    if (awaiting['proposal_no'] != proposal.number or awaiting['learning_seed'] != facts['training_seed']
+            or awaiting['run_id'] != facts['run_id'] or awaiting['run_path'] != str(directory)
+            or awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != control.root.name
+            or awaiting['session_clock_sha256'] != bootstrap['session_clock_sha256']
+            or awaiting['config_sha256'] != facts['config_sha256']
+            or awaiting['runtime_binding_sha256'] != facts['runtime_binding_sha256']
+            or awaiting['operation_sha256'] != control.operation_sha256
+            or awaiting['operation_path'] != str(control.operation_path)):
+        raise ContractError('actual checkpoint differs from its original proposal/seed awaiting operation')
+    facts['awaiting_sha256'] = awaiting_sha
+    clock = _actual_campaign_clock(control)
+    if (time.monotonic() >= deadline_seconds(clock['soft_dispatch_finish_bits'])
+            or deadline > min(deadline_seconds(clock['hard_session_finish_bits']),
+                deadline_seconds(admission['deadlines']['finish_bits']))):
+        raise TimeoutError('original Rust checkpoint/session window cannot fit the evaluation budget')
+    base = _checkpoint_state_facts(state, loaded, campaign, proposal, directory=directory, generation=generation)
+    # The actual local/supervised receipt pair survives handoff as compact DATA.
+    physical = invocation.cold.physical_termination.global_observation()
+    require_resolved_namespace()
+    saved, _ = read_control_record(_GLOBAL_ROOT / 'jobs' / admission['global_ticket'] / 'termination.json', _GLOBAL_ROOT)
+    if canonical(physical) != canonical(saved):
+        raise ContractError('checkpoint physical termination differs from original global record')
+    label, binding = _policy_binding(state, facts)
+    return facts, physical, base, label, binding
+
+
+def _expected_fresh_linkage(loaded: LoadedHPOConfig, facts: tuple[Any, ...], *, checkpoint: bool = False) -> Json:
     """Only bounded scalar identities survive the retired plan/config graphs."""
     from gf_common.card_instance_collection import hpo_evaluation_groups
     from gf_common.domain import clone
     from gf_common.schedule import serialize_schedule
     (campaign_id, evaluation_id, ticket, conditions_sha, parent_fields, registry_sha, schedule_sha) = facts
     names = ('run_id', 'run_path', 'training_seed', 'generation', 'generation_sha256',
-        'inference_sha256', 'source_receipt_sha256', 'policy_label')
-    link = {'schema_version': 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign_id,
-        'evaluation_id': evaluation_id, 'gpu_ticket': ticket, 'purpose': 'objective',
+        'inference_sha256', 'checkpoint_receipt_sha256' if checkpoint else 'source_receipt_sha256', 'policy_label')
+    link = {'schema_version': 2 if checkpoint else 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign_id,
+        'evaluation_id': evaluation_id, 'gpu_ticket': ticket, 'purpose': 'checkpoint' if checkpoint else 'objective',
         'conditions_sha256': conditions_sha, 'left_parent': dict(zip(names, parent_fields, strict=True)),
         'right_parent': None, 'game_seeds': list(loaded.config.evaluation_game_seeds),
         'learner_seats': {}, 'schedule_digest': schedule_sha, 'policy_registry_digest': registry_sha}
@@ -580,12 +639,14 @@ def _expected_fresh_linkage(loaded: LoadedHPOConfig, facts: tuple[Any, ...]) -> 
 
 async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded: Any, campaign: Json,
                                proposal: Any, training: Json, *, output: Path, soft_finish: float,
-                               hard_finish: float, progress: Any) -> tuple[Any, BaseException | None]:
+                               hard_finish: float, progress: Any,
+                               checkpoint: _CheckpointRequest | None = None) -> tuple[Any, BaseException | None]:
     import time
     import uuid
 
     from gf_cli.hpo_evaluation import (
         _check_live_evaluation_storage,
+        _checkpoint_intent_fields,
         _HpoEvaluationCleanupObservation,
     )
     from gf_common.artifacts import ArtifactPhaseAdmission
@@ -598,24 +659,29 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
     from gf_training.rust_player_evaluation import RustEvaluationData, final_policy_binding
     try:
         seed = training['training_seed']
-        folder = f'proposals/{proposal.number:06}/seeds/{seed}'
+        folder = f'proposals/{proposal.number:06}/seeds/{seed}' if checkpoint is None else checkpoint.folder
         if store.exists(folder + '/evaluation.intent.json'):
             raise ContractError('interrupted evaluation cannot be restarted or requalified')
-        started = time.monotonic()
-        if started >= soft_finish or started + loaded.config.run_wall_seconds > hard_finish:
-            raise TimeoutError('original session cannot dispatch this full Fresh evaluation')
-        evaluation_id = str(uuid.uuid4())
-        # Materialize ONCE; the same graph backs the original intent and plan.
-        projected = _project_fresh_config(loaded, proposal.settings, training, output=output,
-            evaluation_id=evaluation_id, started=started, hard_finish=hard_finish)
+        if checkpoint is None:
+            started = time.monotonic()
+            if started >= soft_finish or started + loaded.config.run_wall_seconds > hard_finish:
+                raise TimeoutError('original session cannot dispatch this full Fresh evaluation')
+            evaluation_id = str(uuid.uuid4())
+            # Materialize ONCE; the same graph backs the original intent and plan.
+            projected = _project_fresh_config(loaded, proposal.settings, training, output=output,
+                evaluation_id=evaluation_id, started=started, hard_finish=hard_finish)
+            intent_fields = {'training_receipt_sha256': store.get(folder + '/training.json')[1]}
+        else:
+            started, evaluation_id = checkpoint.started, checkpoint.evaluation_id
+            projected = checkpoint.take_projected()
+            intent_fields = _checkpoint_intent_fields(checkpoint)
         run, config_sha = projected.config.run, projected.sha256
         _check_live_evaluation_storage(output, projected)
         if time.monotonic() >= soft_finish:
             raise TimeoutError('original soft dispatch finish before evaluation intent')
         store.put(folder + '/evaluation.intent.json', {'schema_version': 1, 'kind': 'hpo-evaluation-intent',
             'evaluation_id': evaluation_id, 'directory': str(output), 'config_sha256': config_sha,
-            'training_receipt_sha256': store.get(folder + '/training.json')[1],
-            'started_unix': time.time(), 'started_monotonic': started})
+            'started_unix': time.time(), 'started_monotonic': started, **intent_fields})
         if time.monotonic() >= soft_finish:
             raise TimeoutError('original soft dispatch finish before evaluation admission')
         scope.admission_requested = True
@@ -630,7 +696,11 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
         scope.parent_budget = ArtifactPhaseAdmission(scope.pool.budget, loaded.config.operating.parent_budget_bytes,
             name='parent', phase='rust-hpo-evaluation')
         scope.reserve_config_metadata(projected)
-        if scope.parent is not None:
+        if checkpoint is not None:
+            scope.ownership = scope.checkpoint_invocation._ownership
+            label, binding = checkpoint.policy_label, checkpoint.binding
+            parent = checkpoint.parent
+        elif scope.parent is not None:
             scope.parent.require()
             if scope.parent._invocation.cold._control is not scope.control:
                 raise ContractError('live Parent differs from SAME current campaign control')
@@ -645,15 +715,21 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
                 ownership=scope.ownership, pool=scope.pool, parent_budget=scope.parent_budget,
                 deadline=started + run.execution_seconds)
             state, metadata = scope.audit.state, scope.audit.metadata
-        label, binding = final_policy_binding(state, metadata)
-        parent = checked_hpo_evaluation_parent({**{name: training[name] for name in
-            ('run_id', 'run_path', 'training_seed', 'generation', 'generation_sha256', 'inference_sha256', 'source_receipt_sha256')},
-            'policy_label': label})
+        if checkpoint is None:
+            label, binding = final_policy_binding(state, metadata)
+            parent = checked_hpo_evaluation_parent({**{name: training[name] for name in
+                ('run_id', 'run_path', 'training_seed', 'generation', 'generation_sha256', 'inference_sha256', 'source_receipt_sha256')},
+                'policy_label': label})
+            del state, metadata
         scope.reserve_binding_metadata(binding)
         plan = _fresh_evaluation_plan(loaded, campaign, parent, binding, projected,
             output=output, evaluation_id=evaluation_id, ticket=scope.job.ticket, started=started)
-        del state, metadata
-        if scope.parent is not None:
+        if checkpoint is not None:
+            scope.data = RustEvaluationData.from_checkpoint(scope.checkpoint_invocation, binding, label,
+                checkpoint_sha256=checkpoint.receipt_sha256, checkpoint=checkpoint.facts,
+                evaluation_job=scope.job, pool=scope.pool, parent_budget=scope.parent_budget, pin=scope.job.ticket)
+            scope.release_checkpoint_invocation()
+        elif scope.parent is not None:
             scope.data = RustEvaluationData.from_parent(scope.parent, binding, label,
                 evaluation_job=scope.job, pool=scope.pool, parent_budget=scope.parent_budget, pin=scope.job.ticket)
             scope.parent.close()
@@ -671,7 +747,7 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
         scope.inputs_pending = False
         link = plan.linkage
         names = ('run_id', 'run_path', 'training_seed', 'generation', 'generation_sha256',
-            'inference_sha256', 'source_receipt_sha256', 'policy_label')
+            'inference_sha256', 'source_receipt_sha256' if checkpoint is None else 'checkpoint_receipt_sha256', 'policy_label')
         facts = (link['campaign_id'], link['evaluation_id'], link['gpu_ticket'], link['conditions_sha256'],
             tuple(link['left_parent'][name] for name in names), link['policy_registry_digest'], link['schedule_digest'])
         scope.collector_requested = True
@@ -786,4 +862,77 @@ async def evaluate_rust_seed(store: CampaignStore, loaded: LoadedHPOConfig, camp
         _capture_failure_graph(scope, error)
         # The job remains owned with its original receipt and all actual failed
         # verifier owners remain attached. No failed audit produces an objective.
+        raise
+
+
+async def _evaluate_rust_checkpoint(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal,
+                                    request: _CheckpointRequest, *, output: Path, control: HostControl,
+                                    invocation: ColdFinalizedRustInvocation, progress: Any) -> Json:
+    from gf_cli.hpo_evaluation import (
+        _checkpoint_panel_receipt,
+        _copy_failed_evaluation_receipt,
+        verify_saved_evaluation,
+    )
+    from gf_common.hpo_progress import observe
+    from gf_common.rust_player import deadline_seconds
+    from gf_training.rust_player_completion import _capture_failure_graph
+    from gf_training.structured_rollout import _owned_bytes
+
+    clock = _actual_campaign_clock(control)
+    scope = _RustEvaluationAttempt()
+    scope.checkpoint_invocation, scope.control = invocation, control
+    outcome, original = await _run_rust_evaluation(scope, store, loaded, campaign, proposal, request.facts,
+        output=output, soft_finish=deadline_seconds(clock['soft_dispatch_finish_bits']),
+        hard_finish=request.wall_deadline, progress=progress, checkpoint=request)
+    marker = original if original is not None else ContractError('actual Fresh checkpoint retirement')
+    try:
+        scope.retire_inputs(marker)
+    except BaseException as cleanup:
+        _capture_failure_graph(scope, cleanup)
+        if original is None:
+            raise
+        original.add_note('actual Rust checkpoint cleanup remains owned: ' + type(cleanup).__name__)
+        vars(original)['cleanup_owner'] = scope
+        raise original
+    if original is not None:
+        if scope.termination is not None:
+            try:
+                scope.job.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- keep the exact original job cleanup failure.
+                _capture_failure_graph(scope, cleanup)
+                original.add_note('actual confirmed job close remains uncertain: ' + type(cleanup).__name__)
+            else:
+                _copy_failed_evaluation_receipt(original, store, request.folder + '/evaluation-failed-gpu-termination.json',
+                    request.evaluation_id, scope.termination)
+                if vars(original).get('cleanup_owner') is scope:
+                    vars(original).pop('cleanup_owner')
+        elif vars(original).get('cleanup_owner') is scope:
+            # The checkpoint borrower and all empty-stage owners retired.
+            vars(original).pop('cleanup_owner')
+        raise original
+    facts, directory_text, _config_sha = outcome
+    link = _expected_fresh_linkage(loaded, facts, checkpoint=True)
+    try:
+        observe(progress, {'phase': 'source'})
+        manifest, proof = verify_saved_evaluation(Path(directory_text), loaded, link,
+            deadline=scope.pool.deadline, extra_owned_bytes=_owned_bytes(link), evaluation_runtime=None)
+        termination = scope.job.require_confirmed_termination(scope.termination)
+        receipt = _checkpoint_panel_receipt(store, request, manifest, proof, link=link,
+            directory=directory_text, acquired=scope.acquired, released=scope.released, termination=termination)
+        scope.job.close()
+        store.put(request.folder + '/evaluation.json', receipt)
+        return receipt
+    except BaseException as error:
+        _capture_failure_graph(scope, error)
+        if 'hpo_verifier_cleanup_owner' not in vars(error):
+            try:
+                scope.job.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- keep the exact original job cleanup failure.
+                _capture_failure_graph(scope, cleanup)
+                error.add_note('actual confirmed job close remains uncertain: ' + type(cleanup).__name__)
+            else:
+                _copy_failed_evaluation_receipt(error, store, request.folder + '/evaluation-failed-gpu-termination.json',
+                    request.evaluation_id, scope.termination)
+                if vars(error).get('cleanup_owner') is scope:
+                    vars(error).pop('cleanup_owner')
         raise

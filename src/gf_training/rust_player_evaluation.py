@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from gf_common.artifacts import ArtifactPhaseAdmission, json_bound
-from gf_common.domain import ContractError, Json, canonical, closed, integer
+from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.rust_player import hex_identity, text
 from gf_models.structured_sealed import SealedScan
 from gf_training.group_pack_resources import StorageBudget, close_resources
@@ -769,6 +769,11 @@ def _reference_transition(ownership: Any, binding: Json, phase: str, *, state_sh
 
 def final_policy_binding(state: Json, metadata: Json) -> tuple[str, Any]:
     """Pure Model4 final binding from validated new-record DATA, not old authority."""
+    validate_parent_binding(metadata, state, run_path=metadata['run_path'])
+    return _policy_binding(state, metadata)
+
+
+def _policy_binding(state: Json, metadata: Json) -> tuple[str, Any]:
     from dataclasses import asdict
 
     from gf_common.card_instance import action_config_v3
@@ -782,7 +787,6 @@ def final_policy_binding(state: Json, metadata: Json) -> tuple[str, Any]:
         safe_options_game_v4,
     )
     from gf_models.structured_config import InferenceBindingV2
-    validate_parent_binding(metadata, state, run_path=metadata['run_path'])
     actions, rules = action_config_v3(state['effective_config']['actions']), card_instance_rules()
     configured = configured_model_v4(state['effective_config']['model'], layout=layout_for_contract(actions.action_contract))
     model = configured.architecture(layout=layout_for_contract(actions.action_contract))
@@ -798,6 +802,38 @@ def final_policy_binding(state: Json, metadata: Json) -> tuple[str, Any]:
         action_contract=actions.action_contract, rules=rules, action_config_hash=digest(asdict(actions)),
         cuda_visible_devices=execution['cuda_visible_devices'])
     return label, RuntimePolicyBinding(model.model_id, options)
+
+
+def rust_checkpoint_facts(invocation: Any) -> tuple[Json, Json, Json]:
+    """Project the current saved pair using the acknowledged original cold audit."""
+    from gf_training.rust_player_completion import ColdFinalizedRustInvocation
+
+    if type(invocation) is not ColdFinalizedRustInvocation:
+        raise ContractError('actual acknowledged cold checkpoint owner required')
+    invocation._require_parent()
+    admission, prepared, _ = invocation.cold.require_pair()
+    state, audit, completion = invocation._validated_state, invocation.audit, invocation.completion
+    if (state is None or state['run_variant'] != 'hpo-ppo-owned-rust-player-v1'
+            or (state['status'], state['stop_reason']) not in (('paused', 'pause'), ('incomplete', 'update_cap'))
+            or completion['eligible'] is not False or state['status'] != completion['state']
+            or invocation.cold._finalized_sha256 != invocation.completion_sha256
+            or state['updates'] != completion['committed_update'] or len(audit['updates']) != state['updates']
+            or audit['saved_pair']['generation'] != state['updates']
+            or audit['saved_pair']['full_content_validated'] is not True
+            or prepared['state_sha256'] != completion['state_sha256']
+            or state['generation_sha256'] != completion['generation_sha256']):
+        raise ContractError('actual cold audit must represent a healthy nonobjective HPO checkpoint')
+    for original in invocation._held:
+        original.recheck()
+    facts = {**{key: state[key] for key in ('run_id', 'config_sha256', 'generation_sha256', 'runtime_binding_sha256',
+            'status', 'stop_reason', 'used_decisions', 'collected_decisions', 'optimizer_steps')},
+        'run_path': str(invocation._parent_directory), 'training_seed': state['seed'], 'generation': state['updates'],
+        'state_sha256': completion['state_sha256'], 'inference_sha256': audit['saved_pair']['inference_sha256'],
+        'training_games': sum(len(update['episode_digests']) for update in audit['updates']),
+        'completion_sha256': invocation.completion_sha256, 'cold_audit_sha256': completion['audit_sha256'],
+        'operation_sha256': completion['operation_sha256'], 'admission_sha256': digest(admission),
+        'prepared_sha256': completion['prepared_sha256'], 'exit_sha256': completion['exit_sha256']}
+    return state, facts, admission
 
 
 def _require_independent_evaluation_pool(previous_pool: Any, receiving_pool: Any) -> None:
@@ -837,6 +873,7 @@ class RustEvaluationData:
         self._handoff_state = 'PREPARING'
         self._reference_started = False
         self._pending_loan: Any = None
+        self.checkpoint_receipt_sha256: str | None = None
 
     @classmethod
     def from_parent(cls, parent: Any, binding: Any, label: str, *, evaluation_job: Any,
@@ -955,6 +992,69 @@ class RustEvaluationData:
             output._failed, audit._failed = True, True
             _capture_failure_graph(output, error)
             raise
+
+    @classmethod
+    def from_checkpoint(cls, invocation: Any, binding: Any, label: str, *, checkpoint_sha256: str,
+                        checkpoint: Json, evaluation_job: Any, pool: Any,
+                        parent_budget: ArtifactPhaseAdmission, pin: str) -> RustEvaluationData:
+        from gf_common.rust_player import deadline_seconds
+        from gf_training.group_pack_pool import PackedArtifactPool
+        from gf_training.group_pack_resources import remaining
+        from gf_training.hpo_gpu_lease import GpuJob
+
+        hex_identity(checkpoint_sha256)
+        if (type(evaluation_job) is not GpuJob or type(pool) is not PackedArtifactPool
+                or type(parent_budget) is not ArtifactPhaseAdmission or parent_budget.source is not pool.budget):
+            raise ContractError('actual checkpoint evaluation job and independent pool required')
+        state, facts, admission = rust_checkpoint_facts(invocation)
+        _require_independent_evaluation_pool(invocation.pool, pool)
+        evaluation_job._require_open()
+        context = evaluation_job._admission['context']
+        if (context['kind'] != 'evaluation' or context['run_id'] != admission['run_id']
+                or context['campaign_id'] != admission['context']['campaign_id'] or evaluation_job.ticket != pin
+                or any(facts[key] != checkpoint.get(key) for key in facts)
+                or _policy_binding(state, facts) != (label, binding)):
+            raise ContractError('actual checkpoint inference and evaluation admission differ')
+        output = cls(_EVALUATION_DATA_ISSUER)
+        output.pool, output.parent_budget, output.job = pool, parent_budget, evaluation_job
+        output._parent = lambda: None
+        output.ownership, output.directory = invocation._ownership, invocation._parent_directory
+        output.deadline = min(pool.deadline, deadline_seconds(admission['deadlines']['finish_bits']))
+        output.state_sha256 = facts['state_sha256']
+        output.checkpoint_receipt_sha256 = checkpoint_sha256
+        files = {name: sha for name, sha in invocation.artifact.files.items()
+            if name == 'inference.json' or name.startswith('weights-')}
+        try:
+            pool.hold_close(output)
+            remaining(output.deadline)
+            output._loans.append(parent_budget.reserve(32 * (json_bound(state) + json_bound(facts) + json_bound(files)) + 65536))
+            output._state, output._metadata = canonical(state).encode(), canonical(facts).encode()
+            ref = {'run_id': state['run_id'], 'token': pin, 'generation': state['updates'],
+                'inference_sha256': facts['inference_sha256'], 'generation_sha256': facts['generation_sha256']}
+            output.binding = ref
+            output._reference_started = True
+            output.reference = _reference_transition(output.ownership, ref, 'acquire', state_sha256=output.state_sha256,
+                pool=pool, parent_budget=parent_budget, deadline=output.deadline)
+            directory = output.directory / 'artifacts' / f"{state['updates']:06}"
+            output.originals = _RetainedInferenceFiles(directory, files, budget=pool.budget,
+                parent_budget=parent_budget, deadline=output.deadline)
+            output._prepare_provider(state, binding, label)
+            invocation._require_parent()
+            remaining(output.deadline)
+            output.originals._handoff_deadline()
+            output.deadline, output._handoff_state, output._exposed = pool.deadline, 'READY', True
+            return output
+        except BaseException as error:
+            output._failed = True
+            output._handoff_state = 'FAILED'
+            _capture_failure_graph(output, error)
+            raise
+
+    def policy_binding(self) -> tuple[str, Any]:
+        state, metadata = json.loads(self._state), json.loads(self._metadata)
+        if self.checkpoint_receipt_sha256 is None:
+            return final_policy_binding(state, metadata)
+        return _policy_binding(state, metadata)
 
     def _prepare_provider(self, state: Json, binding: Any, label: str) -> None:
         from gf_common.card_instance import action_config_v3

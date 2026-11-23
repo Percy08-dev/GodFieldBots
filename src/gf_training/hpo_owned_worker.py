@@ -196,8 +196,11 @@ def _send_snapshot_admitted(channel: RamBankChannel, snapshot: Any, *, request: 
 def _restore_initial(channel: RamBankChannel, request: Json, learner: Any, budget: Any,
                      actions: Any, identity: Json) -> str:
     """Receive only actual model-state grants, stage, synchronize, then restore ACK."""
-    generation=integer(request['generation'],1,2**31-1)
-    integer(request['optimizer_steps'],1,2**31-1)
+    generation=integer(request['generation'],0,2**31-1)
+    if generation == 0:
+        integer(request['optimizer_steps'],0,0)
+    else:
+        integer(request['optimizer_steps'],1,2**31-1)
     prefix='restore:'+request['transaction']+':'+request['snapshot_identity']
     control=_receive_control(channel,purpose='model',generation=generation,identity=prefix+':metadata',budget=budget,
         max_admitted_bytes=identity['phase_limits']['save_budget_bytes'])

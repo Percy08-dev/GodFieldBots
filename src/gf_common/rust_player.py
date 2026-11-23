@@ -258,7 +258,8 @@ def validate_operation(value: Any, *, session_finish: str | None = None) -> Json
             if execution["mode"] not in ("fresh", "resume"):
                 raise ContractError("explicit fresh/resume execution request required")
             if execution["pause_after_update"] is not None:
-                integer(execution["pause_after_update"], 1)
+                integer(execution["pause_after_update"],
+                    0 if value["operation_type"] == "hpo-train" and execution["mode"] == "fresh" else 1)
         elif execution is not None:
             raise ContractError("non-training operation has no training execution request")
     if value["run_id"] is None or value["parent_directory"] is None:
@@ -391,10 +392,20 @@ def validate_local_admission(value: Any) -> Json:
     return value
 
 
-def validate_prepared(value: Any, admission: Json) -> Json:
+def initial_hpo_pause(operation: Json | None) -> bool:
+    if operation is None or operation.get("operation_type") != "hpo-train":
+        return False
+    request = operation.get("execution_request")
+    return (type(request) is dict and request.get("mode") == "fresh"
+            and type(request.get("pause_after_update")) is int
+            and request["pause_after_update"] == 0)
+
+
+def validate_prepared(value: Any, admission: Json, *, operation: Json | None = None) -> Json:
+    initial = initial_hpo_pause(operation)
     value = record(
         value,
-        "rust-player-prepared-v1",
+        "rust-player-initial-pause-prepared-v2" if initial else "rust-player-prepared-v1",
         {
             "supervision_id",
             "invocation_id",
@@ -413,6 +424,7 @@ def validate_prepared(value: Any, admission: Json) -> Json:
             "close_ack_path",
             "close_ack_sha256",
         },
+        version=2 if initial else 1,
     )
     validate_local_admission(admission)
     for key in (
@@ -437,10 +449,20 @@ def validate_prepared(value: Any, admission: Json) -> Json:
         "state_sha256",
         "generation_sha256",
         "artifacts_sha256",
-        "source_manifest_sha256",
         "close_ack_sha256",
     ):
         hex_identity(value[key])
+    if initial:
+        assert operation is not None
+        if (value["state"] != "paused" or value["committed_update"] != 0
+                or value["generation"] != 0 or value["source_manifest_sha256"] is not None
+                or admission["context"] is None
+                or operation["expected_context"] != admission["context"]
+                or any(operation[key] != admission[key] for key in
+                    ("operation_id", "run_id", "config_sha256", "runtime_binding_sha256", "deadlines"))):
+            raise ContractError("initial HPO pause has a committed G0 and no rollout Source")
+    else:
+        hex_identity(value["source_manifest_sha256"])
     text(value["close_ack_path"])
     return value
 

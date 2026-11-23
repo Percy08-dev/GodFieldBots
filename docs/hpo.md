@@ -124,8 +124,8 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 公開入力で攻撃元を確定できない場合、条件付き特殊効果を持つ防具の併用は完成候補に
 含めません。単独のatomic候補は残します。元エラーが管理エラーに覆われる問題は別件です。
 
-現在の公開CLIには、Model4の試合数による停止、学習途中の定期評価、
-完了した親のDを増やして延長する操作はありません。ここで実行するのは
+この予備検証では更新途中の定期評価を無効にしています。Model4の停止条件には
+Dと更新・時間・保存の上限を使います。ここで実行するのは
 **Dの異なる独立学習による学習量の比較**です。同じ親を1,000試合で評価し、
 その重みから10,000試合へ継続する方式には追加実装が必要です。
 通常の`train --pause-after-update`はModel3用で、このModel4設定には使えません。
@@ -216,7 +216,17 @@ cat "$pilot_root/logs/campaign-01-result.json"
 `seeds/17/training.json`には親ディレクトリの`run_path`があります。
 親の`updates/000001.json.zst`以降に各更新の`actual_games`、`accepted_decisions`、
 `metrics.total_loss`、`metrics.policy_loss`、`metrics.value_mse`、
-`metrics.entropy`、`metrics.approx_kl`が残ります。自然終局した収集試合数は
+`metrics.entropy`、`metrics.approx_kl`が残ります。新しい更新では
+`metrics.diagnostics`に次の項目も保存します。
+
+| 項目 | 集計方法 |
+| --- | --- |
+| `clip_fraction` | PPOが使用した学習対象を全epochで数え、ratioがクリップ範囲外だった割合 |
+| `explained_variance` | 一意な学習対象のGAE Returnと更新前の収集時Critic予測で計算。Returnの分散が `1e-12` 以下の場合はJSONの `null` |
+| `pre_clip_grad_norm_mean`、`pre_clip_grad_norm_max` | 勾配を蓄積した後、クリッピング前の全勾配ノルムをOptimizer Stepごとに集計 |
+| `learning_rate` | 最後のOptimizer Step直前にAdamのパラメータグループから取得した実効学習率 |
+
+自然終局した収集試合数は
 `actual_games`を累積して数えます。評価試合数はこの累計には含めません。
 最終batchは全試合を自然終了させるため、収集decision数がDを超える場合があります。
 
@@ -229,6 +239,8 @@ import json
 import sys
 from pathlib import Path
 
+from gf_training.hpo_update_storage import read_hpo_update
+
 campaign = Path(sys.argv[1])
 print("proposal\tseed\tupdate\tgames\tused_D\tloss\tpolicy_loss\tvalue_mse\tentropy\tKL")
 for receipt_path in sorted(campaign.glob("proposals/*/seeds/*/training.json")):
@@ -240,8 +252,6 @@ for receipt_path in sorted(campaign.glob("proposals/*/seeds/*/training.json")):
         generation = json.loads((parent / "generations" / f"{number:06}.json").read_text())
         update = read_hpo_update(parent, number, state, generation["update_sha256"])
         games += update["actual_games"]
-from gf_training.hpo_update_storage import read_hpo_update
-
         used += update["accepted_decisions"]
         metrics = update["metrics"]
         row = [receipt_path.parents[2].name, receipt["training_seed"], number, games, used]
@@ -254,6 +264,54 @@ PY
 lossの停滞だけで収束とは判断しません。次のDでの最終評価、entropy・KL・
 value MSEの推移、実時間と保存量を併せて見ます。初回の1seed・64評価試合だけで
 最適設定やseed間の安定性を判断せず、上位設定の確認ではseed群・評価量も見直します。
+
+### チェックポイントの定期評価
+
+公開CLIの `hpo run` で、campaign schema 4のMLP・GRU・Transformerとschema 5・6の
+MLPに設定できます。テーブルの省略または `enabled = false` で定期評価を無効に
+できます。定期評価の対象はPPOのコミット済み更新数です。更新0は初期重みです。
+次の明示的な一覧は `operating.max_updates = 10000` の場合です。
+
+```toml
+[operating.checkpoint_evaluation]
+enabled = true
+wall_seconds = 1200
+updates = [0, 100, 250, 500, 1000, 2000, 3000, 5000, 7500, 10000]
+retain_updates = []
+final_test_game_seeds = ["794a3351-e6a2-4ddb-b1c8-d5049d7675ca"]
+```
+
+`updates`を省略すると、上の一覧から `operating.max_updates` 以下の更新を使います。
+`wall_seconds`は途中の1評価パネルの予算です。基底設定の終了処理の予約時間より長く、
+`run_wall_seconds` 以下にします。途中評価は最初に確定した学習runの期限内に行います。
+schema 6では1学習seedの途中停止と再開を同じ監督セッション内で完了させるため、
+`session_seconds` を `run_wall_seconds` より長くします。
+キャンペーンを別プロセスで再開する場合は、完了済みの学習seedが単位です。
+実行が外部から中断されたseedの途中評価は、その実行の診断記録として参照できます。
+
+各パネルで同じ `evaluation_game_seeds` を使い、固定のheuristic相手に席を入れ替えて
+各seedで2試合を行います。100 seedsなら1パネル200試合です。
+`final_test_game_seeds` は最終比較用の予約で、定期評価・最良Checkpointの選択・
+Optunaの目的値には使いません。
+
+候補と学習seedごとに、`proposals/<候補>/seeds/<seed>/checkpoint-evaluations/<更新>/evaluation.json`
+へ評価結果を保存します。試合ごとの勝敗・席とGameSeedを残すため、同じGameSeedの
+2試合を一組にして評価点の変化や区間推定を計算できます。パネルを開始できなかった
+場合や、失敗後の終了を確認できた場合は、その更新の `status.json` に記録します。
+最終Dと予定更新が一致する場合は、通常の最終 `evaluation.json` を1回だけ生成します。
+
+同じseedディレクトリの `best-checkpoint.json` には、完了したパネルの中で
+`(勝数 + 0.5 × 引き分け数) / 試合数` が最大の更新と推論重みの識別情報が残ります。
+同点は早い更新を選びます。予定更新と `retain_updates` の推論重みを保持します。
+再開可能な最新CheckpointのOptimizerと乱数状態は既存契約で保存されます。
+最終Dの通常評価はOptunaの目的値に使います。更新上限で終わった学習の途中評価は
+診断として取得できます。
+
+Trial番号と候補の設定は `proposals/<候補>/proposal.json` にあります。
+学習runの `run.json` に、継承と上書きを反映した `effective_config`、各設定入力の
+パスとハッシュ、学習seed、使用したコード・Simulatorの識別情報、累計の更新数と
+学習対象意思決定数、停止理由を保存します。収集対戦の編成は更新記録から各収集
+manifestの `schedule` を辿れます。
 
 ### 次の学習量とセッション再開
 
@@ -446,6 +504,8 @@ gf-bots hpo run --config campaign.toml --mode resume
 OptunaやTorchを読み込まず、学習・Simulator起動・Source資格検査は行いません。
 `inspect`も保存記録の構造と記録済み状態を表示する機能で、成績を再認定しません。
 `fresh`には新しいディレクトリ、`resume`には同じ設定と保存先を渡します。
+`campaign_dir`を設定していないTOMLでは`run`に
+`--campaign-dir /absolute/parent-root/campaigns/stage-name`を追加します。
 
 1trialは全学習seedの新規初期化runと、その最終Dチェックポイントの評価です。
 最後の収集batchも自然終了まで保存し、残り件数だけを独立した乱数で選びます。
@@ -454,8 +514,8 @@ GAEは完全episodeから計算します。評価はGameSeedごとの席交換�
 不足seed・欠落評価・OOM・輸送・保存・cleanup失敗は目的値を持ちません。
 途中の成績は、完了した各学習seedの評価receiptに席交換した全自然終局結果と
 検証済みprojectionを保存します。全seedが完了するまでtrial目的値にはしません。
-世代ごとのlossなどの学習診断は別に記録します。評価頻度の追加、pruning、
-小予算からの自動昇格は行いません。
+世代ごとのlossなどの学習診断は別に記録します。定期評価を有効にすると、
+設定された更新数に対応する評価結果を追加で保存します。
 
 新しい探索段階へは、過去提案の`settings-seed.json`を設定だけ引き継げます。
 新しいcampaign・studyと現在の設定を用意し、`fresh`へ
@@ -472,6 +532,8 @@ gf-bots hpo compare --config left-campaign.toml --left /left/proposals/000000 --
 
 両側の全学習seed組合せについて、共通GameSeedで席を交換した表を保存します。
 初期実装ではLEFT側の運用・公開入力・推論条件に合うconfigが必要です。
+公開`compare`は既存の比較経路を持つHPO構成で利用できます。schema 6のRustキャンペーンを
+候補比較として開くには、既存の認証済みキャンペーン制御が必要です。
 結果は探索用であり、確認用・最終test・formal/final64/Datasetの資格を与えません。
 
 ## メモリ保持の生成元経路（schema4）
@@ -504,8 +566,6 @@ strict経路・データ・監査の意味も変更しません。
 実装・受入状況と再開・campaign対応範囲は
 [ADR0043](adr/0043-hpo-producer-owned-data.md)と
 [検証記録](verification/hpo-producer-owned-data.md)を参照してください。
-`campaign_dir`を設定していないTOMLでは`run`に
-`--campaign-dir /absolute/parent-root/campaigns/stage-name`を追加します。
 fresh統合・同一コードでのcold再開・campaign/evaluation連携は独立レビュー済みです。
 再開時は必要なcontrol・checkpoint・RNG・opponent poolだけを一度読み込み、
 次の更新で使わない過去sampleは再生しません。全プロジェクト検証・実GPUでの

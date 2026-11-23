@@ -64,6 +64,8 @@ def numerical_request(tmp_path):
 
 
 def test_actual_cpu_wire6_initialize_selected_update_full_ack_and_close(tmp_path):
+    from gf_training.structured_numeric_worker import validate_reply
+
     learner, _, requests = numerical_request(tmp_path)
     launch=['--model4-execution-cap',str(learner._training_reservation_bytes)]
     environment={**os.environ,'GFB_HPO_DIAGNOSTIC_INVOCATION':'normal-wire6',
@@ -77,6 +79,15 @@ def test_actual_cpu_wire6_initialize_selected_update_full_ack_and_close(tmp_path
     assert replies[1]['artifact']['optimizer_steps'] == 4
     assert replies[1]['metrics']['collected_decisions'] == 3
     assert replies[1]['metrics']['used_decisions'] == 1
+    assert replies[1]['metrics']['diagnostics']['explained_variance'] is None
+    old_metrics = dict(replies[1]['metrics'])
+    del old_metrics['diagnostics']
+    with pytest.raises(ContractError, match='diagnostics'):
+        validate_reply(dict(replies[1], metrics=old_metrics), 'update', requests[1]['identity'])
+    bad_diagnostics = dict(replies[1]['metrics']['diagnostics'], learning_rate=-1)
+    with pytest.raises(ContractError, match='diagnostics'):
+        validate_reply(dict(replies[1], metrics=dict(old_metrics, diagnostics=bad_diagnostics)),
+            'update', requests[1]['identity'])
     from gf_common.hpo_progress import TAG
     facts=[json.loads(line[len(TAG):]) for line in result.stderr.splitlines() if line.startswith(TAG)]
     routes=[row for row in facts if row['facts'].get('diagnostic_boundary')=='update-synchronized']

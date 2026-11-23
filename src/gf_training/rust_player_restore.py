@@ -10,6 +10,7 @@ from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.ram_bank import MAX_BANK_BYTES
 from gf_common.rust_player import (
     deadline_seconds,
+    initial_hpo_pause,
     validate_exit,
     validate_local_admission,
     validate_operation,
@@ -64,6 +65,7 @@ class RustResumeAudit:
         self.policies: dict[int, RustRestoredPolicy] = {}
         self.records: dict[int, Json] = {}
         self.record_hashes: dict[int, str] = {}
+        self.last_source_manifest_sha256: str | None = None
         self.scan: Any = None
         try:
             self.state, run_sha = _read(ownership.directory / 'run.json', self.budget,
@@ -71,7 +73,10 @@ class RustResumeAudit:
             hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
             validate_run(self.state, hpo=hpo)
             actual = admission.observation
-            if (self.state['status'] != 'paused' or not self.state['updates']
+            checkpoint = loaded.config.hpo_spec['operating'].get('checkpoint_evaluation') if hpo else None
+            initial = self.state['updates'] == 0
+            if (self.state['status'] != 'paused'
+                    or initial and not (checkpoint and 0 in checkpoint['updates'])
                     or self.state['config_sha256'] != loaded.sha256
                     or canonical(self.state['effective_config']) != canonical(loaded.effective)
                     or self.state['run_id'] != actual['run_id']
@@ -104,18 +109,21 @@ class RustResumeAudit:
             exit_record, exit_sha = read_control_record(prior_root / f'exit-{invocation}.json', prior_root)
             completion, completion_sha = read_control_record(prior_root / f'completion-{invocation}.json', prior_root)
             validate_completion(completion)
-            validate_prepared(prepared, old_admission)
+            validate_prepared(prepared, old_admission, operation=operation)
             validate_exit(exit_record, old_admission)
             if (operation_sha != entry['operation_sha256'] or admission_sha != entry['admission_sha256']
                     or operation['execution_request'] != entry['execution_request']
                     or prepared['state'] != 'paused' or prepared['state_sha256'] != run_sha
                     or exit_record['prepared_sha256'] != prepared_sha or not exit_record['cooperative']
                     or exit_record['wait']['exit_code'] != 0 or not exit_record['descendants_reaped']
-                    or exit_record['signals'] or completion['kind'] != 'rust-player-training-completion-v1'
+                    or exit_record['signals'] or initial != initial_hpo_pause(operation)
+                    or completion['kind'] != ('rust-player-initial-pause-completion-v2' if initial
+                        else 'rust-player-training-completion-v1')
                     or completion['state'] != 'paused' or completion['parent_metadata_validation'] is not None
                     or completion['prepared_sha256'] != prepared_sha or completion['exit_sha256'] != exit_sha
                     or completion['state_sha256'] != run_sha or completion['operation_sha256'] != operation_sha
-                    or completion['generation_sha256'] != self.state['generation_sha256']):
+                    or completion['generation_sha256'] != self.state['generation_sha256']
+                    or completion['source_manifest_sha256'] != prepared['source_manifest_sha256']):
                 raise ContractError('prior immutable PAUSED operation/Prepared/Exit/completion chain differs')
             self.prior_completion_sha256 = completion_sha
             _audit_retirement(control, self.state, prepared, pool, self._loans, self.deadline, hpo=hpo,

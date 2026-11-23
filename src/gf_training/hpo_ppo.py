@@ -105,7 +105,7 @@ class _HpoOperations(_GameOperations):
             from gf_training.native_backend import hpo_reader_settings, load_native
             self.native=load_native()
             hpo_reader_settings(config.preprocessing,self.native,packed=hasattr(config,'storage'),
-                resident=config.hpo_spec['schema_version']==3,
+                resident=config.hpo_spec['schema_version']==3,require_update_diagnostics=True,
                 require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(spec['storage']))
         return model
 

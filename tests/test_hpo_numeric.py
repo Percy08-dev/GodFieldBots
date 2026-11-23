@@ -13,6 +13,8 @@ from gf_training.card_instance_formal import load_recipe, verify_kernel_ast
 from gf_training.hpo_config import HPOTrainingConfig
 from gf_training.hpo_numeric import HpoLearner, hpo_losses
 from gf_training.hpo_rollout import HpoRollout
+from gf_training.hpo_training_execution import TrainingExecutionSpec
+from gf_training.hpo_update_execution import endpoint_terms
 from gf_training.ppo import gae, normalize_advantages
 from gf_training.ppo_math import losses
 from gf_training.structured_numeric import GameLearner
@@ -61,10 +63,28 @@ def test_configurable_loss_preserves_default_and_varies_coefficients():
     assert measured["total_loss"] != em["total_loss"]
 
 
+def test_endpoint_clip_indicators_ignore_padded_actions_without_changing_gradient():
+    logs = torch.tensor([
+        [-1.5, -.5, -torch.inf],
+        [-.5, -1.5, -torch.inf],
+        [-1., -torch.inf, -torch.inf],
+    ], requires_grad=True)
+    values = torch.tensor([.2, .3, .4], requires_grad=True)
+    args = (logs, values, torch.isfinite(logs), torch.tensor([0, 1, 0]),
+            torch.tensor([-2., -1., -1.]), torch.tensor([.4, .3, -.2]), torch.ones(3))
+    recipe = HPOTrainingConfig()
+    scalar, old = hpo_losses(*args, training=recipe)
+    endpoint, measured = endpoint_terms(*args, training=recipe)
+    assert measured[:, -1].tolist() == [1., 1., 0.]
+    torch.testing.assert_close(measured[:, :-1].mean(0), torch.tensor(list(old.values())))
+    for old_grad, new_grad in zip(torch.autograd.grad(scalar, (logs, values)),
+                                  torch.autograd.grad(endpoint.mean(), (logs, values)), strict=True):
+        torch.testing.assert_close(old_grad, new_grad)
+
+
 @pytest.mark.parametrize("kind", ["mlp", "gru", "transformer"])
 def test_default_same_input_matches_old_learner_all_endpoints(kind):
     learner = learner_for(kind)
-    from gf_training.hpo_training_execution import TrainingExecutionSpec
     learner._training_execution=TrainingExecutionSpec(variant='baseline')
     raw = asdict(learner.model)
     raw.update(version="3", initialization="orthogonal-structured-v1")
@@ -81,7 +101,10 @@ def test_default_same_input_matches_old_learner_all_endpoints(kind):
     new_metrics = learner.update(new_rollout)
     for name in ("policy_loss", "value_mse", "entropy", "approx_kl", "total_loss", "optimizer_steps"):
         assert new_metrics[name] == old_metrics[name]
+    for previous, updated in zip(old.network.parameters(), learner.network.parameters(), strict=True):
+        torch.testing.assert_close(previous.grad, updated.grad, atol=0, rtol=0)
     assert_same_learners(old, learner)
+    assert new_metrics["diagnostics"]["schema_version"] == 1
 
 
 def test_selected_only_losses_complete_gae_normalization_and_step_counts(monkeypatch):
@@ -103,8 +126,94 @@ def test_selected_only_losses_complete_gae_normalization_and_step_counts(monkeyp
     result = learner.update(rollout)
     assert result["collected_decisions"] == 5 and result["used_decisions"] == 3
     assert result["optimizer_step_delta"] == recipe.epochs * 2 == learner.steps
-    assert result["endpoint_evaluations"] == len(seen) == 9
-    assert sorted(seen) == [0] * 3 + [1] * 3 + [2] * 3
+    assert result["endpoint_evaluations"] == 9
+    assert seen[:3] == [0, 1, 2]
+    assert sorted(seen[3:]) == [0] * 3 + [1] * 3 + [2] * 3
+
+
+@pytest.mark.parametrize("kind", ["mlp", "gru", "transformer"])
+def test_normal_update_uses_frozen_selected_returns_and_actual_optimizer_facts(kind, monkeypatch):
+    recipe = replace(HPOTrainingConfig(), epochs=2, minibatch_size=2, max_grad_norm=.001)
+    learner = learner_for(kind, recipe=recipe)
+    rollout = rollout_for(learner, selected=((0, 0), (0, 2), (0, 4)), count=5)
+    vectors = np.array([rollout.vector(index) for index in range(len(rollout))])
+    prediction, target = vectors[:, 2], vectors[:, 4]
+    expected = 1. - np.var(target - prediction) / np.var(target)
+    assert np.var(target) > 1e-12
+    clip = torch.nn.utils.clip_grad_norm_
+    norms = []
+
+    def measure_clip(parameters, max_norm, **options):
+        norm = clip(parameters, max_norm, **options)
+        norms.append(float(norm))
+        return norm
+
+    optimizer = learner.optimizer
+    optimizer.param_groups[0]["lr"] = .002
+
+    def change_next_rate(_optimizer, _args, _kwargs):
+        optimizer.param_groups[0]["lr"] += .001
+
+    optimizer.register_step_post_hook(change_next_rate)
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", measure_clip)
+    result = learner.update(rollout)
+    diagnostic = result["diagnostics"]
+    assert result["endpoint_evaluations"] == 6
+    assert len(norms) == result["optimizer_step_delta"] == 4
+    assert min(norms) > recipe.max_grad_norm
+    assert diagnostic == pytest.approx({
+        "schema_version": 1,
+        "clip_fraction": diagnostic["clip_fraction"],
+        "explained_variance": expected,
+        "pre_clip_grad_norm_mean": np.mean(norms),
+        "pre_clip_grad_norm_max": max(norms),
+        "learning_rate": .005,
+    })
+    assert 0 <= diagnostic["clip_fraction"] <= 1
+
+
+@pytest.mark.parametrize("spread", [0., 2e-6])
+def test_explained_variance_is_null_at_the_target_population_variance_floor(spread, monkeypatch):
+    learner = learner_for(recipe=replace(HPOTrainingConfig(), epochs=1))
+    rollout = rollout_for(learner, count=2)
+    vector = rollout.vector
+
+    def nearly_constant_target(index):
+        return (*vector(index)[:-1], (index - .5) * spread)
+
+    monkeypatch.setattr(rollout, "vector", nearly_constant_target)
+    assert learner.update(rollout)["diagnostics"]["explained_variance"] is None
+
+
+def test_clip_fraction_weights_selected_endpoints_across_unequal_groups_and_epochs(monkeypatch):
+    from gf_training import hpo_update_execution
+    from gf_training.hpo_update_planning import UpdateGroup
+
+    recipe = replace(HPOTrainingConfig(), epochs=2, minibatch_size=3)
+    learner = learner_for(recipe=recipe)
+    rollout = rollout_for(learner)
+    parameter = next(learner.network.parameters()).reshape(-1)[0]
+
+    def groups(_learner, _rollout, logical, _spec, **_options):
+        return [UpdateGroup(tuple(logical[:2])), UpdateGroup(tuple(logical[2:]))]
+
+    def controlled_forward(current, _rollout, group, _spec, _forward, **_options):
+        count = len(group.indices)
+        # The first epoch clips only the pair. The second clips all three.
+        clip = count == 2 or current.steps == 1
+        logs = torch.stack((parameter * 0 - (.4 if clip else 1.),
+                            parameter * 0 - 1.)).expand(count, 2)
+        logs = torch.cat((logs, torch.full((count, 1), -torch.inf)), dim=1)
+        loss, terms = endpoint_terms(logs, parameter.expand(count), torch.isfinite(logs),
+            torch.zeros(count, dtype=torch.int64), -torch.ones(count),
+            torch.ones(count), torch.ones(count), training=recipe)
+        return loss, terms, None, None, count, 0
+
+    monkeypatch.setattr(hpo_update_execution, "execution_groups", groups)
+    monkeypatch.setattr(hpo_update_execution, "group_forward", controlled_forward)
+    result = learner.update(rollout)
+    assert result["endpoint_evaluations"] == 6
+    assert result["diagnostics"]["clip_fraction"] == pytest.approx(5 / 6)
 
 
 def test_failed_unselected_frozen_parity_mutates_nothing():

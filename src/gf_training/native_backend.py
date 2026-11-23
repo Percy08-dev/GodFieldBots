@@ -58,14 +58,17 @@ def require_native_refresh_opponents(native: Any = None) -> None:
 
 
 def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False,
-                        resident: bool = False,
+                        resident: bool = False, require_update_diagnostics: bool = False,
                         require_update_storage: bool = False) -> Json:
     """Additive HPO preflight before Source, arrays, collection or process work."""
-    from gf_common.hpo import NATIVE_CAPABILITY
+    from gf_common.hpo import NATIVE_CAPABILITY, UPDATE_DIAGNOSTICS_CAPABILITY
     module = load_native() if native is None else native
     information = dict(module.build_info())
     if information.get('card_instance_hpo') != NATIVE_CAPABILITY:
         raise ContractError('native HPO original/model4/selection support unavailable; no fallback')
+    if (require_update_diagnostics
+            and information.get('card_instance_hpo_update_diagnostics') != UPDATE_DIAGNOSTICS_CAPABILITY):
+        raise ContractError('native HPO update diagnostics capability unavailable; no fallback')
     if (require_update_storage
             and information.get('card_instance_hpo_update_storage') != CARD_INSTANCE_HPO_UPDATE_STORAGE):
         raise ContractError('native HPO update storage capability unavailable; no fallback')

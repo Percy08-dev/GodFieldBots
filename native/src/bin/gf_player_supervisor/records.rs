@@ -337,7 +337,7 @@ pub(crate) fn operation(v: &Value, mode: &str, session: f64) -> Result<[f64; 5]>
             if !["fresh", "resume"].contains(&text(&execution["mode"])?) {
                 return Err(invalid("explicit fresh/resume execution request required"));
             }
-            if !execution["pause_after_update"].is_null() {
+            if !execution["pause_after_update"].is_null() && !initial_hpo_pause(v) {
                 positive(&execution["pause_after_update"])?;
             }
         } else if !execution.is_null() {
@@ -396,6 +396,18 @@ mod operation_tests {
             bad["execution_request"] = execution;
             assert!(operation(&bad, "ordinary", 200.).is_err());
         }
+        let mut initial = value.clone();
+        initial["execution_request"]["pause_after_update"] = json!(0);
+        assert!(operation(&initial, "ordinary", 200.).is_err());
+        initial["mode"] = json!("hpo");
+        initial["operation_type"] = json!("hpo-train");
+        initial["expected_context"] = json!({
+            "campaign_id":"campaign", "operation_id":"op", "kind":"training",
+            "run_id":"run", "evaluation_id":null
+        });
+        assert!(operation(&initial, "hpo", 200.).is_ok());
+        initial["execution_request"]["mode"] = json!("resume");
+        assert!(operation(&initial, "hpo", 200.).is_err());
         value["schema_version"] = json!(1);
         value["kind"] = json!("rust-player-operation-v1");
         assert!(operation(&value, "ordinary", 200.).is_err());
@@ -474,11 +486,23 @@ pub(crate) fn launch(v: &Value) -> Result<f64> {
     }
     Ok(finish)
 }
-pub(crate) fn prepared(v: &Value, a: &Value) -> Result<()> {
+pub(crate) fn initial_hpo_pause(operation: &Value) -> bool {
+    let request = &operation["execution_request"];
+    operation["operation_type"] == "hpo-train"
+        && request["mode"] == "fresh"
+        && request["pause_after_update"].as_u64() == Some(0)
+}
+
+pub(crate) fn prepared(v: &Value, a: &Value, operation: &Value) -> Result<()> {
+    let initial = initial_hpo_pause(operation);
     record(
         v,
-        "rust-player-prepared-v1",
-        1,
+        if initial {
+            "rust-player-initial-pause-prepared-v2"
+        } else {
+            "rust-player-prepared-v1"
+        },
+        if initial { 2 } else { 1 },
         &[
             "supervision_id",
             "invocation_id",
@@ -525,10 +549,21 @@ pub(crate) fn prepared(v: &Value, a: &Value) -> Result<()> {
         "state_sha256",
         "generation_sha256",
         "artifacts_sha256",
-        "source_manifest_sha256",
         "close_ack_sha256",
     ] {
         hex(&v[k], 64)?;
+    }
+    if initial {
+        if v["state"] != "paused"
+            || v["committed_update"] != 0
+            || v["generation"] != 0
+            || !v["source_manifest_sha256"].is_null()
+            || a["context"].is_null()
+        {
+            return Err(invalid("initial HPO pause requires G0 and no rollout Source"));
+        }
+    } else {
+        hex(&v["source_manifest_sha256"], 64)?;
     }
     text(&v["close_ack_path"])?;
     Ok(())

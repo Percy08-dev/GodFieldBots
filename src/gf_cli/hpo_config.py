@@ -32,6 +32,12 @@ from gf_common.card_instance import (
     is_shared_contract,
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
+from gf_common.hpo_checkpoint_evaluation import (
+    HPOCheckpointEvaluationConfig,
+    checkpoint_evaluation_config,
+    game_seeds,
+    require_checkpoint_evaluation_room,
+)
 from gf_common.hpo_resident import resident_runtime
 from gf_common.hpo_storage import (
     GF_DATA_ROOT,
@@ -93,6 +99,16 @@ class RustPlayerPublicOperatingConfig(HPOOperatingConfig):
     post_host_seconds: float
 
 
+@dataclass(frozen=True, kw_only=True)
+class CheckpointEvaluationOperatingConfig(HPOOperatingConfig):
+    checkpoint_evaluation: HPOCheckpointEvaluationConfig
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerCheckpointEvaluationOperatingConfig(RustPlayerPublicOperatingConfig, CheckpointEvaluationOperatingConfig):
+    pass
+
+
 @dataclass(frozen=True)
 class HPOStorageConfig:
     parent_root: str = "runs/hpo"
@@ -140,15 +156,23 @@ class HPOCampaignConfig:
     storage: HPOStorageConfig = field(default_factory=HPOStorageConfig)
 
     @property
+    def checkpoint_evaluation(self) -> HPOCheckpointEvaluationConfig | None:
+        if isinstance(self.operating, CheckpointEvaluationOperatingConfig):
+            return self.operating.checkpoint_evaluation
+        return None
+
+    @property
     def study_identity(self) -> str:
         """Bind scientific settings, including the fixed opponent curriculum."""
         settings = effective_settings(self.model, self.training, {}, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+        checkpoint = self.checkpoint_evaluation
         return digest({name: getattr(self, name) for name in (
             "schema_version", "kind", "base_config_sha256", "model_id", "stage", "trial_count", "decision_budget",
             "learning_seeds", "evaluation_game_seeds", "sampler_seed", "startup_trials", "run_wall_seconds")}
             | {"space": asdict(self.space), "control": settings.identity,
                "curriculum": {"pool_every_decisions": self.operating.pool_every_decisions,
-                              "opponent_pool_size": self.operating.opponent_pool_size}})
+                              "opponent_pool_size": self.operating.opponent_pool_size}}
+            | ({"checkpoint_evaluation": asdict(checkpoint)} if checkpoint is not None else {}))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -347,7 +371,7 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         raise ContractError('ordinary runtime PPO controls required')
     model=ConfiguredNeuralModelV4(**{name:getattr(effective.model,name) for name in effective.model.__dataclass_fields__},
         inference=campaign.inference,cuda_visible_devices=base.model.cuda_visible_devices)
-    spec={'schema_version':1,'kind':'ppo-hpo-run','decision_budget':campaign.decision_budget,
+    spec: Json={'schema_version':1,'kind':'ppo-hpo-run','decision_budget':campaign.decision_budget,
         'training_recipe':asdict(effective.training),'effective_settings_sha256':effective.identity,
         'base_config_sha256':loaded_campaign.base.sha256,'campaign_config_sha256':loaded_campaign.sha256,
         'study_identity':campaign.study_identity,'operating':asdict(operating),'storage':asdict(storage),
@@ -355,6 +379,10 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
             'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
             'base_finalization_seconds':final}}
+    checkpoint = campaign.checkpoint_evaluation
+    if checkpoint is not None:
+        spec['operating']['checkpoint_evaluation'] = asdict(checkpoint) | {
+            'evaluation_game_seeds_sha256': digest(campaign.evaluation_game_seeds)}
     if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedRefreshHPOCampaignConfig,SharedRefreshHPOCampaignConfig,RustPlayerRefreshHPOCampaignConfig)):
         _mixed_collection_games(campaign)
         spec.update(schema_version=2, training_opponents=parse_training_opponents(campaign.training_opponents))
@@ -473,6 +501,9 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
 
 
 def _operating(value: Any, *, rust_player: bool = False) -> HPOOperatingConfig:
+    """Validate existing resource controls; callers separately own checkpoint configuration."""
+    if type(value) is dict and 'checkpoint_evaluation' in value:
+        value = {key: item for key, item in value.items() if key != 'checkpoint_evaluation'}
     post = 'post_host_seconds' in value if type(value) is dict else False
     if post and rust_player:
         p = finite_number(value['post_host_seconds'], 0, 1e12, strict_low=True)
@@ -550,22 +581,12 @@ def sealed_storage(value: Json) -> HPOStorageConfig:
     return storage
 
 
-def _seeds(value: Any, *, games: bool) -> tuple[Any, ...]:
+def _learning_seeds(value: Any) -> tuple[int, ...]:
     if type(value) not in (list, tuple) or not value:
         raise ContractError("nonempty explicit experiment seeds required")
-    result: list[Any] = []
+    result: list[int] = []
     for seed in value:
-        if games:
-            if type(seed) is not str:
-                raise ContractError("evaluation GameSeed must be a canonical UUID")
-            try:
-                parsed = uuid.UUID(seed)
-            except ValueError as exc:
-                raise ContractError("evaluation GameSeed must be a canonical UUID") from exc
-            if str(parsed) != seed:
-                raise ContractError("evaluation GameSeed must be a canonical UUID")
-        else:
-            integer(seed, 0, 2**31 - 1)
+        integer(seed, 0, 2**31 - 1)
         if seed in result:
             raise ContractError("duplicate experiment seed")
         result.append(seed)
@@ -592,12 +613,13 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     shared = value["schema_version"] == 5
     if rust_player and value['model_id'] != 'mlp':
         raise ContractError('Rust player HPO6 supports Model4 MLP only')
+    declared_operating = value.get('operating', {})
+    operating = _operating(declared_operating, rust_player=rust_player)
     runtime: Json | None
     if rust_player:
-        operating = _operating(value.get('operating', {}), rust_player=True)
         runtime = player_runtime(value['runtime'], game_concurrency=operating.game_concurrency)
     else:
-        runtime = (shared_runtime(value["runtime"],game_concurrency=value.get("operating",{}).get("game_concurrency",2)) if shared else resident_runtime(value["runtime"])) if resident else None
+        runtime = (shared_runtime(value["runtime"],game_concurrency=operating.game_concurrency) if shared else resident_runtime(value["runtime"])) if resident else None
     descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
     if type(value["kind"]) is not str or value["kind"] != "ppo-hpo":
         raise ContractError("explicit ppo-hpo campaign kind required")
@@ -608,10 +630,21 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     integer(value["decision_budget"], 1, 2**63 - 1)
     integer(value["sampler_seed"], 0, 2**32 - 1)
     integer(value["startup_trials"], 0, 2**31 - 1)
-    learning = _seeds(value["learning_seeds"], games=False)
-    games = _seeds(value["evaluation_game_seeds"], games=True)
+    learning = _learning_seeds(value["learning_seeds"])
+    games = game_seeds(value["evaluation_game_seeds"])
     session = finite_number(value["session_seconds"], 0, 1e12, strict_low=True)
     wall = finite_number(value["run_wall_seconds"], 0, 1e12, strict_low=True)
+    checkpoint = None
+    if 'checkpoint_evaluation' in declared_operating:
+        checkpoint = checkpoint_evaluation_config(declared_operating['checkpoint_evaluation'],
+            schema_version=value['schema_version'], max_updates=operating.max_updates,
+            run_wall_seconds=wall, evaluation_game_seeds=games)
+    if checkpoint is not None:
+        if rust_player and session <= wall:
+            raise ContractError('checkpoint_evaluation requires session_seconds greater than run_wall_seconds')
+        operating_cls = (RustPlayerCheckpointEvaluationOperatingConfig
+            if isinstance(operating, RustPlayerPublicOperatingConfig) else CheckpointEvaluationOperatingConfig)
+        operating = operating_cls(**asdict(operating), checkpoint_evaluation=checkpoint)
     model = model_config_v4(_merge(asdict(model), value.get("model", {})), layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     if model.model_id != value["model_id"]:
         raise ContractError("campaign/model kind mismatch")
@@ -621,8 +654,6 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     inference = InferenceBindingV2(**_merge(asdict(InferenceBindingV2(device="cuda:0")), value.get("inference", {})))
     if inference.device != "cuda:0":
         raise ContractError("HPO neural inference requires GPU")
-    if not rust_player:
-        operating = _operating(value.get("operating", {}))
     storage = _storage(value.get("storage", {}), origin, defaults=_new_storage_defaults)
     base_path = _path(value["base_experiment"], origin)
     # Only after all caller experiment fields pass do we read the legacy base.
@@ -658,6 +689,10 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
             or base.config.server.simulator_revision != base.config.actions.action_contract.simulator_revision
             or base.config.run.split != "train"):
         raise ContractError("HPO requires a matching corrected model3 training experiment base")
+    if checkpoint is not None:
+        if not isinstance(base.config.run, RunConfigV2):
+            raise ContractError('checkpoint_evaluation requires the original evaluation phase deadlines')
+        require_checkpoint_evaluation_room(checkpoint, finalization_seconds=base.config.run.finalization_seconds)
     if (shared or rust_player) and (not is_shared_contract(base.config.actions.action_contract) or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
         raise ContractError("shared HPO requires new-profile Python MLP base")
     if rust_player:

@@ -192,7 +192,7 @@ def validate_inventory(registry: Json,state: Json,records: list[Json],scan: Any)
                 if sha256(original/'termination.json')!=checksum(stamp['termination_sha256']):raise ContractError('shared stamped global termination differs')
                 admission=gpu._read(original/'admission.json')
                 receipt=gpu._termination(gpu._read(original/'termination.json'),admission)
-                if (receipt.schema_version!=2 or getattr(receipt,'services',())!=(proof,)
+                if (not isinstance(receipt, gpu.TerminationReceipt) or receipt.schema_version!=2 or getattr(receipt,'services',())!=(proof,)
                         or admission['ticket']!=stamp['job_id'] or admission['context']['run_id']!=state['run_id']
                         or admission['context']['kind']!='training'):
                     raise ContractError('shared invocation lacks original schema2 training termination')

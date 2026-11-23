@@ -167,8 +167,6 @@ class _OwnedHpoOperations(_HpoOperations):
             self.cold_import=OwnedColdImport.__new__(OwnedColdImport)
             OwnedColdImport.__init__(self.cold_import,ownership,budget=self.budget,parent_budget=self.writer.parent_budget,deadline=deadline)
             state=self.cold_import.state
-            if state['status']!='paused' or state['updates']==0:
-                raise ContractError('owned cold resume requires paused committed parent')
             from gf_training.hpo_owned_lineage import _identity
             self.writer.files.update({path:_identity(path) for path in self.cold_import.scan.files})
             return state,self.cold_import.records

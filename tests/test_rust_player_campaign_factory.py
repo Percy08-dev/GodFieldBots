@@ -256,6 +256,49 @@ def test_campaign_resume_refuses_unclosed_or_success_history_without_mutating_cu
     assert (directory / 'supervision/current.json').read_bytes() == before
 
 
+def test_checkpoint_failure_candidate_requires_the_exact_durable_retirement(tmp_path):
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_cli.rust_player_campaign import _checkpoint_failed_candidate, _checkpoint_intent_path
+
+    root = 'proposals/000000/seeds/17/checkpoint-evaluations/1'
+    intent = root + '/evaluation.intent.json'
+    assert _checkpoint_intent_path(intent.split('/'))
+    assert not _checkpoint_intent_path(intent.replace('/1/', '/000001/').split('/'))
+    assert not _checkpoint_intent_path(['proposals', '000000', 'seeds', '17', 'evaluation.intent.json'])
+    with CampaignStore(tmp_path / 'campaign', mode='fresh', max_owned_bytes=1024**2) as store:
+        store.put(intent, {'evaluation_id': 'g1'})
+        assert not _checkpoint_failed_candidate(store, intent)
+        termination_sha = store.put(root + '/evaluation-failed-gpu-termination.json', {
+            'schema_version': 1, 'kind': 'hpo-failed-evaluation-termination', 'evaluation_id': 'g1',
+            'gpu_termination': {}, 'error_type': 'TimeoutError', 'evaluation_eligible': False})
+        store.put(root + '/status.json', {'schema_version': 1, 'kind': 'hpo-checkpoint-evaluation-status',
+            'generation': 1, 'status': 'failed', 'reason': 'TimeoutError', 'elapsed_seconds': 2.5,
+            'gpu_termination_sha256': termination_sha})
+        assert _checkpoint_failed_candidate(store, intent)  # Structural preflight, no authority.
+        with pytest.raises((ValueError, OSError)):
+            _checkpoint_failed_candidate(store, intent, campaign={'campaign_id': 'campaign'})
+
+
+def test_checkpoint_campaign_rejects_older_runtime_before_opening_store(tmp_path, monkeypatch):
+    from gf_cli import hpo
+    from gf_cli.rust_player_campaign import prepare_campaign
+    from gf_training import native_backend
+    from tests.test_rust_player_config import campaign_raw
+
+    raw = campaign_raw()
+    raw['operating'].update(post_host_seconds=30., checkpoint_evaluation={
+        'enabled': True, 'wall_seconds': 100, 'updates': [0, 1]})
+    loaded = campaign_config(raw, origin=tmp_path)
+    monkeypatch.setattr(hpo, 'check_storage', lambda *args, **kwargs: {})
+    monkeypatch.setattr(hpo, '_conditions', lambda *args, **kwargs: {})
+    monkeypatch.setattr(native_backend, 'binary_identity', lambda: {'build': {}})
+    path = tmp_path / 'campaign'
+    with (pytest.raises(ContractError, match='checkpoint-evaluation runtime wheel'),
+          prepare_campaign(loaded, path, mode='fresh')):
+        pytest.fail('outdated runtime entered campaign storage')
+    assert not path.exists()
+
+
 @pytest.mark.parametrize('count', [1, 2])
 def test_known_ack_candidate_defers_full_reader_until_new_cpu_parent_custody(tmp_path, monkeypatch, count):
     """Shape/read-boundary DATA only; no actual native ACK or Source proof."""

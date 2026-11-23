@@ -16,6 +16,7 @@ from types import MethodType
 from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
+from gf_common.hpo import validate_update_diagnostics
 from gf_common.ram_bank import MAX_BANK_BYTES, RamBankChannel, ReadonlyRamBankSet
 from gf_training.hpo_learning_process import HpoLearningProcess
 from gf_training.hpo_owned_worker import (
@@ -91,14 +92,16 @@ def _snapshot_facts(facts: Json, device: str) -> None:
         raise ContractError('Wire7 nonfinite/negative actual snapshot timings')
 
 
-def _owned_metrics(value: Json, *, batch: Any, training: Any, expected_steps: int) -> None:
+def _owned_metrics(value: Json, *, batch: Any, training: Any, expected_steps: int,
+                   historical: bool = False) -> None:
     if batch is None:
         closed(value,set())
         return
     losses={'policy_loss','value_mse','entropy','approx_kl','total_loss','update_seconds'}
     counters={'optimizer_steps','optimizer_step_delta','collected_decisions','used_decisions',
         'tbptt_length','epochs','endpoint_evaluations','context_decisions','suffix_decisions'}
-    closed(value,losses|counters|{'parity'})
+    closed(value,losses|counters|{'parity'}, {'diagnostics'})
+    validate_update_diagnostics(value, required=not historical)
     if value['parity']!={'status':'not_run'}:
         raise ContractError('Wire7 parity must truthfully record not_run')
     for name in losses:

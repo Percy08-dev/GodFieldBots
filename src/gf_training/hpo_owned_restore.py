@@ -318,8 +318,10 @@ def _owned_update_metadata(update: Json, state: Json, previous: Json, current: J
     for key in extras & set(metrics):
         if key=='peak_cpu_memory_bytes': integer(metrics[key],0)
         else: finite_number(metrics[key],0,1e20)
-    _owned_metrics({key:value for key,value in metrics.items() if key not in extras},batch=SimpleNamespace(collected_decisions=collected,used_decisions=used,
-        locations=selected_locations(selection)),training=recipe,expected_steps=current['optimizer_steps'])
+    metric_batch = SimpleNamespace(collected_decisions=collected, used_decisions=used,
+        locations=selected_locations(selection))
+    _owned_metrics({key: value for key, value in metrics.items() if key not in extras},
+        batch=metric_batch, training=recipe, expected_steps=current['optimizer_steps'], historical=True)
     metrics=update['metrics']
     for key,value in learner_context_costs(selection,recipe).items():
         integer(metrics[key],value,value)
@@ -562,7 +564,10 @@ class OwnedColdImport:
         try:
             self.state,self.records,self.registry=_read_owned_metadata(self.scan,require_complete=require_complete)
             self._for_resume=not require_complete
-            if self._for_resume and (self.state['status']!='paused' or not self.state['updates']):
+            scheduled = self.state['effective_config']['hpo_spec']['operating'].get(
+                'checkpoint_evaluation', {}).get('updates', ())
+            if self._for_resume and (self.state['status']!='paused' or (
+                    self.state['updates'] == 0 and 0 not in scheduled)):
                 raise ContractError('cold restore requires an explicitly paused committed owned parent')
         except BaseException as error:
             self._abort(error)

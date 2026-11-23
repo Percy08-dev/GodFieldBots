@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING, Any, cast
 from gf_cli.config import GroupPackExperimentConfig, LoadedConfig
 from gf_cli.hpo_config import LoadedHPOConfig, require_hpo_runtime_execution
 from gf_common.card_instance import ActionConfigV3
-from gf_common.card_instance_collection import checked_linkage, hpo_evaluation_role
+from gf_common.card_instance_collection import (
+    checked_linkage,
+    hpo_evaluation_groups,
+    hpo_evaluation_role,
+)
 from gf_common.domain import (
     ContractError,
     EpisodeGroup,
@@ -30,6 +34,7 @@ from gf_common.domain import (
     canonical,
     clone,
     digest,
+    integer,
 )
 from gf_common.hpo_progress import observe
 from gf_common.schedule import serialize_schedule
@@ -747,6 +752,48 @@ def _projection(manifest: Json, parent: Json, source_sha: str, conditions_sha: s
     return asdict(SeedEvaluationProjection(run, parent['used_decisions'], conditions_sha, tuple(games)))
 
 
+def checkpoint_panel_projection(manifest: Json) -> Json:
+    """Summarize paired natural outcomes from a verified heuristic panel."""
+    from gf_evaluation.hpo import GameIdentity, GameProjection
+
+    link = manifest['linkage']
+    if link['purpose'] not in ('checkpoint', 'objective') or manifest['run_id'] != link['evaluation_id']:
+        raise ContractError('checkpoint scoring requires a saved heuristic evaluation')
+    groups = hpo_evaluation_groups(link)
+    rows = {row['episode_id']: row for row in manifest['episodes']}
+    if len(rows) != len(manifest['episodes']) or len(rows) != 2 * len(groups):
+        raise ContractError('checkpoint scoring requires the complete two-seat panel')
+    wins = draws = losses = 0
+    game_ids: set[str] = set()
+    pairs = []
+    for group in groups:
+        games = []
+        for spec in group.episodes:
+            row = rows.get(spec.episode_id)
+            seat = spec.learner_viewer
+            assert seat is not None
+            if (row is None or row['seed'] != group.seed or row['end_kind'] != 'natural'
+                    or link['learner_seats'].get(spec.episode_id) != seat
+                    or type(row['game_id']) is not str or not row['game_id'] or row['game_id'] in game_ids):
+                raise ContractError('checkpoint panel contains a missing, duplicate or non-natural result')
+            game_ids.add(row['game_id'])
+            identity = GameIdentity(group.seed, seat, link['evaluation_id'] + '/' + spec.episode_id, row['game_id'])
+            game = GameProjection.from_result(identity, result=row['outcome'], decisions=integer(row['decisions'], 0))
+            outcome = json.loads(game.result_json)
+            if outcome == 'draw':
+                draws += 1
+            elif outcome['win']['winner'] == seat:
+                wins += 1
+            else:
+                losses += 1
+            games.append({'learner_seat': seat, 'episode_id': identity.episode_id,
+                'game_id': identity.game_id, 'outcome': outcome, 'decisions': game.decisions})
+        pairs.append({'game_seed': group.seed, 'games': games})
+    count = len(rows)
+    return {'pairs': pairs, 'games': count, 'wins': wins, 'draws': draws, 'losses': losses,
+        'win_rate': wins / count, 'score': (wins + .5 * draws) / count}
+
+
 def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
                            seed: int, *, deadline: float, control: Any = None, ownership: Any = None,
                            pool: Any = None, parent_budget: Any = None) -> tuple[object, str, str]:
@@ -815,7 +862,9 @@ def _verify_seed_evaluation_data(store: object, loaded: LoadedHPOConfig, campaig
     if audit is None:
         if termination.get('schema_version')!=(2 if loaded.config.schema_version==5 else 1):
             raise ContractError('training GPU termination version differs from explicit campaign mode')
-        verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=training['run_id'],
+        from gf_cli.hpo import _terminal_training_operation
+        operation_id = _terminal_training_operation(store, loaded, proposal, source, termination)
+        verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=operation_id,
             run_id=training['run_id'], evaluation_id=None)
     else:
         from gf_training.rust_player_evaluation import validate_seed_binding
@@ -956,7 +1005,10 @@ def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: J
         training_seed=training_seed, run_id=run_id, deadline=deadline,completion=completion)
     _parent_conditions(inspection, campaign)
     value = clone(asdict(termination))
-    verify_gpu_termination(value, campaign_id=campaign['campaign_id'], operation_id=run_id, run_id=run_id, evaluation_id=None)
+    from gf_cli.hpo import _terminal_training_operation
+    operation_id = _terminal_training_operation(store, loaded, proposal, inspection.source, value)
+    verify_gpu_termination(value, campaign_id=campaign['campaign_id'], operation_id=operation_id,
+        run_id=run_id, evaluation_id=None)
     folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
     gpu_sha = store.put(folder + '/training-gpu-termination.json', value)
     source_sha = store.put(folder + '/source-validation.json', inspection.source)
@@ -1005,7 +1057,9 @@ def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Js
         raise ContractError('training GPU termination version differs from explicit campaign mode')
     if gpu_sha != value['gpu_termination_sha256']:
         raise ContractError('training termination receipt hash differs')
-    verify_gpu_termination(gpu_value, campaign_id=campaign['campaign_id'], operation_id=value['run_id'],
+    from gf_cli.hpo import _terminal_training_operation
+    operation_id = _terminal_training_operation(store, loaded, proposal, source, gpu_value)
+    verify_gpu_termination(gpu_value, campaign_id=campaign['campaign_id'], operation_id=operation_id,
         run_id=value['run_id'], evaluation_id=None)
     for key in ('training_seed', 'run_path', 'run_id', 'config_sha256', 'state_sha256', 'generation',
                 'generation_sha256', 'inference_sha256', 'used_decisions'):
@@ -1096,6 +1150,159 @@ def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
     _copy_failed_evaluation_receipt(error,store,name,observation._identity[0].linkage['evaluation_id'],receipt)
 
 
+@dataclass
+class _CheckpointRequest:
+    facts: Json
+    receipt_sha256: str
+    folder: str
+    binding: RuntimePolicyBinding
+    policy_label: str
+    _projected: LoadedConfig | None = field(repr=False)
+    started: float
+    evaluation_id: str
+    config_sha256: str = field(init=False)
+    wall_deadline: float = field(init=False)
+    game_seeds: tuple[str, ...] = field(init=False)
+
+    def __post_init__(self) -> None:
+        assert self._projected is not None
+        run = self._projected.config.run
+        self.config_sha256 = self._projected.sha256
+        self.wall_deadline = self.started + run.wall_seconds
+        self.game_seeds = run.seeds
+
+    def take_projected(self) -> LoadedConfig:
+        projected, self._projected = self._projected, None
+        if projected is None:
+            raise ContractError('checkpoint evaluator has already consumed the original config')
+        return projected
+
+    @property
+    def parent(self) -> Json:
+        from gf_common.card_instance_collection import checked_hpo_checkpoint_parent
+        keys = ('run_id', 'run_path', 'training_seed', 'generation', 'generation_sha256', 'inference_sha256')
+        return checked_hpo_checkpoint_parent({**{name: self.facts[name] for name in keys},
+            'policy_label': self.policy_label, 'checkpoint_receipt_sha256': self.receipt_sha256})
+
+def _checkpoint_state_facts(state: Json, loaded: LoadedHPOConfig, campaign: Json, proposal: Any, *,
+                            directory: Path, generation: int) -> LoadedConfig:
+    from gf_cli.hpo_config import materialize_hpo_run
+    seed = integer(state['seed'], 0, 2**63 - 1)
+    if (seed not in loaded.config.learning_seeds
+            or directory != Path(loaded.config.storage.parent_root) / state['run_id']
+            or generation != state['updates'] or state['used_decisions'] >= loaded.config.decision_budget
+            or not ((state['status'], state['stop_reason']) == ('paused', 'pause')
+                or ((state['status'], state['stop_reason']) == ('incomplete', 'update_cap')
+                    and generation == loaded.config.operating.max_updates))
+            or any(state.get(key) for key in ('failure', 'cleanup_failure', 'quarantine'))):
+        raise ContractError('checkpoint requires a healthy committed training pause or update cap')
+    base = materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=state['run_id'])
+    if (state['config_sha256'] != base.sha256 or canonical(state['effective_config']) != canonical(base.effective)):
+        raise ContractError('checkpoint differs from the original effective training settings')
+    _parent_conditions(ParentInspection(state, (), {}), campaign)
+    return base
+
+
+def _legacy_checkpoint_slice(store: Any, loaded: LoadedHPOConfig, proposal: Any, facts: Json,
+                             physical: Json) -> tuple[str, str]:
+    """Reconcile the generation with its one immutable scheduled training slice."""
+    from gf_cli.hpo import _TRAINING_SLICE_CLOSURE, _TRAINING_SLICE_IDENTITY, _TRAINING_SLICE_INTENT
+    from gf_cli.hpo_campaign import _checked
+
+    schedule = loaded.config.checkpoint_evaluation
+    generation = facts['generation']
+    if schedule is None or generation not in schedule.updates:
+        raise ContractError('training slice is outside the declared checkpoint schedule')
+    slice_no = schedule.updates.index(generation)
+    folder = f"proposals/{proposal.number:06}/seeds/{facts['training_seed']}/training-slices/{slice_no:06}"
+    intent, intent_sha = store.get(folder + '/intent.json')
+    closure, closure_sha = store.get(folder + '/closure.json')
+    _checked(intent, 'hpo-training-slice-intent', _TRAINING_SLICE_INTENT)
+    _checked(closure, 'hpo-training-slice-closure', _TRAINING_SLICE_CLOSURE)
+    if (closure['intent_sha256'] != intent_sha or closure['termination_sha256'] != digest(physical)
+            or any(canonical(intent[key]) != canonical(closure[key]) for key in _TRAINING_SLICE_IDENTITY)
+            or closure['proposal_sha256'] != proposal.sha256 or canonical(closure['slice_no']) != canonical(slice_no)
+            or canonical(intent['pause_after_update']) != canonical(generation)
+            or intent['mode'] != ('fresh' if slice_no == 0 else 'resume')
+            or any(intent[key] != facts[key] for key in ('config_sha256', 'run_path'))
+            or any(canonical(closure[key]) != canonical(facts[key]) for key in ('training_seed', 'run_id',
+                'state_sha256', 'generation', 'generation_sha256', 'used_decisions', 'status', 'stop_reason'))):
+        raise ContractError('checkpoint differs from the original settled training slice')
+    return str(closure['operation_id']), closure_sha
+
+
+def _closed_legacy_checkpoint(store: Any, loaded: LoadedHPOConfig, campaign: Json, proposal: Any, *,
+                              directory: Path, generation: int, training_result: Any,
+                              deadline: float) -> tuple[Json, Json, LoadedConfig, str, RuntimePolicyBinding]:
+    from gf_common.domain import closed
+    from gf_common.hpo import require_owned_record_version
+    from gf_training.hpo_gpu_lease import (
+        SharedTerminationReceipt,
+        TerminationReceipt,
+        require_resolved_namespace,
+    )
+    from gf_training.hpo_source import hpo_binding
+    from gf_training.lineage import generation_path, run_lock
+    from gf_training.structured_lineage import _ChainScan
+
+    if training_result.completion is not None or type(training_result.gpu_termination) not in (TerminationReceipt, SharedTerminationReceipt):
+        raise ContractError('checkpoint requires actual nonfinal training and physical termination')
+    report = training_result.report
+    termination = clone(asdict(training_result.gpu_termination))
+    if report.get('run_dir') != str(directory):
+        raise ContractError('training result differs from the owned checkpoint directory')
+    # Resolve the actual global job namespace before inspecting a closed parent.
+    # Multiple slices can use different operation IDs under the same run ID.
+    require_resolved_namespace()
+    with run_lock(directory), _ChainScan(directory=directory,
+            max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline) as scan:
+        state = scan.object(directory / 'run.json')
+        base = _checkpoint_state_facts(state, loaded, campaign, proposal, directory=directory, generation=generation)
+        expected = ('status', 'updates', 'accepted_decisions', 'used_decisions', 'collected_decisions',
+            'stop_reason', 'generation_sha256')
+        if any(report.get(key) != state[key] for key in expected) or report.get('decision_budget') != loaded.config.decision_budget:
+            raise ContractError('actual returned training counters differ from current committed state')
+        latest = closed(scan.object(directory / 'latest.json'), {'generation', 'sha256'})
+        if latest != {'generation': generation, 'sha256': state['generation_sha256']}:
+            raise ContractError('actual checkpoint run/latest correspondence required')
+        current = scan.object(generation_path(directory, generation), state['generation_sha256'])
+        require_owned_record_version(current, 'generation')
+        if (current['generation'] != generation or current['run_id'] != state['run_id']
+                or current['inference_sha256'] != current['artifact_files']['inference.json']
+                or any(current[key] != state[key] for key in ('used_decisions', 'collected_decisions',
+                    'accepted_decisions', 'optimizer_steps'))):
+            raise ContractError('actual checkpoint generation/counters differ')
+        label, binding = hpo_binding(directory, state, current, generation)
+        facts = {**{key: state[key] for key in ('run_id', 'config_sha256', 'generation_sha256',
+                'status', 'stop_reason', 'used_decisions', 'collected_decisions', 'optimizer_steps')},
+            'run_path': str(directory), 'training_seed': state['seed'], 'generation': generation,
+            'state_sha256': scan.verified_digest(directory / 'run.json'), 'inference_sha256': current['inference_sha256'],
+            # Owned HPO commits only full fixed-size training batches.
+            'training_games': generation * proposal.settings.training.collection_games}
+        scan.finalize()
+    operation_id, closure_sha = _legacy_checkpoint_slice(store, loaded, proposal, facts, termination)
+    verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=operation_id,
+        run_id=directory.name, evaluation_id=None)
+    facts.update(training_operation_id=operation_id, training_slice_sha256=closure_sha)
+    return facts, termination, base, label, binding
+
+
+def _checkpoint_projection_config(base: LoadedConfig, loaded: LoadedHPOConfig, *,
+                                  output: Path, evaluation_id: str, wall_seconds: float) -> LoadedConfig:
+    train_run = base.config.run
+    wall = min(wall_seconds, train_run.wall_seconds)
+    execution = wall - train_run.finalization_seconds
+    if execution <= 0:
+        raise TimeoutError('checkpoint budget cannot fit the original finalization reserve')
+    run = replace(train_run, split='validation', name=evaluation_id, output_dir=str(output.parent),
+        seeds=loaded.config.evaluation_game_seeds, sampling_seeds=(loaded.config.sampler_seed,), pairs_per_seed=1,
+        wall_seconds=wall, execution_seconds=execution,
+        admission_seconds=execution * (train_run.admission_seconds / train_run.execution_seconds))
+    config = replace(base.config, run=run)
+    effective = clone(asdict(config))
+    return LoadedConfig(config, effective, digest(effective), base.inputs)
+
+
 def _check_live_evaluation_storage(output: Path, projected: LoadedConfig) -> None:
     from gf_cli.hpo_storage import check_evaluation_destination
     from gf_common.hpo_storage import hpo_diagnostics
@@ -1110,15 +1317,341 @@ def _check_live_evaluation_storage(output: Path, projected: LoadedConfig) -> Non
                                      diagnostics=diagnostics)
 
 
+def _checkpoint_intent_fields(request: _CheckpointRequest) -> Json:
+    return {'checkpoint_receipt_sha256': request.receipt_sha256,
+        'conditions_sha256': request.facts['conditions_sha256'],
+        'generation': request.facts['generation'], 'inference_sha256': request.facts['inference_sha256'],
+        'game_seeds': list(request.game_seeds),
+        'training_games': request.facts['training_games'], 'used_decisions': request.facts['used_decisions'],
+        'wall_deadline_monotonic': request.wall_deadline}
+
+
+def _checkpoint_panel_receipt(store: Any, request: _CheckpointRequest, manifest: Json, proof: Json, *,
+                              link: Json, directory: str, acquired: Any, released: Any, termination: Any) -> Json:
+    intent, intent_sha = store.get(request.folder + '/evaluation.intent.json')
+    if (manifest['config_hash'] != request.config_sha256 or intent['config_sha256'] != request.config_sha256
+            or intent['directory'] != directory or intent['checkpoint_receipt_sha256'] != request.receipt_sha256
+            or request.evaluation_id != link['evaluation_id'] or request.parent != link['left_parent']):
+        raise ContractError('saved checkpoint panel differs from its original intent/config/checkpoint')
+    if time.monotonic() >= request.wall_deadline:
+        raise TimeoutError('checkpoint evaluation exceeded its original finish deadline')
+    gpu_sha = store.put(request.folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
+    elapsed = time.monotonic() - request.started
+    return {'schema_version': 1, 'kind': 'hpo-checkpoint-evaluation', 'status': 'complete',
+        'evaluation_intent_sha256': intent_sha, 'checkpoint_receipt_sha256': request.receipt_sha256,
+        'generation': request.facts['generation'], 'generation_sha256': request.facts['generation_sha256'],
+        'inference_sha256': request.facts['inference_sha256'], 'run_id': request.facts['run_id'],
+        'training_seed': request.facts['training_seed'], 'training_games': request.facts['training_games'],
+        'used_decisions': request.facts['used_decisions'], 'decision_budget': request.facts['decision_budget'],
+        'conditions_sha256': link['conditions_sha256'], 'config_sha256': manifest['config_hash'],
+        'train_config_sha256': request.facts['config_sha256'], 'directory': directory,
+        'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
+        'pin_acquire_sha256': acquired.receipt_sha256, 'pin_release_sha256': released.receipt_sha256,
+        'gpu_termination_sha256': gpu_sha, 'linkage_sha256': digest(link), 'linkage': link,
+        'execution_runtime_sha256': (digest(manifest['execution_runtime']) if 'execution_runtime' in manifest else None),
+        'elapsed_seconds': elapsed, 'panel': checkpoint_panel_projection(manifest)}
+
+
+def _read_checkpoint_panel(loaded: LoadedHPOConfig, receipt: Json, *, deadline: float) -> tuple[Json, Json]:
+    """Reopen the immutable panel controls without rerunning Replay or games."""
+    from gf_common.card_instance_collection import checked_hpo_evaluation_manifest
+    from gf_common.group_pack_game import storage_binding
+    from gf_common.preprocessing import preparation_config
+    from gf_training.group_pack_game_source import PackedSourceOwner
+
+    link = receipt['linkage']
+    directory = Path(receipt['directory'])
+    root = Path(loaded.config.storage.originals_root or (
+        loaded.base.config.storage.db_root if isinstance(loaded.base.config, GroupPackExperimentConfig) else '/mnt/d/godfield'))
+    settings = preparation_config(asdict(loaded.base.config.preprocessing))
+    owner = PackedSourceOwner.__new__(PackedSourceOwner)
+    try:
+        PackedSourceOwner.__init__(owner, directory, settings, deadline, storage_binding=storage_binding(),
+            max_owned_bytes=loaded.config.operating.source_budget_bytes,
+            expected_descriptor_root=root / link['evaluation_id'])
+        manifest = checked_hpo_evaluation_manifest(owner.object(directory / 'manifest.json'))
+        report = owner.object(directory / 'report.json')
+        if (receipt['manifest_sha256'] != owner.files['manifest.json']['sha256']
+                or manifest['report_sha256'] != owner.files['report.json']['sha256']
+                or manifest['config_hash'] != receipt['config_sha256']
+                or report.get('healthy') is not True or canonical(manifest['linkage']) != canonical(link)):
+            raise ContractError('checkpoint index requires the original closed panel manifest and report')
+        owner.finalize()
+        return checkpoint_panel_projection(manifest), report
+    finally:
+        owner.close()
+
+
+def _verify_checkpoint_training_gpu(store: Any, physical: Json, loaded: LoadedHPOConfig, campaign: Json,
+                                    proposal: Any, boundary: Json) -> None:
+    if loaded.config.schema_version != 6:
+        operation_id, closure_sha = _legacy_checkpoint_slice(store, loaded, proposal, boundary, physical)
+        if operation_id != boundary['training_operation_id'] or closure_sha != boundary['training_slice_sha256']:
+            raise ContractError('checkpoint receipt differs from the original training slice closure')
+        verify_gpu_termination(physical, campaign_id=campaign['campaign_id'], operation_id=operation_id,
+            run_id=boundary['run_id'], evaluation_id=None)
+        return
+    from gf_common.rust_player import hex_identity, validate_global_termination
+    from gf_training.hpo_gpu_lease import _GLOBAL_ROOT
+    from gf_training.rust_player_supervision import read_control_record
+
+    directory = _GLOBAL_ROOT / 'jobs' / hex_identity(physical['ticket'], 32)
+    admission, _ = read_control_record(directory / 'admission.json', _GLOBAL_ROOT)
+    original, _ = read_control_record(directory / 'termination.json', _GLOBAL_ROOT)
+    validate_global_termination(original, admission)
+    context = admission['context']
+    host = admission['host_admission']
+    if (canonical(original) != canonical(physical) or context['kind'] != 'training'
+            or context['campaign_id'] != campaign['campaign_id'] or context['run_id'] != boundary['run_id']
+            or digest(host) != boundary['admission_sha256'] or host['config_sha256'] != boundary['config_sha256']
+            or host['runtime_binding_sha256'] != boundary['runtime_binding_sha256']
+            or original['exit_sha256'] != boundary['exit_sha256'] or not original['exit_record']['cooperative']
+            or original['exit_record']['prepared_sha256'] != boundary['prepared_sha256']):
+        raise ContractError('checkpoint receipt differs from original supervised GPU retirement')
+
+
+def _verify_checkpoint_pin(loaded: LoadedHPOConfig, receipt: Json, parent: Json, *, deadline: float) -> None:
+    from gf_training.hpo_lineage import REFERENCE_DIRECTORY
+    from gf_training.lineage import generation_path
+    from gf_training.structured_lineage import _ChainScan
+
+    directory = Path(parent['run_path'])
+    token = receipt['linkage']['gpu_ticket']
+    folder = directory / REFERENCE_DIRECTORY / token
+    binding = {'token': token, **{key: parent[key] for key in
+        ('run_id', 'generation', 'inference_sha256', 'generation_sha256')}}
+    with _ChainScan(directory=directory, max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline) as scan:
+        record = scan.object(generation_path(directory, parent['generation']), parent['generation_sha256'])
+        registry = scan.object(directory / 'artifact-registry.json')
+        if (record['generation'] != parent['generation'] or record['run_id'] != parent['run_id']
+                or record['inference_sha256'] != parent['inference_sha256'] or token in registry['evaluation_references']):
+            raise ContractError('checkpoint evidence requires its original generation and released pin')
+        for phase in ('acquire', 'release'):
+            completion = scan.object(folder / (phase + '.receipt.json'), receipt['pin_' + phase + '_sha256'])
+            intent = scan.object(folder / (phase + '.intent.json'), completion['intent_sha256'])
+            kind = 'hpo-evaluation-reference-' + phase
+            if (completion['schema_version'] != 1 or intent['schema_version'] != 1
+                    or completion['kind'] != kind + '-receipt' or intent['kind'] != kind + '-intent'
+                    or completion['binding'] != binding or intent['binding'] != binding
+                    or (phase == 'release' and intent['acquire_receipt_sha256'] != receipt['pin_acquire_sha256'])):
+                raise ContractError('checkpoint panel changed the original pin acquisition/release pair')
+        scan.finalize()
+
+
+def verify_checkpoint_evaluation_receipt(store: Any, loaded: LoadedHPOConfig, campaign: Json, proposal: Any,
+                                         training_seed: int, generation: int, *, deadline: float) -> tuple[Json, str]:
+    """Check a committed progress receipt against the immutable panel and cleanup."""
+    from gf_cli.hpo_config import materialize_hpo_run
+    from gf_common.rust_player import hex_identity
+
+    schedule = loaded.config.checkpoint_evaluation
+    if schedule is None or generation not in schedule.updates or training_seed not in loaded.config.learning_seeds:
+        raise ContractError('checkpoint receipt differs from the declared evaluation generation or seed')
+    folder = f'proposals/{proposal.number:06}/seeds/{training_seed}/checkpoint-evaluations/{generation}'
+    receipt, receipt_sha = store.get(folder + '/evaluation.json')
+    boundary, boundary_sha = store.get(folder + '/checkpoint.json')
+    intent, intent_sha = store.get(folder + '/evaluation.intent.json')
+    physical, physical_sha = store.get(folder + '/evaluation-gpu-termination.json')
+    training_physical, training_physical_sha = store.get(folder + '/training-gpu-termination.json')
+    link = receipt['linkage']
+    parent = link['left_parent']
+    if (receipt['schema_version'] != 1 or receipt['kind'] != 'hpo-checkpoint-evaluation'
+            or receipt['status'] != 'complete' or boundary['kind'] != 'hpo-checkpoint-boundary'
+            or boundary['proposal_sha256'] != proposal.sha256 or boundary['gpu_termination_sha256'] != training_physical_sha
+            or boundary['conditions_sha256'] != campaign['conditions_sha256']
+            or boundary['generation'] != generation or boundary['training_seed'] != training_seed
+            or boundary['decision_budget'] != loaded.config.decision_budget
+            or not 0 <= boundary['used_decisions'] < loaded.config.decision_budget
+            or link['schema_version'] != 2 or link['purpose'] != 'checkpoint'
+            or link['campaign_id'] != campaign['campaign_id'] or link['conditions_sha256'] != campaign['conditions_sha256']
+            or link['game_seeds'] != list(loaded.config.evaluation_game_seeds) or link['gpu_ticket'] != physical['ticket']
+            or parent['checkpoint_receipt_sha256'] != boundary_sha
+            or any(parent[key] != boundary[key] for key in ('run_id', 'run_path', 'training_seed', 'generation',
+                'generation_sha256', 'inference_sha256'))
+            or any(receipt[key] != boundary[key] for key in ('training_seed', 'run_id', 'generation', 'generation_sha256',
+                'inference_sha256', 'used_decisions', 'decision_budget', 'training_games', 'conditions_sha256'))
+            or receipt['train_config_sha256'] != boundary['config_sha256']
+            or receipt['evaluation_intent_sha256'] != intent_sha or receipt['checkpoint_receipt_sha256'] != boundary_sha
+            or receipt['gpu_termination_sha256'] != physical_sha or receipt['linkage_sha256'] != digest(link)
+            or any(intent[key] != receipt[key] for key in ('directory', 'config_sha256', 'conditions_sha256',
+                'checkpoint_receipt_sha256', 'generation', 'inference_sha256', 'used_decisions', 'training_games'))
+            or intent['game_seeds'] != link['game_seeds'] or intent['evaluation_id'] != link['evaluation_id']):
+        raise ContractError('checkpoint panel receipt differs from its immutable original boundary/intent')
+    for name in ('pin_acquire_sha256', 'pin_release_sha256', 'manifest_sha256', 'originals_digest'):
+        hex_identity(receipt[name])
+    elapsed = receipt['elapsed_seconds']
+    if (type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0
+            or elapsed > intent['wall_deadline_monotonic'] - intent['started_monotonic']):
+        raise ContractError('checkpoint evaluation elapsed time exceeds its original window')
+    base = materialize_hpo_run(loaded, proposal.settings, learning_seed=training_seed, run_id=boundary['run_id'])
+    expected_config = _checkpoint_projection_config(base, loaded, output=Path(receipt['directory']),
+        evaluation_id=link['evaluation_id'], wall_seconds=schedule.wall_seconds)
+    if (base.sha256 != boundary['config_sha256'] or expected_config.sha256 != receipt['config_sha256']
+            or Path(boundary['run_path']) != Path(loaded.config.storage.parent_root) / boundary['run_id']
+            or intent['wall_deadline_monotonic'] != intent['started_monotonic'] + expected_config.config.run.wall_seconds):
+        raise ContractError('checkpoint receipt differs from the original training/evaluation config projection')
+    del base, expected_config
+    verify_gpu_termination(physical, campaign_id=link['campaign_id'], operation_id=link['evaluation_id'],
+        run_id=boundary['run_id'], evaluation_id=link['evaluation_id'])
+    _verify_checkpoint_training_gpu(store, training_physical, loaded, campaign, proposal, boundary)
+    _verify_checkpoint_pin(loaded, receipt, parent, deadline=deadline)
+    runtime = None if loaded.config.schema_version == 6 else evaluation_runtime(loaded.config)
+    manifest, proof = verify_saved_evaluation(Path(receipt['directory']), loaded, link,
+        deadline=deadline, evaluation_runtime=runtime)
+    if (manifest['config_hash'] != receipt['config_sha256'] or proof['manifest_sha256'] != receipt['manifest_sha256']
+            or proof['source_set_sha256'] != receipt['originals_digest']
+            or receipt['execution_runtime_sha256'] != (
+                digest(manifest['execution_runtime']) if 'execution_runtime' in manifest else None)
+            or canonical(checkpoint_panel_projection(manifest)) != canonical(receipt['panel'])):
+        raise ContractError('checkpoint scores differ from independently read paired results')
+    return receipt, receipt_sha
+
+
+def _best_checkpoint(rows: tuple[Json, ...]) -> Json | None:
+    return max(rows, key=lambda row: ((2 * row['wins'] + row['draws']) / row['games'], -row['generation']), default=None)
+
+
+def persist_best_checkpoint(store: Any, loaded: LoadedHPOConfig, campaign: Json, proposal: Any,
+                            training_seed: int, *, terminal_generation: int, deadline: float,
+                            final_training: Json | None = None, final_evaluation: Json | None = None) -> Json:
+    """Publish a terminal index from the seed's verified committed panels."""
+    schedule = loaded.config.checkpoint_evaluation
+    if schedule is None or training_seed not in loaded.config.learning_seeds:
+        raise ContractError('active checkpoint schedule and seed required')
+    integer(terminal_generation, 0)
+    folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
+    progress_rows = []
+    run_id = None
+    for generation in schedule.updates:
+        if generation > terminal_generation:
+            break
+        path = f'{folder}/checkpoint-evaluations/{generation}/evaluation.json'
+        if not store.exists(path):
+            continue
+        receipt, _ = store.get(path)
+        if receipt.get('status') in ('skipped', 'failed') and 'panel' not in receipt:
+            continue
+        receipt, checksum = verify_checkpoint_evaluation_receipt(store, loaded, campaign, proposal,
+            training_seed, generation, deadline=deadline)
+        run_id = receipt['run_id'] if run_id is None else run_id
+        if receipt['run_id'] != run_id:
+            raise ContractError('checkpoint index cannot combine different training parents')
+        progress_rows.append(_rankable_panel(receipt, checksum, path))
+    if (final_training is None) != (final_evaluation is None):
+        raise ContractError('final-D checkpoint reference requires the pair of existing receipts')
+    if final_training is not None and final_evaluation is not None:
+        durable_training, training_sha = store.get(folder + '/training.json')
+        path = folder + '/evaluation.json'
+        durable_evaluation, checksum = store.get(path)
+        link = final_evaluation['linkage']
+        if (canonical(durable_training) != canonical(final_training)
+                or canonical(durable_evaluation) != canonical(final_evaluation)
+                or final_evaluation['training_receipt_sha256'] != training_sha
+                or link['purpose'] != 'objective' or link['conditions_sha256'] != campaign['conditions_sha256']
+                or link['campaign_id'] != campaign['campaign_id'] or link['game_seeds'] != list(loaded.config.evaluation_game_seeds)
+                or link['left_parent']['source_receipt_sha256'] != final_training['source_receipt_sha256']
+                or final_training['training_seed'] != training_seed or final_training['proposal_sha256'] != proposal.sha256
+                or final_training['used_decisions'] != loaded.config.decision_budget
+                or final_training['generation'] != terminal_generation
+                or any(link['left_parent'][key] != final_training[key] for key in ('run_id', 'run_path',
+                    'training_seed', 'generation', 'generation_sha256', 'inference_sha256'))
+                or run_id not in (None, final_training['run_id'])):
+            raise ContractError('final-D checkpoint index must reference the original matching objective panel')
+        if terminal_generation in schedule.updates:
+            if progress_rows and progress_rows[-1]['generation'] == terminal_generation:
+                raise ContractError('terminal checkpoint has more than one evaluation')
+            panel, _ = _read_checkpoint_panel(loaded, final_evaluation, deadline=deadline)
+            progress_rows.append(_rankable_panel({**final_training, 'panel': panel}, checksum, path))
+        run_id = final_training['run_id']
+    index = {'schema_version': 1, 'kind': 'hpo-best-checkpoint', 'training_seed': training_seed,
+        'proposal_sha256': proposal.sha256, 'run_id': run_id, 'terminal_generation': terminal_generation,
+        'conditions_sha256': campaign['conditions_sha256'], 'evaluated': progress_rows,
+        'best': _best_checkpoint(tuple(progress_rows))}
+    store.put(folder + '/best-checkpoint.json', index)
+    return index
+
+
+def _rankable_panel(receipt: Json, checksum: str, path: str) -> Json:
+    return {'generation': receipt['generation'], 'inference_sha256': receipt['inference_sha256'],
+        'generation_sha256': receipt['generation_sha256'], 'used_decisions': receipt['used_decisions'],
+        **{key: receipt['panel'][key] for key in ('wins', 'draws', 'losses', 'games', 'win_rate', 'score')},
+        'evaluation_receipt_sha256': checksum, 'evaluation_receipt': path}
+
+
+async def evaluate_checkpoint(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object, *,
+                              directory: Path, generation: int, output: Path, deadline: float,
+                              training_result: Any = None, rust_invocation: Any = None, control: Any = None,
+                              progress: Any = None) -> Json:
+    """Evaluate a closed scheduled generation without admitting final-D Source."""
+    import uuid
+
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_training.hpo_ppo import HpoRunResult
+    from gf_training.rust_player_completion import ColdFinalizedRustInvocation
+
+    legacy = type(training_result) is HpoRunResult and rust_invocation is None and control is None
+    rust = training_result is None and type(rust_invocation) is ColdFinalizedRustInvocation and control is not None
+    if not (legacy or rust):
+        raise ContractError('checkpoint evaluation requires actual closed training ownership')
+    if type(store) is not CampaignStore or type(proposal) is not Proposal or type(loaded) is not LoadedHPOConfig:
+        raise ContractError('actual campaign store/config/proposal required')
+    durable_campaign, _ = store.get('campaign.json')
+    _saved, proposal_sha = store.get(f'proposals/{proposal.number:06}/proposal.json')
+    if (canonical(campaign) != canonical(durable_campaign) or campaign['loaded_config_sha256'] != loaded.sha256
+            or campaign['conditions_sha256'] != digest(campaign['conditions']) or proposal_sha != proposal.sha256):
+        raise ContractError('checkpoint differs from the durable campaign/conditions/proposal')
+    integer(generation, 0)
+    schedule = loaded.config.checkpoint_evaluation
+    if (schedule is None or not schedule.enabled or generation not in schedule.updates
+            or loaded.config.schema_version not in ((6,) if rust else (4, 5))):
+        raise ContractError('checkpoint evaluation requires the original active generation schedule')
+    started = time.monotonic()
+    wall_seconds = min(schedule.wall_seconds, loaded.config.run_wall_seconds)
+    if type(deadline) not in (int, float) or not math.isfinite(deadline) or started + wall_seconds > deadline:
+        raise TimeoutError('original checkpoint window cannot fit the evaluation budget')
+    if not output.is_absolute() or '..' in output.parts or not directory.is_absolute() or '..' in directory.parts:
+        raise ContractError('absolute owned checkpoint and evaluation directories required')
+    if rust:
+        from gf_cli.rust_player_evaluation import _closed_rust_checkpoint
+        facts, termination, base, label, binding = _closed_rust_checkpoint(store, loaded, campaign,
+            proposal, directory=directory, generation=generation, invocation=rust_invocation, control=control,
+            deadline=started + wall_seconds)
+    else:
+        facts, termination, base, label, binding = _closed_legacy_checkpoint(store, loaded, campaign, proposal,
+            directory=directory, generation=generation, training_result=training_result, deadline=started + wall_seconds)
+    evaluation_id = str(uuid.uuid4())
+    projected = _checkpoint_projection_config(base, loaded, output=output, evaluation_id=evaluation_id,
+        wall_seconds=wall_seconds)
+    folder = f'proposals/{proposal.number:06}/seeds/{facts["training_seed"]}/checkpoint-evaluations/{generation}'
+    if store.exists(folder + '/evaluation.json') or store.exists(folder + '/evaluation.intent.json'):
+        raise ContractError('checkpoint evaluation already completed or started')
+    if time.monotonic() >= started + projected.config.run.admission_seconds:
+        raise TimeoutError('checkpoint inspection consumed the evaluation admission window')
+    _check_live_evaluation_storage(output, projected)
+    physical_sha = store.put(folder + '/training-gpu-termination.json', termination)
+    facts.update(schema_version=1, kind='hpo-checkpoint-boundary', proposal_sha256=proposal.sha256,
+        conditions_sha256=campaign['conditions_sha256'], decision_budget=loaded.config.decision_budget,
+        gpu_termination_sha256=physical_sha)
+    receipt_sha = store.put(folder + '/checkpoint.json', facts)
+    request = _CheckpointRequest(facts, receipt_sha, folder, binding, label, projected, started, evaluation_id)
+    del projected, base
+    if rust:
+        from gf_cli.rust_player_evaluation import _evaluate_rust_checkpoint
+        return await _evaluate_rust_checkpoint(store, loaded, campaign, proposal, request, output=output,
+            control=control, invocation=rust_invocation, progress=progress)
+    return await evaluate_seed(store, loaded, campaign, proposal, facts, output=output,
+        progress=progress, _checkpoint=request)
+
+
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                        training: Json, *, output: Path, progress: Any = None, completion: Any = None) -> Json:
+                        training: Json, *, output: Path, progress: Any = None, completion: Any = None,
+                        _checkpoint: _CheckpointRequest | None = None) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
     require_hpo_runtime_execution(loaded.config)
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
-    from gf_common.card_instance_collection import hpo_evaluation_groups
     from gf_common.card_instance_rules import card_instance_rules
-    from gf_common.domain import clone
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
 
@@ -1128,23 +1661,30 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
     composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     retention = owned_runtime_module('gf_training.hpo_retention', ('pin_hpo_evaluation', 'release_hpo_evaluation'))
     seed = training['training_seed']
-    folder = f'proposals/{proposal.number:06}/seeds/{seed}'
+    folder = f'proposals/{proposal.number:06}/seeds/{seed}' if _checkpoint is None else _checkpoint.folder
     if store.exists(folder + '/evaluation.intent.json'):
         raise ContractError('interrupted evaluation cannot be restarted or requalified')
     import uuid
-    evaluation_id = str(uuid.uuid4())
-    base = composition.materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=training['run_id'])
-    run = replace(base.config.run, split='validation', name=evaluation_id, output_dir=str(output.parent),
-        seeds=loaded.config.evaluation_game_seeds, sampling_seeds=(loaded.config.sampler_seed,), pairs_per_seed=1)
-    config = replace(base.config, run=run)
-    raw = clone(asdict(config))
-    projected = LoadedConfig(config, raw, digest(raw), base.inputs)
-    started = time.monotonic()
+    if _checkpoint is None:
+        evaluation_id = str(uuid.uuid4())
+        base = composition.materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=training['run_id'])
+        run = replace(base.config.run, split='validation', name=evaluation_id, output_dir=str(output.parent),
+            seeds=loaded.config.evaluation_game_seeds, sampling_seeds=(loaded.config.sampler_seed,), pairs_per_seed=1)
+        config = replace(base.config, run=run)
+        raw = clone(asdict(config))
+        projected = LoadedConfig(config, raw, digest(raw), base.inputs)
+        started = time.monotonic()
+        intent_fields = {'training_receipt_sha256': store.get(folder + '/training.json')[1]}
+    else:
+        evaluation_id = _checkpoint.evaluation_id
+        projected = _checkpoint.take_projected()
+        config, run = projected.config, projected.config.run
+        started = _checkpoint.started
+        intent_fields = _checkpoint_intent_fields(_checkpoint)
     _check_live_evaluation_storage(output, projected)
     store.put(folder + '/evaluation.intent.json', {'schema_version': 1, 'kind': 'hpo-evaluation-intent',
         'evaluation_id': evaluation_id, 'directory': str(output), 'config_sha256': projected.sha256,
-        'training_receipt_sha256': store.get(folder + '/training.json')[1],
-        'started_unix': time.time(), 'started_monotonic': started})
+        'started_unix': time.time(), 'started_monotonic': started, **intent_fields})
     job = admit_gpu_job(JobContext(campaign['campaign_id'], evaluation_id, 'evaluation', training['run_id'], evaluation_id),
         global_cuda_bytes=loaded.config.operating.managed_cuda_bytes, max_workers=loaded.config.operating.max_participant_workers)
     pins: list[tuple[Path, HpoReferenceReceipt]] = []
@@ -1163,7 +1703,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         reference = retention.pin_hpo_evaluation(Path(training['run_path']), job.ticket, training['generation'], training['inference_sha256'],
             max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=execution)
         pins.append((Path(training['run_path']), reference))
-        if loaded.config.schema_version in (4,5):
+        if _checkpoint is None and loaded.config.schema_version in (4,5):
             from gf_common.artifacts import ArtifactPhaseAdmission
             from gf_common.group_pack import StorageSettings
             from gf_training.group_pack_resources import StorageBudget
@@ -1182,14 +1722,20 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                     budget=evaluation_budget,parent_budget=evaluation_phase)
         elif completion is not None: raise ContractError('legacy evaluation cannot adopt owned completion')
         try:
-            inspected=(_checked_owned_inspection(completion_inspection(final_data,Path(training['run_path'])),loaded,proposal.settings,
-                training_seed=seed,run_id=training['run_id']) if final_data is not None else
-                inspect_training_parent(Path(training['run_path']),loaded,proposal.settings,training_seed=seed,run_id=training['run_id'],deadline=execution))
-            parent_reference, binding = _final_policy_reference(inspected, training['source_receipt_sha256'])
+            if _checkpoint is None:
+                inspected=(_checked_owned_inspection(completion_inspection(final_data,Path(training['run_path'])),loaded,proposal.settings,
+                    training_seed=seed,run_id=training['run_id']) if final_data is not None else
+                    inspect_training_parent(Path(training['run_path']),loaded,proposal.settings,training_seed=seed,run_id=training['run_id'],deadline=execution))
+                parent_reference, binding = _final_policy_reference(inspected, training['source_receipt_sha256'])
+            else:
+                inspected = None
+                parent_reference, binding = _checkpoint.parent, _checkpoint.binding
+                if reference.binding['generation_sha256'] != parent_reference['generation_sha256']:
+                    raise ContractError('checkpoint pin differs from original generation receipt')
             label = parent_reference['policy_label']
             bindings = {label: binding, 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')}
-            link = {'schema_version': 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign['campaign_id'],
-                'evaluation_id': evaluation_id, 'gpu_ticket': job.ticket, 'purpose': 'objective',
+            link = {'schema_version': 1 if _checkpoint is None else 2, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign['campaign_id'],
+                'evaluation_id': evaluation_id, 'gpu_ticket': job.ticket, 'purpose': 'objective' if _checkpoint is None else 'checkpoint',
                 'conditions_sha256': campaign['conditions_sha256'], 'left_parent': parent_reference,
                 'right_parent': None, 'game_seeds': list(loaded.config.evaluation_game_seeds),
                 'learner_seats': {}, 'schedule_digest': '0' * 64,
@@ -1203,6 +1749,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution,
                 work_deadline=work, wall_deadline=wall)
             if final_data is not None:
+                assert inspected is not None
                 from gf_training.hpo_owned_completion import completion_artifacts
                 if canonical(completion_inspection(final_data,Path(training['run_path'])).source)!=canonical(inspected.source):
                     raise ContractError('owned final data differs from validated training receipt')
@@ -1242,16 +1789,20 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 raise released
         observe(progress, {'phase':'cleanup'})
         termination = _confirmed_evaluation_cleanup(ContractError('final evaluation cleanup proof'),observation,job,pins,releases)
-        gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
-        receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
-            'training_receipt_sha256': store.get(folder + '/training.json')[1], 'linkage_sha256': digest(link),
-            'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
-            'projection': _projection(manifest, training, training['source_receipt_sha256'], campaign['conditions_sha256']),
-            'conditions_sha256': campaign['conditions_sha256'], 'pin_acquire_sha256': reference.receipt_sha256,
-            'pin_release_sha256': released.receipt_sha256, 'gpu_termination_sha256': gpu_sha, 'directory': str(result.directory),
-            'linkage': link, 'config_sha256': projected.sha256}
-        receipt.update(evaluation_receipt_runtime_fields(manifest))
-        check_evaluation_receipt_runtime(receipt,manifest)
+        if _checkpoint is None:
+            gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
+            receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
+                'training_receipt_sha256': store.get(folder + '/training.json')[1], 'linkage_sha256': digest(link),
+                'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
+                'projection': _projection(manifest, training, training['source_receipt_sha256'], campaign['conditions_sha256']),
+                'conditions_sha256': campaign['conditions_sha256'], 'pin_acquire_sha256': reference.receipt_sha256,
+                'pin_release_sha256': released.receipt_sha256, 'gpu_termination_sha256': gpu_sha, 'directory': str(result.directory),
+                'linkage': link, 'config_sha256': projected.sha256}
+            receipt.update(evaluation_receipt_runtime_fields(manifest))
+            check_evaluation_receipt_runtime(receipt,manifest)
+        else:
+            receipt = _checkpoint_panel_receipt(store, _checkpoint, manifest, proof, link=link,
+                directory=str(result.directory), acquired=reference, released=released, termination=termination)
         drain_started=True
         _drain_final_owners(job,() if final_data is None else (final_data,))
         store.put(folder + '/evaluation.json', receipt)

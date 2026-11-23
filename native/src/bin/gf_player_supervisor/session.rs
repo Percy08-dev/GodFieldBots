@@ -432,7 +432,7 @@ impl Supervisor {
         if sha != text(&frame["prepared_sha256"])? || sha != digest(&value) {
             return Err(invalid("prepared original/canonical hash mismatch"));
         }
-        prepared(&value, admission)?;
+        prepared(&value, admission, &self.bound.value)?;
         let close_path = Path::new(text(&value["close_ack_path"])?);
         let (close, close_sha) = read_owned(close_path, Some(&self.root))?;
         if close_sha != text(&value["close_ack_sha256"])? {
@@ -948,11 +948,22 @@ impl Supervisor {
                                 self.check_locks(true)?;
                                 let path = Path::new(text(&frame["completion_path"])?);
                                 let (completion, sha) = read_owned(path, Some(&self.root))?;
+                                let initial = initial_hpo_pause(&self.bound.value);
+                                let (version, kind) = if initial {
+                                    (2, "rust-player-initial-pause-completion-v2")
+                                } else {
+                                    (1, "rust-player-training-completion-v1")
+                                };
                                 if sha != text(&frame["completion_sha256"])?
-                                    || completion["schema_version"] != 1
-                                    || completion["kind"] != "rust-player-training-completion-v1"
+                                    || completion["schema_version"] != version
+                                    || completion["kind"] != kind
                                     || completion["prepared_sha256"] != previous.prepared.sha
                                     || completion["exit_sha256"] != previous.exit_sha
+                                    || initial
+                                        && (completion["state"] != "paused"
+                                            || completion["committed_update"] != 0
+                                            || completion["eligible"] != false
+                                            || !completion["source_manifest_sha256"].is_null())
                                 {
                                     return Err(invalid("cold finalizer output/pair mismatch"));
                                 }
@@ -1027,16 +1038,20 @@ impl Supervisor {
                                 if frame["device"] != held.device || frame["inode"] != held.inode {
                                     return Err(invalid("foreign parent release"));
                                 }
-                                if self.campaign.is_some()
-                                    && finalized
-                                    && cold
-                                        .as_ref()
-                                        .is_some_and(|c| c.prepared.value["state"] != "complete")
-                                    && disposition_ack.is_none()
-                                {
-                                    return Err(invalid(
-                                        "campaign healthy incomplete release needs durable disposition ACK",
-                                    ));
+                                if let (Some(campaign), Some(cold)) = (&self.campaign, &cold) {
+                                    if finalized
+                                        && cold.prepared.value["state"] != "complete"
+                                        && disposition_ack.is_none()
+                                    {
+                                        campaign.recheck(&self.launch.value, &self.locks)?;
+                                        campaign.checkpoint_pause(
+                                            &self.bound,
+                                            cold,
+                                            finalized_sha.as_deref().ok_or_else(|| {
+                                                invalid("original acknowledged completion required")
+                                            })?,
+                                        )?;
+                                    }
                                 }
                                 self.locks.remove(index);
                                 channel.send(
@@ -1196,6 +1211,67 @@ struct CampaignBinding {
     clock: Value,
     clock_sha: String,
 }
+
+#[cfg(test)]
+mod checkpoint_pause_tests {
+    use super::*;
+
+    #[test]
+    fn exact_pause_closes_against_the_original_operation_and_retirement() {
+        let root = std::env::temp_dir().join(format!("checkpoint-pause-{}", random_id().unwrap()));
+        let awaiting_directory = root.join("awaiting");
+        let pause_directory = root.join("checkpoint-pauses");
+        std::fs::create_dir_all(&awaiting_directory).unwrap();
+        std::fs::create_dir(&pause_directory).unwrap();
+        let bound = Bound {
+            value: json!({"operation_id":"slice", "operation_type":"hpo-train",
+                "execution_request":{"mode":"fresh","pause_after_update":0}}),
+            path: root.join("operation-slice.json"),
+            sha: "a".repeat(64),
+            times: [1.; 5],
+            clock: CleanupClock::hard_cutoff(Instant::now()),
+        };
+        let awaiting = json!({"operation_sha256":bound.sha, "run_id":"run"});
+        let awaiting_sha = write(&awaiting_directory.join("slice.json"), &awaiting, true).unwrap();
+        let physical = json!({"kind":"test physical fixture"});
+        let physical_path = root.join("physical.json");
+        let physical_sha = write(&physical_path, &physical, true).unwrap();
+        let cold = Cold {
+            prepared: Prepared {
+                value: json!({"state":"paused","committed_update":0}),
+                path: root.join("prepared.json"),
+                sha: "b".repeat(64),
+            },
+            exit: Value::Null,
+            exit_path: root.join("exit.json"),
+            exit_sha: "c".repeat(64),
+            admission: json!({"run_id":"run", "invocation_id":"invocation"}),
+            physical: Some((physical, physical_path, physical_sha.clone())),
+        };
+        let campaign = CampaignBinding {
+            directory: root.clone(),
+            root: root.clone(),
+            bootstrap: Value::Null,
+            bootstrap_path: root.join("bootstrap.json"),
+            bootstrap_sha: String::new(),
+            clock: Value::Null,
+            clock_sha: String::new(),
+        };
+        let completion_sha = "d".repeat(64);
+        assert!(campaign.checkpoint_pause(&bound, &cold, &completion_sha).is_err());
+        let pause = json!({"schema_version":1,"kind":"rust-player-campaign-checkpoint-pause-v1",
+            "awaiting_sha256":awaiting_sha,"invocation_id":"invocation","generation":0,
+            "completion_sha256":completion_sha,"physical_sha256":physical_sha});
+        write(&pause_directory.join("slice.json"), &pause, true).unwrap();
+        assert!(campaign.checkpoint_pause(&bound, &cold, &completion_sha).is_ok());
+        assert!(campaign.checkpoint_pause(&bound, &cold, &"e".repeat(64)).is_err());
+        let mut wrong = bound.clone();
+        wrong.value["execution_request"]["pause_after_update"] = json!(1);
+        assert!(campaign.checkpoint_pause(&wrong, &cold, &completion_sha).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 impl CampaignBinding {
     fn from_initial(launch: &Value, initial: &Value, locks: &[HeldLock]) -> Result<Option<Self>> {
         if initial["operation_type"] != "campaign-continue" {
@@ -1399,6 +1475,49 @@ impl CampaignBinding {
         }
         Ok(())
     }
+    fn checkpoint_pause(&self, bound: &Bound, cold: &Cold, completion_sha: &str) -> Result<()> {
+        let operation = text(&bound.value["operation_id"])?;
+        safe_campaign_component(operation)?;
+        let name = format!("{operation}.json");
+        let path = self.root.join("checkpoint-pauses").join(&name);
+        let (pause, _) = read_campaign_control(&path, Some(&self.root))?;
+        record(
+            &pause,
+            "rust-player-campaign-checkpoint-pause-v1",
+            1,
+            &[
+                "awaiting_sha256",
+                "invocation_id",
+                "generation",
+                "completion_sha256",
+                "physical_sha256",
+            ],
+        )?;
+        let (awaiting, awaiting_sha) =
+            read_campaign_control(&self.root.join("awaiting").join(name), Some(&self.root))?;
+        let (physical, physical_path, physical_sha) = cold.physical.as_ref().ok_or_else(|| {
+            invalid("checkpoint pause requires actual retired training namespace")
+        })?;
+        if bound.value["operation_type"] != "hpo-train"
+            || cold.prepared.value["state"] != "paused"
+            || pause["generation"] != cold.prepared.value["committed_update"]
+            || pause["generation"] != bound.value["execution_request"]["pause_after_update"]
+            || pause["invocation_id"] != cold.admission["invocation_id"]
+            || pause["completion_sha256"] != completion_sha
+            || pause["physical_sha256"] != *physical_sha
+            || pause["awaiting_sha256"] != awaiting_sha
+            || awaiting["operation_sha256"] != bound.sha
+            || awaiting["run_id"] != cold.admission["run_id"]
+        {
+            return Err(invalid("checkpoint pause differs from actual awaiting, completion or retirement"));
+        }
+        let (actual, sha) = read_campaign_control(physical_path, None)?;
+        if actual != *physical || sha != *physical_sha {
+            return Err(invalid("checkpoint pause physical retirement changed"));
+        }
+        resync(&path)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn disposition(
         &self,

@@ -148,14 +148,15 @@ def validate_reply(reply: Json, command: str, identity: Json) -> None:
         hpo_fields = {'optimizer_step_delta', 'collected_decisions', 'used_decisions', 'tbptt_length',
             'epochs', 'endpoint_evaluations', 'context_decisions', 'suffix_decisions', 'update_seconds'}
         metrics = closed(reply['metrics'], {'policy_loss', 'value_mse', 'entropy', 'approx_kl', 'total_loss',
-                                           'optimizer_steps', 'parity'} | (hpo_fields if hpo else {'sequence_length'}))
+            'optimizer_steps', 'parity'} | (hpo_fields | {'diagnostics'} if hpo else {'sequence_length'}))
         for name in ('policy_loss', 'value_mse', 'entropy', 'approx_kl', 'total_loss'):
             _number(metrics[name])
         integer(metrics['optimizer_steps'], 1)
         integer(metrics['tbptt_length'] if hpo else metrics['sequence_length'], 1, 1024)
         if hpo:
-            from gf_common.hpo import optimizer_delta
+            from gf_common.hpo import optimizer_delta, validate_update_diagnostics
             from gf_training.hpo_config import hpo_training_config
+            validate_update_diagnostics(metrics)
             recipe = hpo_training_config(identity['training_recipe'])
             for name in hpo_fields - {'update_seconds'}:
                 integer(metrics[name], 1)

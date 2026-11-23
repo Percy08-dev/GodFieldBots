@@ -905,7 +905,7 @@ def _require_rust_evaluation_storage(loaded: LoadedConfig, plan: Any, job: Any,
     from gf_cli.hpo_evaluation import HpoEvaluationPlan
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_training.hpo_gpu_lease import GpuJob
-    from gf_training.rust_player_evaluation import RustEvaluationData, final_policy_binding
+    from gf_training.rust_player_evaluation import RustEvaluationData
     if (type(data) is not RustEvaluationData or type(plan) is not HpoEvaluationPlan or type(job) is not GpuJob
             or type(artifacts) is not RetainedGameArtifacts or data.job is not job or data.provider is not artifacts):
         raise ContractError('actual SAME Rust evaluation DATA/provider/Fresh plan/job required')
@@ -916,11 +916,18 @@ def _require_rust_evaluation_storage(loaded: LoadedConfig, plan: Any, job: Any,
             or getattr(config.run, 'inference_service', None) is not None):
         raise ContractError('explicit schema6 Fresh validation storage required')
     _require_hpo_model4_storage(config, 'evaluate', standalone=False)
-    state, metadata = json.loads(data._state), json.loads(data._metadata)
-    label, binding = final_policy_binding(state, metadata)
-    parent = plan.linkage['left_parent']
+    state = json.loads(data._state)
+    label, binding = data.policy_binding()
+    link = plan.linkage
+    parent = link['left_parent']
+    if data.checkpoint_receipt_sha256 is None:
+        proof_ok = (link['purpose'] == 'objective'
+            and parent['source_receipt_sha256'] == hashlib.sha256(data._metadata + b'\n').hexdigest())
+    else:
+        proof_ok = (link['purpose'] == 'checkpoint'
+            and parent['checkpoint_receipt_sha256'] == data.checkpoint_receipt_sha256)
     if (plan.bindings.get(label) != binding or parent['policy_label'] != label
-            or parent['run_path'] != str(data.directory) or parent['source_receipt_sha256'] != hashlib.sha256(data._metadata + b'\n').hexdigest()
+            or parent['run_path'] != str(data.directory) or not proof_ok
             or parent['training_seed'] != state['seed'] or data.binding['token'] != job.ticket
             or any(parent[name] != data.binding[name] for name in
                 ('run_id', 'generation', 'inference_sha256', 'generation_sha256'))):

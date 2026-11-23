@@ -615,6 +615,7 @@ def _audit_source_device_plan(update: Json, *, loaded: Any, state: Json, source_
 def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
                   loaded: Any, state: Json, previous: Json, current: Json,
                   update: Json, deadline: float, *, control_loans: list[Any]) -> Json:
+    from gf_common.hpo import validate_update_diagnostics
     from gf_training.rust_player_evaluation import RustCompletedParentAudit
     from gf_training.rust_player_source import (
         RustColdOriginals,
@@ -624,6 +625,8 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
 
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
     validate_record_shape(update, 'update', hpo=hpo)
+    if hpo:
+        validate_update_diagnostics(update['metrics'])
     proof = validate_record_shape(update['source_proof'], 'proof', hpo=hpo)
     mode = source_mode(state['effective_config'])
     generation = current['generation']
@@ -1204,7 +1207,9 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
                 empty_pack_verification=empty_pack)
         audit_path = control.root / f'cold-audit-{admission["invocation_id"]}.json'
         audit_sha = write_control_record(audit_path, audit)
-        completion = {'schema_version': 1, 'kind': 'rust-player-training-completion-v1',
+        initial = prepared['kind'] == 'rust-player-initial-pause-prepared-v2'
+        completion = {'schema_version': 2 if initial else 1,
+            'kind': 'rust-player-initial-pause-completion-v2' if initial else 'rust-player-training-completion-v1',
             **{key: admission[key] for key in ('supervision_id', 'invocation_id', 'operation_id',
                 'run_id', 'config_sha256', 'runtime_binding_sha256')},
             'operation_sha256': control.operation_sha256, 'prepared_sha256': cold._payload['prepared_sha256'],

@@ -5,6 +5,7 @@ use std::io::{Cursor, Read};
 
 pub(crate) const SELECTION_VERSION: &str = "hpo-endpoint-selection-v1";
 pub(crate) const CAPABILITY: &str = "model4;collection6;proof3;numeric5;selection1;provider1";
+pub(crate) const UPDATE_DIAGNOSTICS_CAPABILITY: &str = "ppo-update-diagnostics-v1";
 const OPERATING: &[&str] = &[
     "managed_ram_bytes",
     "managed_cuda_bytes",
@@ -1978,8 +1979,41 @@ fn update_metadata(
             "suffix_decisions",
             "update_seconds",
         ],
-        &["elapsed_seconds", "save_seconds", "peak_cpu_memory_bytes"],
+        &[
+            "elapsed_seconds",
+            "save_seconds",
+            "peak_cpu_memory_bytes",
+            "diagnostics",
+        ],
     )?;
+    if let Some(diagnostics) = metrics.get("diagnostics") {
+        diagnostics.closed(
+            &[
+                "schema_version",
+                "clip_fraction",
+                "explained_variance",
+                "pre_clip_grad_norm_mean",
+                "pre_clip_grad_norm_max",
+                "learning_rate",
+            ],
+            &[],
+        )?;
+        n(diagnostics, "schema_version", 1, 1)?;
+        let explained = diagnostics.require("explained_variance")?;
+        if !explained.is_null() {
+            let value = explained.number()?;
+            if !value.is_finite() || value > 1. {
+                return Err(Error::contract("HPO explained variance outside range"));
+            }
+        }
+        let clip = finite(diagnostics, "clip_fraction")?;
+        let grad_mean = finite(diagnostics, "pre_clip_grad_norm_mean")?;
+        let grad_max = finite(diagnostics, "pre_clip_grad_norm_max")?;
+        finite(diagnostics, "learning_rate")?;
+        if clip > 1. || grad_mean > grad_max {
+            return Err(Error::contract("HPO update diagnostics outside range"));
+        }
+    }
     for key in [
         "policy_loss",
         "value_mse",

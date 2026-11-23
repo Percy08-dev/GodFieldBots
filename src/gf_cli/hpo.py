@@ -7,10 +7,11 @@ import hashlib
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from gf_cli.config import GroupPackExperimentConfig, GroupPackStorageConfig
 from gf_cli.hpo_campaign import (
@@ -51,12 +52,15 @@ from gf_cli.hpo_storage import (
 )
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import HPO_EVALUATION_STREAM_VERSION
-from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.domain import ContractError, Json, canonical, clone, digest, integer
 from gf_common.hpo_progress import ProgressCallback
 from gf_common.hpo_storage import HPO_STORAGE_EXTENSIONS
 from gf_common.shared_inference import evaluation_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV3
+
+if TYPE_CHECKING:
+    from gf_training.hpo_ppo import HpoRunResult
 
 
 def _originals(loaded: LoadedHPOConfig) -> Path:
@@ -190,6 +194,232 @@ def _storage_boundary(store: CampaignStore, loaded: LoadedHPOConfig, *, operatio
     store.put('storage-observations/' + operation_id + '.json', facts)
 
 
+_TRAINING_SLICE_IDENTITY = {'proposal_sha256', 'training_seed', 'run_id', 'operation_id', 'slice_no'}
+_TRAINING_SLICE_INTENT = _TRAINING_SLICE_IDENTITY | {'run_path', 'config_sha256', 'mode',
+    'pause_after_update', 'previous_closure_sha256', 'previous_state_sha256', 'previous_generation_sha256'}
+_TRAINING_SLICE_CLOSURE = _TRAINING_SLICE_IDENTITY | {'intent_sha256', 'state_sha256',
+    'generation', 'generation_sha256', 'used_decisions', 'status', 'stop_reason', 'termination_sha256'}
+
+
+def _terminal_training_operation(store: CampaignStore, loaded: LoadedHPOConfig, proposal: Proposal,
+                                 source: Json, termination: Json) -> str:
+    schedule = loaded.config.checkpoint_evaluation
+    if schedule is None:
+        return str(source['run_id'])
+    folder = f"proposals/{proposal.number:06}/seeds/{source['training_seed']}"
+    pointer, _ = store.get(folder + '/training.terminal.json')
+    _checked(pointer, 'hpo-training-terminal-slice', _TRAINING_SLICE_IDENTITY | {'slice_sha256'})
+    slice_no = integer(pointer['slice_no'], 0, len(schedule.updates))
+    path = folder + f'/training-slices/{slice_no:06}'
+    closure, closure_sha = store.get(path + '/closure.json')
+    _checked(closure, 'hpo-training-slice-closure', _TRAINING_SLICE_CLOSURE)
+    intent, intent_sha = store.get(path + '/intent.json')
+    _checked(intent, 'hpo-training-slice-intent', _TRAINING_SLICE_INTENT)
+    if (pointer['slice_sha256'] != closure_sha or closure['intent_sha256'] != intent_sha
+            or any(pointer[key] != closure[key] or pointer[key] != intent[key]
+                   for key in _TRAINING_SLICE_IDENTITY)
+            or canonical(pointer['training_seed']) != canonical(source['training_seed'])
+            or pointer['run_id'] != source['run_id'] or pointer['proposal_sha256'] != proposal.sha256
+            or intent['mode'] != ('fresh' if slice_no == 0 else 'resume')
+            or canonical(intent['pause_after_update']) != canonical((*schedule.updates, None)[slice_no])
+            or any(intent[key] != source[key] for key in ('config_sha256', 'run_path'))
+            or any(canonical(closure[key]) != canonical(source[key]) for key in
+                   ('state_sha256', 'generation', 'generation_sha256', 'used_decisions'))
+            or closure['status'] != 'complete' or closure['stop_reason'] is not None
+            or closure['termination_sha256'] != digest(termination)):
+        raise ContractError('final HPO receipt differs from its settled original training slice')
+    return str(pointer['operation_id'])
+
+
+def _read_training_slice_state(directory: Path, report: Json, *, seed: int, config_sha: str,
+                               deadline: float) -> tuple[Json, str]:
+    from gf_models.arrays import sha256
+    from gf_models.sharded_arrays import read_json
+    from gf_training.lineage import generation_path, run_lock
+
+    with run_lock(directory):
+        path = directory / 'run.json'
+        state_sha = sha256(path, deadline)
+        state = read_json(path, expected_digest=state_sha)
+        keys = ('updates', 'used_decisions', 'status', 'stop_reason', 'generation_sha256')
+        if (state['run_id'] != directory.name or state['seed'] != seed or state['config_sha256'] != config_sha
+                or report['run_dir'] != str(directory) or any(state[key] != report[key] for key in keys)
+                or any(state.get(key) for key in ('failure', 'cleanup_failure', 'quarantine'))
+                or sha256(generation_path(directory, integer(state['updates'], 0)), deadline) != state['generation_sha256']):
+            raise ContractError('settled training slice differs from its original committed parent')
+    return state, state_sha
+
+
+def _index_closed_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json,
+                       proposal: Proposal, seed: int) -> None:
+    if loaded.config.checkpoint_evaluation is None:
+        return
+    from gf_cli.hpo_evaluation import persist_best_checkpoint
+
+    folder = f'proposals/{proposal.number:06}/seeds/{seed}'
+    if store.exists(folder + '/best-checkpoint.json'):
+        return
+    training, _ = store.get(folder + '/training.json')
+    evaluation, _ = store.get(folder + '/evaluation.json')
+    persist_best_checkpoint(store, loaded, campaign, proposal, seed,
+        terminal_generation=training['generation'], final_training=training, final_evaluation=evaluation,
+        deadline=time.monotonic() + loaded.config.run_wall_seconds)
+
+
+def _record_checkpoint_evaluation_error(store: CampaignStore, campaign: Json, *, path: str,
+                                        run_id: str, generation: int, started: float,
+                                        error: Exception) -> None:
+    from gf_cli.hpo_evaluation import verify_gpu_termination
+    from gf_training.hpo_gpu_lease import SharedTerminationReceipt, TerminationReceipt
+
+    if any(getattr(error, name, None) for name in ('cleanup_owner', 'hpo_final_cleanup_owners',
+            'hpo_verifier_cleanup_owner', 'hpo_artifact_cleanup_owner', 'hpo_termination_cleanup_error',
+            'hpo_failed_termination_copy_error')):
+        raise error
+    has_intent = store.exists(path + '/evaluation.intent.json')
+    status: Json = {}
+    if isinstance(error, TimeoutError) and not has_intent:
+        outcome = 'skipped'
+    else:
+        retirement = getattr(error, 'hpo_gpu_termination_receipt', None)
+        if not has_intent or retirement is None or type(retirement) not in (TerminationReceipt, SharedTerminationReceipt):
+            raise error
+        intent, _ = store.get(path + '/evaluation.intent.json')
+        copied, copied_sha = store.get(path + '/evaluation-failed-gpu-termination.json')
+        termination = clone(asdict(retirement))
+        _checked(copied, 'hpo-failed-evaluation-termination',
+            {'evaluation_id', 'gpu_termination', 'error_type', 'evaluation_eligible'})
+        if (copied['evaluation_eligible'] is not False or copied['evaluation_id'] != intent['evaluation_id']
+                or copied['error_type'] != type(error).__name__
+                or canonical(copied['gpu_termination']) != canonical(termination)):
+            raise ContractError('failed checkpoint lacks actual matching evaluation retirement') from error
+        verify_gpu_termination(termination, campaign_id=campaign['campaign_id'],
+            operation_id=intent['evaluation_id'], run_id=run_id, evaluation_id=intent['evaluation_id'])
+        status['gpu_termination_sha256'] = copied_sha
+        outcome = 'failed'
+    store.put(path + '/status.json', {'schema_version': 1, 'kind': 'hpo-checkpoint-evaluation-status',
+        'generation': generation, 'status': outcome, 'reason': type(error).__name__,
+        'elapsed_seconds': time.monotonic() - started, **status})
+
+
+async def _evaluate_progress_checkpoint(store: CampaignStore, loaded: LoadedHPOConfig,
+                                        campaign: Json, proposal: Proposal, *,
+                                        folder: str, directory: Path, generation: int, deadline: float,
+                                        result: HpoRunResult, progress: ProgressCallback | None) -> None:
+    from gf_cli.hpo_evaluation import evaluate_checkpoint
+
+    path = f'{folder}/checkpoint-evaluations/{generation}'
+    started = time.monotonic()
+    try:
+        await evaluate_checkpoint(store, loaded, campaign, proposal, directory=directory,
+            generation=generation, output=store.directory / 'evaluations' / str(uuid.uuid4()),
+            deadline=deadline, training_result=result, progress=progress)
+    except Exception as error:  # noqa: BLE001 - only a verified diagnostic failure can continue
+        _record_checkpoint_evaluation_error(store, campaign, path=path, run_id=directory.name,
+            generation=generation, started=started, error=error)
+
+
+async def _train_scheduled_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json,
+                                proposal: Proposal, seed: int, *, folder: str, directory: Path,
+                                materialized: Any, train: Callable[..., Awaitable[HpoRunResult]],
+                                result_type: type[HpoRunResult],
+                                progress: ProgressCallback | None) -> Any:
+    from gf_cli.hpo_evaluation import persist_best_checkpoint
+    from gf_models.arrays import sha256
+    from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
+    from gf_training.lineage import generation_path, run_lock
+
+    schedule = loaded.config.checkpoint_evaluation
+    assert schedule is not None
+    limits = loaded.config.operating
+    previous_sha = previous_state_sha = previous_generation_sha = None
+    # Project the original saved wall clocks onto one monotonic clock for the
+    # seed. Later invocations must carry exactly the same saved deadline tuple.
+    offset = time.monotonic() - time.time()
+    clocks: tuple[float, float, float] | None = None
+    wall = time.monotonic() + loaded.config.run_wall_seconds
+    admission = wall
+    current = 0
+    for number, target in enumerate((*schedule.updates, None)):
+        path = folder + f'/training-slices/{number:06}'
+        mode = 'fresh' if number == 0 else 'resume'
+        if previous_sha is not None:
+            if time.monotonic() >= admission:
+                break
+            _prior, inspected_sha = store.get(folder + f'/training-slices/{number - 1:06}/closure.json')
+            if inspected_sha != previous_sha:
+                raise ContractError('settled prior training slice changed before resume')
+            with run_lock(directory):
+                if (sha256(directory / 'run.json', admission) != previous_state_sha
+                        or sha256(generation_path(directory, current), admission) != previous_generation_sha):
+                    raise ContractError('settled prior training slice changed before resume')
+        operation_id = str(uuid.uuid4())
+        scope = {'proposal_sha256': proposal.sha256, 'training_seed': seed, 'run_id': directory.name,
+                 'operation_id': operation_id, 'slice_no': number}
+        intent_sha = store.put(path + '/intent.json', {
+            'schema_version': 1, 'kind': 'hpo-training-slice-intent', **scope,
+            'run_path': str(directory), 'config_sha256': materialized.sha256, 'mode': mode,
+            'pause_after_update': target, 'previous_closure_sha256': previous_sha,
+            'previous_state_sha256': previous_state_sha, 'previous_generation_sha256': previous_generation_sha,
+        })
+        completion = None
+        try:
+            with admit_gpu_job(JobContext(campaign['campaign_id'], operation_id, 'training', directory.name, None),
+                    global_cuda_bytes=limits.managed_cuda_bytes, max_workers=limits.max_participant_workers) as job:
+                result = await train(job, mode=mode, pause_after_update=target)
+                if type(result) is not result_type:
+                    raise ContractError('actual scheduled training result required')
+                completion = result.completion
+                job.require_confirmed_termination(result.gpu_termination)
+            state, state_sha = _read_training_slice_state(directory, result.report, seed=seed,
+                config_sha=materialized.sha256, deadline=wall)
+            saved_clocks = (state['admission_deadline_unix'], state['execution_deadline_unix'],
+                            state['wall_deadline_unix'])
+            if clocks is None:
+                clocks = saved_clocks
+                admission = offset + clocks[0]
+                wall = offset + clocks[2]
+            elif saved_clocks != clocks:
+                raise ContractError('scheduled resume changed the original training deadlines')
+            current, status, reason, used = (state[key] for key in ('updates', 'status', 'stop_reason', 'used_decisions'))
+            final_d = status == 'complete' and used == loaded.config.decision_budget
+            paused = status == 'paused' and reason == 'pause' and current == target
+            if not final_d and not (completion is None and (paused or status == 'incomplete')):
+                raise ContractError('scheduled training did not reach an eligible closed boundary')
+            terminal_cap = status == 'incomplete' and reason == 'update_cap'
+            closure_sha = store.put(path + '/closure.json', {
+                'schema_version': 1, 'kind': 'hpo-training-slice-closure', **scope,
+                'intent_sha256': intent_sha, 'state_sha256': state_sha, 'generation': current,
+                'generation_sha256': state['generation_sha256'], 'used_decisions': used,
+                'status': status, 'stop_reason': reason,
+                'termination_sha256': digest(asdict(result.gpu_termination)),
+            })
+            if final_d:
+                store.put(folder + '/training.terminal.json', {
+                    'schema_version': 1, 'kind': 'hpo-training-terminal-slice', **scope,
+                    'slice_sha256': closure_sha,
+                })
+                persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed,
+                    run_id=directory.name, directory=directory, termination=result.gpu_termination,
+                    deadline=wall, completion=completion)
+                return completion
+            if current in schedule.updates and (paused or terminal_cap):
+                await _evaluate_progress_checkpoint(store, loaded, campaign, proposal, folder=folder,
+                    directory=directory, generation=current, deadline=admission if paused else wall,
+                    result=result, progress=progress)
+            if not paused:
+                break
+            previous_sha, previous_state_sha, previous_generation_sha = (
+                closure_sha, state_sha, state['generation_sha256'])
+        except BaseException:
+            if completion is not None:
+                completion.close()
+            raise
+    persist_best_checkpoint(store, loaded, campaign, proposal, seed, terminal_generation=current,
+        deadline=time.monotonic() + loaded.config.run_wall_seconds)
+    raise ContractError('training stopped incomplete; no objective and no budget/deadline extension')
+
+
 async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal, seed: int,
                       *, progress: ProgressCallback | None = None) -> Any:
     from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
@@ -213,18 +443,25 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
     if training_opponents(materialized.effective) is not None and materialized.config.hpo_spec['schema_version'] not in (4,5):
         from gf_training.native_backend import require_native_refresh_opponents
         require_native_refresh_opponents()
+    async def train(job: Any, *, mode: str, pause_after_update: int | None = None) -> HpoRunResult:
+        async def collector(plan: Any, ledger: Any) -> Any:
+            if ledger is not job.ledger:
+                raise ContractError('HPO collector requires the exact caller job ledger')
+            return await core.collect_hpo_ppo(materialized, plan, ledger, **({} if progress is None else {'progress':progress}))
+        return await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode=mode,
+            **({} if pause_after_update is None else {'pause_after_update':pause_after_update}),
+            **({'_reuse_precollection':True} if materialized.config.hpo_spec['schema_version']==3 else {}),
+            **({} if progress is None else {'progress':progress}))
+    if getattr(loaded.config, 'checkpoint_evaluation', None) is not None:
+        return await _train_scheduled_seed(store, loaded, campaign, proposal, seed, folder=folder,
+            directory=directory, materialized=materialized, train=train, result_type=runtime.HpoRunResult,
+            progress=progress)
     with admit_gpu_job(JobContext(campaign['campaign_id'], run_id, 'training', run_id, None),
             global_cuda_bytes=loaded.config.operating.managed_cuda_bytes,
             max_workers=loaded.config.operating.max_participant_workers) as job:
         store.put(folder + '/training.admission.json', {'schema_version': 1, 'kind': 'hpo-training-admission',
             'gpu_ticket': job.ticket, 'run_id': run_id})
-        async def collector(plan: Any, ledger: Any) -> Any:
-            if ledger is not job.ledger:
-                raise ContractError('HPO collector requires the exact caller job ledger')
-            return await core.collect_hpo_ppo(materialized, plan, ledger, **({} if progress is None else {'progress':progress}))
-        result = await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode='fresh',
-            **({'_reuse_precollection':True} if materialized.config.hpo_spec['schema_version']==3 else {}),
-            **({} if progress is None else {'progress':progress}))
+        result = await train(job, mode='fresh')
         if type(result) is not runtime.HpoRunResult or result.report.get('status') != 'complete' or result.report.get('used_decisions') != loaded.config.decision_budget:
             raise ContractError('training stopped incomplete; no objective and no budget/deadline extension')
         completion=getattr(result,'completion',None)
@@ -331,6 +568,7 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                                         and store.exists(root + f'/seeds/{reusable_seed}/evaluation.json')):
                                     verify_seed_evaluation(store, loaded, campaign, proposal, reusable_seed,
                                         deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                                    _index_closed_seed(store, loaded, campaign, proposal, reusable_seed)
                                     validated_seeds.add(reusable_seed)
                             operation = next_seed_operation(store, proposal, loaded.config.learning_seeds)
                             if operation is None:
@@ -357,6 +595,7 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                                 await evaluate_seed(store, loaded, campaign, proposal, training,
                                     output=directory / 'evaluations' / str(uuid.uuid4()),progress=owner.emit,
                                     **({'completion':live_completions[seed]} if seed in live_completions else {}))
+                                _index_closed_seed(store, loaded, campaign, proposal, seed)
                                 if seed in live_completions:
                                     live_completions.pop(seed).close()
                             # Only receipt-complete whole operations are session boundaries.

@@ -210,18 +210,25 @@ def validate_completion(value: Json) -> Json:
         'run_id', 'config_sha256', 'runtime_binding_sha256', 'operation_sha256', 'prepared_sha256',
         'exit_sha256', 'state_sha256', 'generation_sha256', 'source_manifest_sha256', 'state',
         'committed_update', 'audit_path', 'audit_sha256', 'eligible', 'parent_metadata_validation'})
-    if (type(row['schema_version']) is not int or row['schema_version'] != 1
-            or row['kind'] != 'rust-player-training-completion-v1'):
-        raise ContractError('existing Rust completion1 required')
+    initial = row['kind'] == 'rust-player-initial-pause-completion-v2'
+    if (type(row['schema_version']) is not int or row['schema_version'] != (2 if initial else 1)
+            or not initial and row['kind'] != 'rust-player-training-completion-v1'):
+        raise ContractError('recognized Rust completion record required')
     for key in ('supervision_id', 'invocation_id'):
         hex_identity(row[key], 32)
     for key in ('operation_id', 'run_id', 'audit_path'):
         text(row[key])
     for key in ('config_sha256', 'runtime_binding_sha256', 'operation_sha256', 'prepared_sha256',
-            'exit_sha256', 'state_sha256', 'generation_sha256', 'source_manifest_sha256', 'audit_sha256'):
+            'exit_sha256', 'state_sha256', 'generation_sha256', 'audit_sha256'):
         hex_identity(row[key])
     integer(row['committed_update'], 0)
     if (row['state'] not in ('complete', 'paused', 'incomplete') or type(row['eligible']) is not bool
             or row['parent_metadata_validation'] is not None or not Path(row['audit_path']).is_absolute()):
         raise ContractError('completion1 result/audit fields differ')
+    if initial:
+        if (row['state'] != 'paused' or row['committed_update'] != 0
+                or row['source_manifest_sha256'] is not None or row['eligible']):
+            raise ContractError('initial HPO completion requires a paused G0 with no rollout Source')
+    else:
+        hex_identity(row['source_manifest_sha256'])
     return row

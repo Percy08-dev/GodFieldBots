@@ -19,6 +19,16 @@ recorded configuration and JSON format.
 [Verification](verification/hpo-storage-and-compression.md) records coverage
 and the physical performance comparison conditions.
 
+[ADR0063](adr/0063-hpo-checkpoint-evaluation.md) adds Model4 per-update
+diagnostics and opt-in checkpoint evaluations on owned HPO schemas 4–6.
+The HPO learner derives diagnostics from the original loss operands, rollout
+values and optimizer steps. The campaign drives serial training slices and
+independently admitted validation panels. Rust G0 and pause settlement retain
+the current supervisor's ownership, and checkpoint linkage has its own
+authority. The final-D objective and ordinary PPO semantics retain their
+existing contracts. [Verification](verification/hpo-learning-diagnostics.md)
+records the results and remaining runtime evidence.
+
 [ADR0057](adr/0057-rust-ppo-training-data.md) accepts the versioned Rust PPO
 training-data route for Model3 and Model4 MLPs. The acting game task retains
 the accepted learner operands. The original writer binds them to sealed

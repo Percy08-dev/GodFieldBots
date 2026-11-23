@@ -53,6 +53,7 @@ HPO_EVALUATION_LINKAGE_KEYS = frozenset({'schema_version', 'kind', 'campaign_id'
     'learner_seats', 'schedule_digest', 'policy_registry_digest'})
 HPO_EVALUATION_PARENT_KEYS = {'run_id', 'run_path', 'training_seed', 'generation',
     'generation_sha256', 'inference_sha256', 'source_receipt_sha256', 'policy_label'}
+HPO_CHECKPOINT_PARENT_KEYS = HPO_EVALUATION_PARENT_KEYS - {'source_receipt_sha256'} | {'checkpoint_receipt_sha256'}
 HPO_EVALUATION_CORE_FIELDS = frozenset({'schema_version', 'action_contract', 'rule_signature',
     'layout_signature', 'purpose', 'synthetic_capacity', 'config', 'config_hash', 'action_config_hash',
     'bots_revision', 'simulator_revision', 'runtime_evidence', 'schedule', 'files', 'policies',
@@ -171,22 +172,31 @@ def _evaluation_text(value: Any) -> str:
 
 
 def checked_hpo_evaluation_parent(value: Any) -> Json:
-    raw = closed(value, HPO_EVALUATION_PARENT_KEYS)
+    return _checked_evaluation_parent(value, HPO_EVALUATION_PARENT_KEYS, 'source_receipt_sha256')
+
+
+def checked_hpo_checkpoint_parent(value: Any) -> Json:
+    return _checked_evaluation_parent(value, HPO_CHECKPOINT_PARENT_KEYS, 'checkpoint_receipt_sha256')
+
+
+def _checked_evaluation_parent(value: Any, keys: set[str], receipt: str) -> Json:
+    raw = closed(value, keys)
     for key in ('run_id', 'run_path', 'policy_label'):
         _evaluation_text(raw[key])
     if not Path(raw['run_path']).is_absolute() or '..' in Path(raw['run_path']).parts:
         raise ContractError('absolute original evaluation parent path required')
     integer(raw['training_seed'], 0, 2**63 - 1)
     integer(raw['generation'], 0, 2**63 - 1)
-    for key in ('generation_sha256', 'inference_sha256', 'source_receipt_sha256'):
+    for key in ('generation_sha256', 'inference_sha256', receipt):
         _sha(raw[key])
     return raw
 
 
 def _evaluation_context(value: Any) -> Json:
     raw = closed(value, set(HPO_EVALUATION_LINKAGE_KEYS))
-    integer(raw['schema_version'], 1, 1)
-    if raw['kind'] != 'hpo-evaluation-linkage' or raw['purpose'] not in ('objective', 'comparison'):
+    version = integer(raw['schema_version'], 1, 2)
+    purposes = ('objective', 'comparison') if version == 1 else ('checkpoint',)
+    if raw['kind'] != 'hpo-evaluation-linkage' or raw['purpose'] not in purposes:
         raise ContractError('explicit exploratory evaluation linkage required')
     for key in ('campaign_id', 'evaluation_id'):
         _evaluation_text(raw[key])
@@ -194,10 +204,10 @@ def _evaluation_context(value: Any) -> Json:
         raise ContractError('original GPU admission ticket required')
     for key in ('conditions_sha256', 'schedule_digest', 'policy_registry_digest'):
         _sha(raw[key])
-    checked_hpo_evaluation_parent(raw['left_parent'])
-    if raw['purpose'] == 'objective':
+    (checked_hpo_evaluation_parent if version == 1 else checked_hpo_checkpoint_parent)(raw['left_parent'])
+    if raw['purpose'] in ('objective', 'checkpoint'):
         if raw['right_parent'] is not None:
-            raise ContractError('primary objective requires only the fixed heuristic opponent')
+            raise ContractError('heuristic evaluation requires the fixed heuristic opponent')
     else:
         checked_hpo_evaluation_parent(raw['right_parent'])
     seeds = raw['game_seeds']

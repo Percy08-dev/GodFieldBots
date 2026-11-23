@@ -293,7 +293,7 @@ class ColdContinuation(_Capability):
         exit_record, exit_sha = read_control_record(
             Path(self._payload["exit_path"]), self._control.root
         )
-        validate_prepared(prepared, admission)
+        validate_prepared(prepared, admission, operation=self._control.operation)
         validate_exit(exit_record, admission)
         if (
             prepared_sha != self._payload["prepared_sha256"]
@@ -308,11 +308,15 @@ class ColdContinuation(_Capability):
 
     def acknowledge_finalizer_output(self, path: Path) -> str:
         """5c MUST cold-validate Source/saved state before issuing this output."""
+        from gf_common.rust_player import initial_hpo_pause
+
         self.require_pair()
         value, checksum = read_control_record(path, self._control.root)
+        initial = initial_hpo_pause(self._control.operation)
         if (
-            value.get("schema_version") != 1
-            or value.get("kind") != "rust-player-training-completion-v1"
+            value.get("schema_version") != (2 if initial else 1)
+            or value.get("kind") != ("rust-player-initial-pause-completion-v2" if initial
+                else "rust-player-training-completion-v1")
             or value.get("prepared_sha256") != self._payload["prepared_sha256"]
             or value.get("exit_sha256") != self._payload["exit_sha256"]
         ):
@@ -967,7 +971,7 @@ class HostControl(_Capability):
     def prepare(self, admission: HostAdmission, path: Path) -> PreparedResult:
         admission.require()
         value, checksum = read_control_record(path, self.root)
-        validate_prepared(value, admission._record)
+        validate_prepared(value, admission._record, operation=self.operation)
         response = self._request(
             "prepared",
             {"prepared_path": str(path), "prepared_sha256": checksum},

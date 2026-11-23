@@ -568,7 +568,8 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
         prepared_path, exit_path = root / f'prepared-{invocation}.json', root / f'exit-{invocation}.json'
         prepared, exit_row = scan.object(prepared_path), scan.object(exit_path)
         prepared_sha, exit_sha = scan.verified_digest(prepared_path), scan.verified_digest(exit_path)
-        validate_prepared(prepared, admission); validate_exit(exit_row, admission)
+        validate_prepared(prepared, admission, operation=operation)
+        validate_exit(exit_row, admission)
         close = scan.object(Path(prepared['close_ack_path']), prepared['close_ack_sha256'])
         if (close['kind'] != 'rust-player-host-close-ack-v1'
                 or close['admission_sha256'] != entry['admission_sha256']

@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from gf_cli.hpo_config import LoadedHPOConfig
-from gf_common.domain import ContractError, Json, canonical, clone, closed, digest
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
+
+
+class _ScheduledSeedDoesNotFit(TimeoutError):
+    """A fresh seed missed the soft budget before publishing anything."""
 
 
 def campaign_snapshot(loaded: LoadedHPOConfig) -> Json:
@@ -204,13 +208,20 @@ def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json) -> tu
     # Structural candidates only. Actual old parent/Source/namespace verification
     # belongs to the authenticated new CPU controller, before its cursor CAS.
     candidates: dict[str, str] = {}
+    paused: set[tuple[int, int]] = set()
+    terminal: set[tuple[int, int]] = set()
+    completed: set[tuple[int, int]] = set()
     for name in store.records():
         parts = name.split('/')
         if len(parts) == 5 and parts[0] == 'proposals' and parts[2] == 'seeds' and parts[4] == 'training.json':
-            _seed_candidate(store, campaign, int(parts[1]), int(parts[3]))
+            subject = int(parts[1]), int(parts[3])
+            _seed_candidate(store, campaign, *subject)
+            completed.add(subject)
         if name.endswith(('/training.intent.json', '/evaluation.intent.json')):
             receipt = name.removesuffix('.intent.json') + '.json'
-            if not store.exists(receipt):
+            diagnostic = _checkpoint_intent_path(parts)
+            if (not store.exists(receipt)
+                    and (not diagnostic or not _checkpoint_failed_candidate(store, name))):
                 raise ContractError('interrupted seed intent has no closed receipt candidate')
         if len(parts) != 4 or parts[0] != 'supervision' or parts[2] != 'awaiting':
             continue
@@ -218,13 +229,15 @@ def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json) -> tu
         validate_campaign_awaiting(awaiting)
         if awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != parts[1]:
             raise ContractError('foreign structural awaiting campaign/session')
-        terminal = '/'.join((parts[0], parts[1], 'terminal', parts[3]))
-        if store.exists(terminal):
+        subject = awaiting['proposal_no'], awaiting['learning_seed']
+        disposition_path = '/'.join((parts[0], parts[1], 'terminal', parts[3]))
+        pause_path = '/'.join((parts[0], parts[1], 'checkpoint-pauses', parts[3]))
+        if store.exists(disposition_path):
             from gf_common.rust_player import (
                 validate_campaign_disposition,
                 validate_campaign_disposition_ack,
             )
-            disposition, disposition_sha = store.get(terminal)
+            disposition, disposition_sha = store.get(disposition_path)
             validate_campaign_disposition(disposition)
             ack, _ = store.get('/'.join((parts[0], parts[1], 'disposition-ack-' + disposition['invocation_id'] + '.json')))
             validate_campaign_disposition_ack(ack)
@@ -232,13 +245,60 @@ def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json) -> tu
                     or disposition['awaiting_sha256'] != awaiting_sha or ack['disposition_sha256'] != disposition_sha
                     or ack['operation_sha256'] != awaiting['operation_sha256']):
                 raise ContractError('structural terminal ACK candidate differs')
+            terminal.add(subject)
+        elif store.exists(pause_path):
+            pause, _ = store.get(pause_path)
+            _checkpoint_pause_candidate(loaded, awaiting_sha, pause)
+            paused.add(subject)
+            failure_path = f"proposals/{subject[0]:06}/failure.json"
+            if store.exists(failure_path):
+                failure, _ = store.get(failure_path)
+                boundary = failure.get('boundary')
+                if (type(boundary) is dict and boundary.get('phase') == 'checkpoint-time-cap'
+                        and boundary.get('awaiting_sha256') == awaiting_sha):
+                    terminal.add(subject)
         else:
             _seed_candidate(store, campaign, awaiting['proposal_no'], awaiting['learning_seed'], awaiting=awaiting)
         candidates[str(store.directory / name)] = awaiting_sha
+    if paused - completed - terminal:
+        raise ContractError('interrupted checkpoint training cannot resume under another supervisor root')
     if (cursor is not None and cursor['awaiting_path'] is not None
             and candidates.get(cursor['awaiting_path']) != cursor['awaiting_sha256']):
         raise ContractError('current awaiting is unresolved/mismatched')
     return campaign, sources, cursor_sha
+
+
+def _checkpoint_intent_path(parts: list[str]) -> bool:
+    return (len(parts) == 7 and parts[0] == 'proposals' and parts[2] == 'seeds'
+        and parts[4] == 'checkpoint-evaluations' and parts[5].isascii() and parts[5].isdecimal()
+        and (parts[5] == '0' or not parts[5].startswith('0')) and parts[6] == 'evaluation.intent.json')
+
+
+def _checkpoint_failed_candidate(store: Any, name: str, *, campaign: Json | None = None) -> bool:
+    from gf_cli.hpo_campaign import _checked
+
+    directory = name.removesuffix('/evaluation.intent.json')
+    if not store.exists(directory + '/status.json'):
+        return False
+    status, _ = store.get(directory + '/status.json')
+    _checked(status, 'hpo-checkpoint-evaluation-status',
+        {'generation', 'status', 'reason', 'elapsed_seconds', 'gpu_termination_sha256'})
+    intent, _ = store.get(name)
+    copied, checksum = store.get(directory + '/evaluation-failed-gpu-termination.json')
+    _checked(copied, 'hpo-failed-evaluation-termination',
+        {'evaluation_id', 'gpu_termination', 'error_type', 'evaluation_eligible'})
+    valid = (status['status'] == 'failed' and str(status['generation']) == directory.rsplit('/', 1)[-1]
+        and status['gpu_termination_sha256'] == checksum and copied['evaluation_id'] == intent['evaluation_id']
+        and copied['evaluation_eligible'] is False and copied['error_type'] == status['reason'])
+    if valid and campaign is not None:
+        from gf_cli.hpo_evaluation import verify_gpu_termination
+
+        checkpoint, checkpoint_sha = store.get(directory + '/checkpoint.json')
+        if checkpoint_sha != intent['checkpoint_receipt_sha256']:
+            raise ContractError('diagnostic failure intent differs from its checkpoint')
+        verify_gpu_termination(copied['gpu_termination'], campaign_id=campaign['campaign_id'],
+            operation_id=intent['evaluation_id'], run_id=checkpoint['run_id'], evaluation_id=intent['evaluation_id'])
+    return valid
 
 
 @dataclass(frozen=True, eq=False)
@@ -347,6 +407,9 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     _settings, sources = hpo._settings_inputs(seed_paths, loaded) if mode == 'fresh' else ((), [])
     native = binary_identity()
     require_native_hpo_storage(config.storage, native)
+    if (config.checkpoint_evaluation is not None
+            and native['build'].get('card_instance_hpo_checkpoint_evaluation') != 'hpo-checkpoint-evaluation-v1'):
+        raise ContractError('scheduled Rust HPO requires a checkpoint-evaluation runtime wheel')
     companion = discover_companion(native)
     bound = runtime_binding(config.runtime, runtime_producer(companion,
         sampling_runtime_sha256=sampling_runtime_identity()))
@@ -412,10 +475,13 @@ def exec_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
 
 def _publish_campaign_training(store: Any, owner: Any, *, materialized: Any, context: Json,
                                 proposal_no: int, learning_seed: int, session: Json,
-                                clock_binding: Json, runtime_binding_sha256: str) -> Json:
+                                clock_binding: Json, runtime_binding_sha256: str,
+                                pause_after_update: int | None = None,
+                                original_deadlines: Json | None = None) -> Json:
     """Publish CONFIG DATA under actual caller custody; this grants no admission."""
     from gf_cli.rust_player_entry import _inputs, _snapshot
     from gf_common.rust_player import (
+        deadline_seconds,
         safe_component,
         validate_campaign_awaiting,
         validate_campaign_clock,
@@ -441,17 +507,21 @@ def _publish_campaign_training(store: Any, owner: Any, *, materialized: Any, con
             or cursor['supervision_id'] != session['supervision_id'] or cursor['session_clock_sha256'] != session_sha
             or cursor['phase'] != 'control' or cursor['awaiting_path'] is not None or cursor['current_invocation_id'] is not None):
         raise ContractError('exact current parent-free campaign cursor/session required')
-    deadlines = clock_deadlines(clock_binding, inputs=_inputs(materialized.config),
+    fresh = original_deadlines is None
+    deadlines = original_deadlines if not fresh else clock_deadlines(clock_binding, inputs=_inputs(materialized.config),
         post_host_seconds=materialized.config.run.post_host_seconds)
+    assert deadlines is not None
     operation = {'schema_version': 2, 'kind': 'rust-player-operation-v2', 'operation_id': operation_id,
         'run_id': context['run_id'], 'mode': 'hpo', 'operation_type': 'hpo-train',
         'config_path': str(parent / '.rust-player/effective-config.json'), 'config_sha256': materialized.sha256,
         'runtime_binding_sha256': runtime_binding_sha256, 'deadlines': deadlines,
         'parent_directory': str(parent), 'expected_context': context,
-        'execution_request': {'mode': 'fresh', 'pause_after_update': None}}
+        'execution_request': {'mode': 'fresh' if fresh else 'resume', 'pause_after_update': pause_after_update}}
     validate_operation(operation, session_finish=session['hard_session_finish_bits'])
-    snapshot = _snapshot(materialized, owner, fresh=True)
+    snapshot = _snapshot(materialized, owner, fresh=fresh)
     snapshot_config: Any = snapshot.config
+    if not fresh and time.monotonic() >= deadline_seconds(deadlines['admission_bits']):
+        raise TimeoutError('original checkpoint admission expired before operation publication')
     operation_path = root / f'operation-{operation_id}.json'
     operation_sha = store.put(relative + operation_path.name, operation)
     clock = operation_clock(operation, clock_binding=clock_binding, inputs=_inputs(snapshot_config),
@@ -465,6 +535,8 @@ def _publish_campaign_training(store: Any, owner: Any, *, materialized: Any, con
         'supervision_id': session['supervision_id'], 'session_clock_sha256': session_sha, 'created_unix': time.time()}
     validate_campaign_awaiting(awaiting)
     awaiting_path = root / 'awaiting' / f'{operation_id}.json'
+    if not fresh and time.monotonic() >= deadline_seconds(deadlines['admission_bits']):
+        raise TimeoutError('original checkpoint admission expired before awaiting publication')
     awaiting_sha = store.put(relative + f'awaiting/{operation_id}.json', awaiting)
     awaiting_cursor = {**cursor, 'phase': 'awaiting-host', 'awaiting_path': str(awaiting_path),
         'awaiting_sha256': awaiting_sha, 'current_invocation_id': None}
@@ -526,7 +598,7 @@ def _admission_cursor(control: Any, store: Any, packet: Json, admission: Any) ->
 
 
 def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: Any,
-                               *, learning_seed: int, materialized: Any) -> Json:
+                               *, learning_seed: int, materialized: Any, resume: bool = False) -> Json:
     """One real bind→OFD transfer→admit→cursor CAS→existing training, no controller."""
     import hashlib
     from types import SimpleNamespace
@@ -534,7 +606,12 @@ def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: A
     from gf_cli.hpo import _originals
     from gf_cli.hpo_config import HPODiagnosticStorageConfig, materialize_hpo_run
     from gf_cli.hpo_storage import check_run_destination
-    from gf_cli.rust_player_entry import _capture_clock, check_native_collection_storage
+    from gf_cli.rust_player_entry import (
+        _capture_clock,
+        _paused_run,
+        _resume_origin,
+        check_native_collection_storage,
+    )
     from gf_common.rust_player import deadline_seconds, runtime_binding
     from gf_models.rust_player import sampling_runtime_identity
     from gf_training.hpo_gpu_lease import require_resolved_namespace
@@ -550,13 +627,20 @@ def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: A
     if expected.sha256 != materialized.sha256 or canonical(expected.effective) != canonical(materialized.effective):
         raise ContractError('actual proposal/materialized training CONFIG differs')
     require_resolved_namespace()
-    if time.monotonic() >= deadline_seconds(session['soft_dispatch_finish_bits']):
+    soft = deadline_seconds(session['soft_dispatch_finish_bits'])
+    if time.monotonic() >= soft:
         raise TimeoutError('original soft campaign dispatch boundary reached')
+    checkpoint = study.loaded.config.checkpoint_evaluation
+    if resume and (checkpoint is None or not checkpoint.enabled):
+        raise ContractError('campaign seed resume requires its scheduled checkpoint program')
     companion = SimpleNamespace(manifest={'executable_sha256': hashlib.sha256(
         Path(f'/proc/{control._parent_pid}/exe').read_bytes()).hexdigest()})
     bound = runtime_binding(materialized.config.hpo_spec['runtime'], runtime_producer(companion,
         sampling_runtime_sha256=sampling_runtime_identity()))
     binding = _capture_clock()
+    if (not resume and checkpoint is not None and checkpoint.enabled
+            and deadline_seconds(binding['monotonic_after_bits']) + materialized.config.run.wall_seconds >= soft):
+        raise _ScheduledSeedDoesNotFit('original scheduled seed wall must fit before the soft dispatch boundary')
     parent = Path(materialized.config.run.output_dir) / materialized.config.run.name
     check_native_collection_storage(materialized.config.storage, parent)
     storage = study.loaded.config.storage
@@ -565,12 +649,23 @@ def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: A
                               originals_root=_originals(study.loaded), directory=parent)
     scope = ExitStack()
     try:
-        owner = scope.enter_context(run_lock(parent, create=True))
+        owner = scope.enter_context(run_lock(parent, create=not resume))
         context = {'campaign_id': campaign['campaign_id'], 'operation_id': uuid.uuid4().hex,
             'kind': 'training', 'run_id': materialized.config.run.name, 'evaluation_id': None}
+        current = -1
+        original_deadlines = None
+        if resume:
+            paused = _paused_run(owner, hpo=True)
+            origin, clock = _resume_origin(materialized, owner, bound, hpo_context=context, state=paused,
+                campaign_record_root=control.root)
+            original_deadlines, binding = origin['deadlines'], clock['clock_binding']
+            current = paused['updates']
+        milestone = (next((g for g in checkpoint.updates if g > current), None)
+            if checkpoint is not None and checkpoint.enabled else None)
         packet = _publish_campaign_training(store, owner, materialized=materialized, context=context,
             proposal_no=actual.number, learning_seed=learning_seed, session=session,
-            clock_binding=binding, runtime_binding_sha256=digest(bound))
+            clock_binding=binding, runtime_binding_sha256=digest(bound), pause_after_update=milestone,
+            original_deadlines=original_deadlines)
         if time.monotonic() >= deadline_seconds(session['soft_dispatch_finish_bits']):
             raise TimeoutError('original soft boundary crossed before actual bind; awaiting remains interrupted')
         control.bind_operation(packet['operation_path'])  # MUST precede SAME-OFD transfer inside run_hpo.
@@ -643,15 +738,18 @@ def _terminal_records(store: Any, study: Any, proposal: Any, *, owner: Any,
 
 
 def _finish_terminal(control: Any, store: Any, *, disposition_path: Path, retire_owner: Any,
-                      cursor: Json, cursor_sha256: str) -> Json:
+                      cursor: Json, cursor_sha256: str, after_ack: Any = None) -> Json:
     """Caller has actual authority; retirement/release never follows an unknown ACK."""
     try:
         current, current_sha = store.get('supervision/current.json')
         if current != cursor or current_sha != cursor_sha256:
             raise ContractError('terminal cursor changed before actual native disposition')
         ack = control.campaign_disposition(disposition_path)
+        if after_ack is not None:
+            after_ack()
         retire_owner.close()
-        control.release_parent()
+        if after_ack is None or 'parent' in control._borrowed:
+            control.release_parent()
         current, current_sha = store.get('supervision/current.json')
         if current != cursor or current_sha != cursor_sha256:
             raise ContractError('terminal cursor changed before acknowledged release')
@@ -746,7 +844,8 @@ def _incomplete_evidence(control: Any, result: Any) -> tuple[Json, Json]:
         'physical_sha256': physical_sha}
 
 
-def settle_incomplete_campaign_training(control: Any, store: Any, study: Any, result: Any) -> Json:
+def settle_incomplete_campaign_training(control: Any, store: Any, study: Any, result: Any, *,
+                                        after_ack: Any = None) -> Json:
     from gf_training.hpo_gpu_lease import require_resolved_namespace
     from gf_training.lineage import require_hpo_run_owner
     try:
@@ -761,10 +860,106 @@ def settle_incomplete_campaign_training(control: Any, store: Any, study: Any, re
             invocation_id=admission['invocation_id'], classification='healthy_incomplete', evidence=evidence,
             reason='Training stopped incomplete under original limits')
         return _finish_terminal(control, store, disposition_path=disposition, retire_owner=result,
-            cursor=cursor, cursor_sha256=cursor_sha)
+            cursor=cursor, cursor_sha256=cursor_sha, after_ack=after_ack)
     except BaseException as error:
         vars(error)['rust_player_terminal_result_owner'] = result
         raise
+
+
+def _record_checkpoint_pause(control: Any, store: Any, *, result: Any,
+                             awaiting_sha256: str, generation: int) -> None:
+    admission, evidence = _incomplete_evidence(control, result)
+    completion = result.completion
+    if (completion['state'] != 'paused' or completion['committed_update'] != generation
+            or control.operation['execution_request']['pause_after_update'] != generation):
+        raise ContractError('actual paused invocation differs from the scheduled checkpoint')
+    store.put(f"supervision/{admission['supervision_id']}/checkpoint-pauses/{admission['operation_id']}.json", {
+        'schema_version': 1, 'kind': 'rust-player-campaign-checkpoint-pause-v1',
+        'awaiting_sha256': awaiting_sha256, 'invocation_id': admission['invocation_id'],
+        'generation': generation, 'completion_sha256': evidence['completion_sha256'],
+        'physical_sha256': evidence['physical_sha256']})
+
+
+def _checkpoint_pause_candidate(loaded: LoadedHPOConfig, awaiting_sha256: str, receipt: Json) -> Json:
+    from gf_common.rust_player import hex_identity
+
+    row = closed(receipt, {'schema_version', 'kind', 'awaiting_sha256', 'invocation_id',
+        'generation', 'completion_sha256', 'physical_sha256'})
+    integer(row['schema_version'], 1, 1)
+    generation = integer(row['generation'], 0)
+    hex_identity(row['invocation_id'], 32)
+    for name in ('completion_sha256', 'physical_sha256'):
+        hex_identity(row[name])
+    checkpoint = loaded.config.checkpoint_evaluation
+    if (row['kind'] != 'rust-player-campaign-checkpoint-pause-v1'
+            or row['awaiting_sha256'] != awaiting_sha256
+            or checkpoint is None or not checkpoint.enabled or generation not in checkpoint.updates):
+        raise ContractError('historical pause differs from the exact scheduled awaiting operation')
+    return row
+
+
+def _verify_checkpoint_pause(store: Any, loaded: LoadedHPOConfig, awaiting: Json,
+                             awaiting_sha256: str, receipt: Json) -> Json:
+    from gf_common.rust_player import (
+        hex_identity,
+        initial_hpo_pause,
+        validate_exit,
+        validate_operation,
+        validate_prepared,
+    )
+    from gf_training.hpo_gpu_lease import _GLOBAL_ROOT
+    from gf_training.rust_player_lineage import validate_completion
+    from gf_training.rust_player_supervision import read_control_record
+
+    row = _checkpoint_pause_candidate(loaded, awaiting_sha256, receipt)
+    generation, invocation = row['generation'], row['invocation_id']
+    root = store.directory / 'supervision' / awaiting['supervision_id']
+    path = Path(awaiting['operation_path'])
+    operation, operation_sha = read_control_record(path, root)
+    validate_operation(operation)
+    admission, admission_sha = read_control_record(root / f'admission-{invocation}.json', root)
+    prepared, prepared_sha = read_control_record(root / f'prepared-{invocation}.json', root)
+    exit_record, exit_sha = read_control_record(root / f'exit-{invocation}.json', root)
+    completion, completion_sha = read_control_record(root / f'completion-{invocation}.json', root)
+    validate_prepared(prepared, admission, operation=operation)
+    validate_exit(exit_record, admission)
+    validate_completion(completion)
+    ticket = hex_identity(admission['global_ticket'], 32)
+    physical, physical_sha = read_control_record(_GLOBAL_ROOT / 'jobs' / ticket / 'termination.json', _GLOBAL_ROOT)
+    if (path != root / f"operation-{operation['operation_id']}.json"
+            or operation_sha != awaiting['operation_sha256']
+            or operation['execution_request']['pause_after_update'] != generation
+            or operation['expected_context']['campaign_id'] != awaiting['campaign_id']
+            or admission['context'] != operation['expected_context']
+            or any(admission[key] != awaiting[key] for key in
+                ('run_id', 'config_sha256', 'runtime_binding_sha256', 'supervision_id'))
+            or not exit_record['cooperative'] or not exit_record['descendants_reaped']
+            or exit_record['signals'] or exit_record['wait']['exit_code'] != 0
+            or exit_record['admission_sha256'] != admission_sha
+            or exit_record['prepared_sha256'] != prepared_sha
+            or completion['state'] != prepared['state'] or completion['state'] != 'paused'
+            or completion['eligible'] or completion['committed_update'] != generation
+            or completion['committed_update'] != prepared['committed_update']
+            or completion['operation_sha256'] != operation_sha
+            or completion['prepared_sha256'] != prepared_sha or completion['exit_sha256'] != exit_sha
+            or any(completion[key] != prepared[key] for key in
+                ('state_sha256', 'generation_sha256', 'source_manifest_sha256'))
+            or initial_hpo_pause(operation) != (completion['schema_version'] == 2)
+            or completion_sha != row['completion_sha256'] or physical_sha != row['physical_sha256']
+            or physical['exit_record'] != exit_record
+            or physical['context_sha256'] != digest(admission['context'])):
+        raise ContractError('historical checkpoint pause lost its original completion or process retirement')
+    return operation
+
+
+def _checkpoint_time_cap_boundary(awaiting_sha256: str, operation: Json, now: float) -> Json:
+    from gf_common.rust_player import deadline_bits, deadline_seconds
+
+    admission = operation['deadlines']['admission_bits']
+    if now < deadline_seconds(admission):
+        raise ContractError('checkpoint time cap requires actual exhausted original admission')
+    return {'phase': 'checkpoint-time-cap', 'awaiting_sha256': awaiting_sha256,
+        'admission_bits': admission, 'observed_bits': deadline_bits(now)}
 
 
 def complete_campaign_control(control: Any, store: Any, study: Any, *, status: str) -> str:
@@ -859,6 +1054,8 @@ def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finis
     _campaign_context(control, store, study)
     loaded, campaign = study.loaded, study.manifest
     checked: set[tuple[int, int]] = set()
+    paused_seeds: set[tuple[int, int]] = set()
+    terminal_seeds: set[tuple[int, int]] = set()
     failed_proposals: set[int] = set()
     closed: dict[str, str] = {}
     for name in store.records():
@@ -870,6 +1067,8 @@ def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finis
         if awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != parts[1]:
             raise ContractError('historical awaiting belongs to another campaign/session')
         terminal = '/'.join((parts[0], parts[1], 'terminal', parts[3]))
+        pause = '/'.join((parts[0], parts[1], 'checkpoint-pauses', parts[3]))
+        seed_key = (awaiting['proposal_no'], awaiting['learning_seed'])
         if store.exists(terminal):
             disposition = _audit_terminal_history(store, terminal, awaiting,
                 parent_root=Path(loaded.config.storage.parent_root))
@@ -877,6 +1076,42 @@ def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finis
                     or disposition['awaiting_sha256'] != checksum):
                 raise ContractError('acknowledged terminal does not close the exact awaiting')
             failed_proposals.add(awaiting['proposal_no'])
+            terminal_seeds.add(seed_key)
+            checkpoint = loaded.config.checkpoint_evaluation
+            folder = f'proposals/{seed_key[0]:06}/seeds/{seed_key[1]}'
+            if (checkpoint is not None and checkpoint.enabled
+                    and disposition['classification'] == 'healthy_incomplete'
+                    and not store.exists(folder + '/best-checkpoint.json')):
+                from gf_cli.hpo_evaluation import persist_best_checkpoint
+                from gf_training.rust_player_lineage import validate_completion
+
+                path = Path(disposition['evidence']['completion_path'])
+                completion, completion_sha = read_control_record(path, store.directory / 'supervision' / parts[1])
+                validate_completion(completion)
+                if completion_sha != disposition['evidence']['completion_sha256']:
+                    raise ContractError('terminal checkpoint index requires its exact acknowledged completion')
+                intent, _ = study._intent(seed_key[0])
+                proposal = study._proposal(seed_key[0], intent)
+                persist_best_checkpoint(store, loaded, campaign, proposal, seed_key[1],
+                    terminal_generation=completion['committed_update'], deadline=hard_finish)
+        elif store.exists(pause):
+            pause_receipt, _ = store.get(pause)
+            operation = _verify_checkpoint_pause(store, loaded, awaiting, checksum, pause_receipt)
+            paused_seeds.add(seed_key)
+            folder = f"proposals/{awaiting['proposal_no']:06}"
+            if store.exists(folder + '/failure.json'):
+                failure, _ = store.get(folder + '/failure.json')
+                boundary = failure.get('boundary')
+                if (type(boundary) is dict and boundary.get('phase') == 'checkpoint-time-cap'
+                        and boundary.get('awaiting_sha256') == checksum):
+                    from gf_common.rust_player import deadline_seconds
+
+                    expected = _checkpoint_time_cap_boundary(checksum, operation,
+                        deadline_seconds(boundary['observed_bits']))
+                    if boundary != expected or failure['reason'] != 'Original admission expired at checkpoint':
+                        raise ContractError('checkpoint time cap differs from the original pause and clock')
+                    terminal_seeds.add(seed_key)
+                    failed_proposals.add(awaiting['proposal_no'])
         else:
             number, seed = awaiting['proposal_no'], awaiting['learning_seed']
             intent, _ = study._intent(number)
@@ -895,11 +1130,16 @@ def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finis
                 raise ContractError('historical successful awaiting differs from actual admitted operation')
             checked.add((number, seed))
         closed[str(store.directory / name)] = checksum
+    if paused_seeds - checked - terminal_seeds:
+        raise ContractError('interrupted checkpoint training cannot resume under another supervisor root')
     cursor = store.get('supervision/current.json')[0] if store.exists('supervision/current.json') else None
     if cursor is not None and cursor['awaiting_path'] is not None and closed.get(cursor['awaiting_path']) != cursor['awaiting_sha256']:
         raise ContractError('historical current cursor remains unresolved')
     for name in store.records():
         parts = name.split('/')
+        if (_checkpoint_intent_path(parts) and not store.exists(name.removesuffix('.intent.json') + '.json')
+                and not _checkpoint_failed_candidate(store, name, campaign=campaign)):
+            raise ContractError('interrupted checkpoint panel has no verified diagnostic closure')
         if len(parts) != 5 or parts[0] != 'proposals' or parts[2] != 'seeds':
             continue
         number, seed = int(parts[1]), int(parts[3])
@@ -916,6 +1156,11 @@ def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finis
             if parts[4] == 'evaluation.json':
                 verify_rust_evaluation_history(store, loaded, campaign, proposal, seed, control=control,
                     deadline=_audit_deadline(loaded, hard_finish))
+                checkpoint = loaded.config.checkpoint_evaluation
+                if (checkpoint is not None and checkpoint.enabled
+                        and not store.exists(folder + '/best-checkpoint.json')):
+                    _index_final_checkpoint(store, loaded, campaign, proposal,
+                        store.get(folder + '/training.json')[0], store.get(name)[0], hard_finish=hard_finish)
         elif parts[4] in ('source-validation.json', 'training-gpu-termination.json') and not store.exists(folder + '/training.json'):
             raise ContractError('partial closed training cannot be retried')
     _verify_closed_tells(control, store, study, failed_proposals=failed_proposals, hard_finish=hard_finish)
@@ -997,15 +1242,24 @@ def _drive_campaign(control: Any, store: Any, study: Any, imports: tuple[Any, ..
                 return _finish_campaign_result(control, store, study, status='session_boundary')
             _storage_boundary(store, loaded, operation_id=uuid.uuid4().hex, _deadline=hard_finish)
             if phase == 'train':
+                checkpoint = loaded.config.checkpoint_evaluation
+                if (checkpoint is not None and checkpoint.enabled
+                        and time.monotonic() + loaded.config.run_wall_seconds >= soft_finish):
+                    return _finish_campaign_result(control, store, study, status='session_boundary')
                 materialized = materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=str(uuid.uuid4()))
-                dispatch_campaign_training(control, store, study, proposal, learning_seed=seed, materialized=materialized)
+                try:
+                    dispatch_campaign_training(control, store, study, proposal,
+                        learning_seed=seed, materialized=materialized)
+                except _ScheduledSeedDoesNotFit:
+                    return _finish_campaign_result(control, store, study, status='session_boundary')
                 return None  # Prepared: only Native reap followed by a NEW cold host may continue.
             training = verify_rust_training_history(store, loaded, campaign, proposal, seed, control=control,
                 deadline=_audit_deadline(loaded, hard_finish))
             if time.monotonic() >= soft_finish:
                 return _finish_campaign_result(control, store, study, status='session_boundary')
-            asyncio.run(evaluate_rust_seed(store, loaded, campaign, proposal, training, control=control,
+            evaluation = asyncio.run(evaluate_rust_seed(store, loaded, campaign, proposal, training, control=control,
                 output=store.directory / 'evaluations' / str(uuid.uuid4()), soft_finish=soft_finish, hard_finish=hard_finish))
+            _index_final_checkpoint(store, loaded, campaign, proposal, training, evaluation, hard_finish=hard_finish)
         aggregate = aggregate_trial_evaluation(store, loaded, campaign, proposal,
             deadline=_audit_deadline(loaded, hard_finish), control=control)
         store.put(root + '/evaluation.json', aggregate)
@@ -1013,25 +1267,111 @@ def _drive_campaign(control: Any, store: Any, study: Any, imports: tuple[Any, ..
     return _finish_campaign_result(control, store, study, status='complete')
 
 
-def _continue_cold_campaign(control: Any, store: Any, study: Any, *, soft_finish: float, hard_finish: float) -> None:
+def _index_final_checkpoint(store: Any, loaded: LoadedHPOConfig, campaign: Json, proposal: Any,
+                            training: Json, evaluation: Json, *, hard_finish: float) -> None:
+    checkpoint = loaded.config.checkpoint_evaluation
+    if checkpoint is not None and checkpoint.enabled:
+        from gf_cli.hpo_evaluation import persist_best_checkpoint
+
+        persist_best_checkpoint(store, loaded, campaign, proposal, training['training_seed'],
+            terminal_generation=training['generation'], final_training=training, final_evaluation=evaluation,
+            deadline=hard_finish)
+
+
+def _evaluate_closed_checkpoint(control: Any, store: Any, study: Any, proposal: Any,
+                                result: Any, awaiting: Json, *, hard_finish: float) -> None:
+    import asyncio
+
+    from gf_cli.hpo import _record_checkpoint_evaluation_error
+    from gf_cli.hpo_evaluation import evaluate_checkpoint
+    from gf_common.rust_player import deadline_seconds
+
+    generation = result.completion['committed_update']
+    paused = result.completion['state'] == 'paused'
+    deadline = min(hard_finish, deadline_seconds(control.operation['deadlines'][
+        'admission_bits' if paused else 'finish_bits']))
+    seed = awaiting['learning_seed']
+    generation_folder = f'proposals/{proposal.number:06}/seeds/{seed}/checkpoint-evaluations/{generation}'
+    start = time.monotonic()
+    try:
+        asyncio.run(evaluate_checkpoint(store, study.loaded, study.manifest, proposal,
+            directory=Path(awaiting['run_path']), generation=generation,
+            output=store.directory / 'evaluations' / str(uuid.uuid4()), deadline=deadline,
+            rust_invocation=result, control=control))
+    except Exception as error:  # noqa: BLE001 - only a verified diagnostic failure can continue
+        _record_checkpoint_evaluation_error(store, study.manifest, path=generation_folder,
+            run_id=awaiting['run_id'], generation=generation, started=start, error=error)
+
+
+def _continue_cold_campaign(control: Any, store: Any, study: Any, *, soft_finish: float, hard_finish: float) -> bool:
     import asyncio
 
     from gf_cli.config import load_rust_player_effective
     from gf_cli.rust_player_evaluation import evaluate_rust_seed, persist_rust_training_receipt
+    from gf_common.rust_player import deadline_seconds
     from gf_training.rust_player_completion import (
         ColdFinalizedRustInvocation,
         ColdFinalizedRustParent,
     )
     from gf_training.rust_player_learning import finalize_cold
     admission, _prepared, _exit = control.cold.require_pair()
-    proposal, awaiting, _path, _checksum, cursor, cursor_sha = _current_awaiting(
+    proposal, awaiting, _path, checksum, cursor, cursor_sha = _current_awaiting(
         control, store, study, admission['invocation_id'])
     loaded = load_rust_player_effective(Path(control.operation['config_path']), expected_sha256=control.operation['config_sha256'])
     result = finalize_cold(control, control.cold, loaded=loaded)
     try:
         if type(result) is ColdFinalizedRustInvocation:
-            settle_incomplete_campaign_training(control, store, study, result)
-            return
+            checkpoint = study.loaded.config.checkpoint_evaluation
+            generation = result.completion['committed_update']
+            if checkpoint is not None and checkpoint.enabled and result.completion['state'] == 'paused':
+                operation = control.operation
+                _record_checkpoint_pause(control, store, result=result,
+                    awaiting_sha256=checksum, generation=generation)
+                _evaluate_closed_checkpoint(control, store, study, proposal, result, awaiting, hard_finish=hard_finish)
+                result.close()
+                if 'parent' in control._borrowed:
+                    control.release_parent()
+                _clear_success_cursor(control, store, study, cursor, cursor_sha)
+                now = time.monotonic()
+                cutoff = deadline_seconds(operation['deadlines']['admission_bits'])
+                if now < cutoff:
+                    try:
+                        dispatch_campaign_training(control, store, study, proposal,
+                            learning_seed=awaiting['learning_seed'], materialized=loaded, resume=True)
+                    except TimeoutError:
+                        now = time.monotonic()
+                        if now < cutoff or control._phase != 'session' or store.get('supervision/current.json')[0]['phase'] != 'control':
+                            raise
+                    else:
+                        return True
+                from gf_cli.hpo_evaluation import persist_best_checkpoint
+
+                persist_best_checkpoint(store, study.loaded, study.manifest, proposal,
+                    awaiting['learning_seed'], terminal_generation=generation, deadline=hard_finish)
+                reason = 'Original admission expired at checkpoint'
+                store.put(f'proposals/{proposal.number:06}/failure.json', {'schema_version': 1,
+                    'kind': 'hpo-proposal-failure', 'proposal_sha256': proposal.sha256, 'reason': reason,
+                    'boundary': _checkpoint_time_cap_boundary(checksum, operation, now)})
+                study.fail(proposal, reason)
+                return False
+            after_ack = None
+            if checkpoint is not None and checkpoint.enabled:
+                from gf_cli.hpo_evaluation import persist_best_checkpoint
+
+                def report_cap() -> None:
+                    if (generation in checkpoint.updates
+                            and result._validated_state is not None
+                            and result._validated_state['stop_reason'] == 'update_cap'):
+                        _evaluate_closed_checkpoint(control, store, study, proposal, result, awaiting, hard_finish=hard_finish)
+                    persist_best_checkpoint(store, study.loaded, study.manifest, proposal,
+                        awaiting['learning_seed'], terminal_generation=generation, deadline=hard_finish)
+
+                after_ack = report_cap
+            if after_ack is None:
+                settle_incomplete_campaign_training(control, store, study, result)
+            else:
+                settle_incomplete_campaign_training(control, store, study, result, after_ack=after_ack)
+            return False
         if type(result) is not ColdFinalizedRustParent:
             raise ContractError('actual exact-D cold Parent or ineligible invocation required')
         result.require()
@@ -1039,13 +1379,15 @@ def _continue_cold_campaign(control: Any, store: Any, study: Any, *, soft_finish
             training_seed=awaiting['learning_seed'], run_id=awaiting['run_id'], directory=Path(awaiting['run_path']),
             termination=control.cold.physical_termination, deadline=_audit_deadline(study.loaded, hard_finish), completion=result)
         if time.monotonic() < soft_finish:
-            asyncio.run(evaluate_rust_seed(store, study.loaded, study.manifest, proposal, training, control=control,
+            evaluation = asyncio.run(evaluate_rust_seed(store, study.loaded, study.manifest, proposal, training, control=control,
                 output=store.directory / 'evaluations' / str(uuid.uuid4()), soft_finish=soft_finish,
                 hard_finish=hard_finish, completion=result))
+            _index_final_checkpoint(store, study.loaded, study.manifest, proposal, training, evaluation, hard_finish=hard_finish)
         else:
             result.close()
             control.release_parent()
         _clear_success_cursor(control, store, study, cursor, cursor_sha)
+        return False
     except BaseException as error:
         # The evaluator may already own a nested pin/job; retain that original
         # cleanup owner and the actual Parent without pretending cleanup succeeded.
@@ -1080,8 +1422,9 @@ def run_campaign(control: Any, operation: Json) -> str | None:
             raise ContractError('actual immutable imported settings snapshot differs')
         imports = load_seed_snapshot(seeds, loaded.config, study_identity=campaign['study_identity'])
         soft, hard = (deadline_seconds(session[key]) for key in ('soft_dispatch_finish_bits', 'hard_session_finish_bits'))
+        dispatched = False
         if control._phase == 'cold':
-            _continue_cold_campaign(control, store, study, soft_finish=soft, hard_finish=hard)
+            dispatched = _continue_cold_campaign(control, store, study, soft_finish=soft, hard_finish=hard)
         elif control._phase == 'campaign-return':
             settle_failed_campaign_training(control, store, study)
         elif control._phase == 'session' and control.operation['operation_type'] == 'campaign-continue':
@@ -1089,9 +1432,11 @@ def run_campaign(control: Any, operation: Json) -> str | None:
         else:
             raise ContractError('unknown authenticated campaign controller phase')
         # Every imported closed operation is reverified before reuse/new ask.
-        if control.operation['operation_type'] != 'campaign-continue':
-            _verify_campaign_history(control, store, study, hard_finish=hard)
-        output = _drive_campaign(control, store, study, imports, soft_finish=soft, hard_finish=hard)
+        output = None
+        if not dispatched:
+            if control.operation['operation_type'] != 'campaign-continue':
+                _verify_campaign_history(control, store, study, hard_finish=hard)
+            output = _drive_campaign(control, store, study, imports, soft_finish=soft, hard_finish=hard)
     except BaseException as error:
         try:
             store.close()

@@ -1,10 +1,13 @@
 """Closed HPO correspondence facts. Values never grant Source authority."""
 from __future__ import annotations
 
+import math
+
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 
 SELECTION_VERSION = 'hpo-endpoint-selection-v1'
 NATIVE_CAPABILITY = 'model4;collection6;proof3;numeric5;selection1;provider1'
+UPDATE_DIAGNOSTICS_CAPABILITY = 'ppo-update-diagnostics-v1'
 CONTEXT_KEYS = {'selection_version', 'decision_budget', 'used_before', 'remaining', 'learning_seed', 'batch'}
 SELECTION_KEYS = {'context', 'derived_seed', 'episode_counts', 'collected_decisions', 'used_decisions', 'indices', 'indices_sha256'}
 PROOF_KINDS = ('card-instance-hpo-original-source-proof', 'card-instance-hpo-packed-original-source-proof')
@@ -70,6 +73,36 @@ def optimizer_delta(used: int, *, epochs: int, minibatch_size: int) -> int:
     integer(epochs, 1, 1000)
     integer(minibatch_size, 1, 2**20)
     return epochs * ((used + minibatch_size - 1) // minibatch_size)
+
+
+def validate_update_diagnostics(metrics: Json, *, required: bool = False) -> None:
+    """Validate numerical observations without granting any Source authority."""
+    if not isinstance(metrics, dict):
+        raise ContractError('HPO update metrics must be an object')
+    if 'diagnostics' not in metrics:
+        if required:
+            raise ContractError('HPO update diagnostics required')
+        return
+    fields = {'clip_fraction', 'explained_variance', 'pre_clip_grad_norm_mean',
+              'pre_clip_grad_norm_max', 'learning_rate'}
+    diagnostics = closed(metrics['diagnostics'], fields | {'schema_version'})
+    integer(diagnostics['schema_version'], 1, 1)
+    for field in fields:
+        value = diagnostics[field]
+        if field == 'explained_variance' and value is None:
+            continue
+        try:
+            finite = type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ContractError(f'HPO update diagnostics requires finite {field}')
+    explained = diagnostics['explained_variance']
+    if (not 0 <= diagnostics['clip_fraction'] <= 1
+            or explained is not None and explained > 1
+            or not 0 <= diagnostics['pre_clip_grad_norm_mean'] <= diagnostics['pre_clip_grad_norm_max']
+            or diagnostics['learning_rate'] < 0):
+        raise ContractError('HPO update diagnostics outside range')
 
 
 def require_owned_record_version(value: Json, kind: str) -> None:

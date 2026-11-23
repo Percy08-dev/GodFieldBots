@@ -35,6 +35,7 @@ def test_actual_wire7_initialize_owned_update_and_reap(tmp_path, kind):
         try:
             initial = await child.initialize_owned(17, tmp_path/'g0', deadline=deadline)
             assert initial.generation == child.generation == child.steps == 0
+            assert initial.metrics == {}
             initial.require_process(child)
             assert initial.actor_capability.require() is initial
             # Real capture, then bind its owner to the actual child snapshot for this test invocation.
@@ -72,7 +73,8 @@ def test_actual_wire7_initialize_owned_update_and_reap(tmp_path, kind):
             from gf_training.hpo_rollout import HpoRollout
             reference = HpoRollout((record,), learner.model, learner.training, actions=ACTIONS, rules=RULES,
                 selected_locations=((0,0),(0,1),(0,2)))
-            learner.update(reference)
+            reference_metrics = learner.update(reference)
+            assert updated.metrics['diagnostics'] == pytest.approx(reference_metrics['diagnostics'])
             learner.save(tmp_path/'direct')
             assert_artifacts_equal(tmp_path/'direct', tmp_path/'g1')
             numeric.close()
@@ -247,7 +249,15 @@ def test_wire7_owned_metrics_decoder_preserves_not_run_and_finite_guards():
         'optimizer_steps':4,'optimizer_step_delta':4,'collected_decisions':3,'used_decisions':2,
         'parity':{'status':'not_run'},'tbptt_length':32,'epochs':4,'endpoint_evaluations':8,
         'context_decisions':16,'suffix_decisions':16,'update_seconds':0.1}
+    with pytest.raises(ContractError, match='diagnostics'):
+        _owned_metrics(fields,batch=batch,training=recipe,expected_steps=4)
+    _owned_metrics(fields,batch=batch,training=recipe,expected_steps=4,historical=True)
+    fields['diagnostics'] = {'schema_version':1,'clip_fraction':.5,'explained_variance':None,
+        'pre_clip_grad_norm_mean':.2,'pre_clip_grad_norm_max':.3,'learning_rate':.01}
     _owned_metrics(fields,batch=batch,training=recipe,expected_steps=4)
+    broken = dict(fields, diagnostics=dict(fields['diagnostics'], clip_fraction=True))
+    with pytest.raises(ContractError, match='diagnostics'):
+        _owned_metrics(broken,batch=batch,training=recipe,expected_steps=4,historical=True)
     for key,value in [('total_loss',float('nan')),('optimizer_steps',True),('parity',{'max_error':0}),('context_decisions',0)]:
         invalid={**fields,key:value}
         with pytest.raises(ContractError):

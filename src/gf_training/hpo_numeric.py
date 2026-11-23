@@ -31,7 +31,7 @@ from gf_training.structured_rollout import StructuredRollout
 
 def hpo_losses(logprobs: Any, values: Any, mask: Any, selected: Any, old: Any,
                advantage: Any, target: Any, *, training: HPOTrainingConfig,
-               _endpoint_terms: bool = False) -> tuple[Any, Any]:
+               _endpoint_terms: bool = False, _measure_clip: bool = False) -> tuple[Any, Any]:
     import torch
     reduce = (lambda value: value) if _endpoint_terms else (lambda value: value.mean())
     chosen = logprobs.gather(1, selected[:, None]).squeeze(1)
@@ -42,10 +42,40 @@ def hpo_losses(logprobs: Any, values: Any, mask: Any, selected: Any, old: Any,
     entropy = -reduce((logprobs.exp() * logprobs.masked_fill(~mask, 0)).sum(-1))
     loss = policy + training.value_coefficient * mse - training.entropy_coefficient * entropy
     if _endpoint_terms:
-        return loss, torch.stack((policy, mse, entropy, old - chosen, loss), -1).detach()
-    return loss, {"policy_loss": float(policy.detach()), "value_mse": float(mse.detach()),
+        clipped = (ratio.detach() - 1).abs() > training.clip_range
+        return loss, torch.stack((policy, mse, entropy, old - chosen, loss, clipped), -1).detach()
+    metrics = {"policy_loss": float(policy.detach()), "value_mse": float(mse.detach()),
         "entropy": float(entropy.detach()), "approx_kl": float((old - chosen).mean().detach()),
         "total_loss": float(loss.detach())}
+    if _measure_clip:
+        metrics["clip_fraction"] = float(((ratio.detach() - 1).abs() > training.clip_range).float().mean())
+    return loss, metrics
+
+
+def _explained_variance(rollout: Any) -> float | None:
+    """Population moments of the frozen Critic predictions and exact GAE targets."""
+    target_mean = residual_mean = target_m2 = residual_m2 = 0.
+    count = len(rollout)
+    for index in range(count):
+        _, _, value, _, target = rollout.vector(index)
+        residual = target - value
+        target_delta = target - target_mean
+        target_mean += target_delta / (index + 1)
+        target_m2 += target_delta * (target - target_mean)
+        residual_delta = residual - residual_mean
+        residual_mean += residual_delta / (index + 1)
+        residual_m2 += residual_delta * (residual - residual_mean)
+    if target_m2 <= count * 1e-12:
+        return None
+    explained = 1. - residual_m2 / target_m2
+    return explained if math.isfinite(explained) else None
+
+
+def _diagnostics(clip_fraction: float, explained_variance: float | None, grad_mean: float,
+                 grad_max: float, learning_rate: float) -> Json:
+    return {"schema_version": 1, "clip_fraction": clip_fraction, "explained_variance": explained_variance,
+            "pre_clip_grad_norm_mean": grad_mean, "pre_clip_grad_norm_max": grad_max,
+            "learning_rate": learning_rate}
 
 
 class HpoLearner(Learner):
@@ -224,9 +254,12 @@ class HpoLearner(Learner):
                         _singletons_checked=True, _device_bytes=_device_bytes)
                 return self._update_experimental(rollout, parity, started, forward, spec, _device_bytes=_device_bytes)
         torch, recipe = self.torch, self.training
+        explained_variance = _explained_variance(rollout)
         totals: dict[str, float] = {}
         denominator = 0
         previous_steps = self.steps
+        expected = recipe.epochs * math.ceil(rollout.used_decisions / recipe.minibatch_size)
+        grad_sum = grad_max = 0.
         self.network.train()
         context_decisions = suffix_decisions = 0
         for _ in range(recipe.epochs):
@@ -242,7 +275,8 @@ class HpoLearner(Learner):
                         logs, value = self.network._learning_serial(window, frames, candidates, suffix)
                         raw = window.operands
                         self.synchronize()
-                        loss, measured = hpo_losses(logs, value, raw['mask'], raw['selected'], *raw['vectors'], training=recipe)
+                        loss, measured = hpo_losses(logs, value, raw['mask'], raw['selected'], *raw['vectors'],
+                            training=recipe, _measure_clip=True)
                         del window, raw
                     else:
                         logs, value, _ = forward(frames, candidates, suffix_length=suffix)
@@ -252,7 +286,8 @@ class HpoLearner(Learner):
                         selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
                         vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
                             for number in (old, advantage, target)]
-                        loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors, training=recipe)
+                        loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors,
+                            training=recipe, _measure_clip=True)
                     if not torch.isfinite(loss):
                         raise ContractError("nonfinite HPO PPO loss")
                     (loss / len(logical)).backward()
@@ -263,22 +298,28 @@ class HpoLearner(Learner):
                     suffix_decisions += suffix
                     del logs, value, loss
                 norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), recipe.max_grad_norm, error_if_nonfinite=True)
-                if not torch.isfinite(norm):
+                grad_norm = float(norm)
+                if not math.isfinite(grad_norm):
                     raise ContractError("nonfinite HPO PPO gradients")
+                grad_sum += grad_norm
+                grad_max = max(grad_max, grad_norm)
+                learning_rate = self.optimizer.param_groups[0]["lr"]
                 self.optimizer.step()
                 self.steps += 1
         self.synchronize()
         metrics = {name: value / denominator for name, value in totals.items()}
-        expected = recipe.epochs * math.ceil(rollout.used_decisions / recipe.minibatch_size)
         if (self.steps - previous_steps != expected or not all(math.isfinite(value) for value in metrics.values())
                 or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters())):
             raise ContractError("invalid HPO optimizer step count/nonfinite output")
         self._last_update_execution='baseline'
+        diagnostics = _diagnostics(metrics.pop("clip_fraction"), explained_variance,
+            grad_sum / expected, grad_max, float(learning_rate))
         return {**metrics, "optimizer_steps": self.steps, "optimizer_step_delta": expected,
             "collected_decisions": rollout.collected_decisions, "used_decisions": rollout.used_decisions,
             "parity": parity, "tbptt_length": recipe.tbptt_length, "epochs": recipe.epochs,
             "endpoint_evaluations": denominator, "context_decisions": context_decisions,
-            "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
+            "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started,
+            "diagnostics": diagnostics}
 
     def _validate_singleton_capacity(self, rollout: Any, *, _device_bytes: int | None = None) -> None:
         from gf_training.hpo_update_planning import admit_group, execution_plan
@@ -308,10 +349,14 @@ class HpoLearner(Learner):
         if spec.variant in ('microbatch','shared-prefix') and not _singletons_checked:
             self._validate_singleton_capacity(rollout, _device_bytes=_device_bytes)
         torch, recipe = self.torch, self.training
-        totals = torch.zeros(5,dtype=torch.float64,device=self.binding.device)
+        explained_variance = _explained_variance(rollout)
+        totals = torch.zeros(len(METRICS) + 1, dtype=torch.float64, device=self.binding.device)
+        grad_sum = totals.new_zeros(())
+        grad_max = totals.new_zeros(())
         denominator = context_decisions = suffix_decisions = 0
         encoded_frames = groups_count = transfers = 0
         previous_steps = self.steps
+        expected = recipe.epochs * math.ceil(rollout.used_decisions / recipe.minibatch_size)
         self.network.train()
         for _ in range(recipe.epochs):
             order = self.shuffle.permutation(len(rollout)).tolist()
@@ -337,25 +382,30 @@ class HpoLearner(Learner):
                     # destruction; next packing cannot alias a retained graph.
                     del loss,measured,window,extra
                 norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(),recipe.max_grad_norm,error_if_nonfinite=True)
-                if not torch.isfinite(norm):
-                    raise ContractError('nonfinite HPO PPO gradients')
+                grad_sum += norm
+                grad_max = torch.maximum(grad_max, norm)
+                learning_rate = self.optimizer.param_groups[0]["lr"]
                 self.optimizer.step()
                 self.steps += 1
         self.synchronize()
-        numbers = (totals/denominator).cpu().tolist()
+        *numbers, clip_fraction, grad_mean, grad_max_value = torch.cat((
+            totals / denominator, torch.stack((grad_sum / expected, grad_max)),
+        )).cpu().tolist()
         metrics = dict(zip(METRICS,numbers,strict=True))
-        expected = recipe.epochs*math.ceil(rollout.used_decisions/recipe.minibatch_size)
         if (self.steps-previous_steps != expected or not all(math.isfinite(value) for value in metrics.values())
                 or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters())):
             raise ContractError('invalid HPO optimizer step count/nonfinite output')
         self._last_update_execution=spec.variant
         self._training_update_diagnostics = {'variant':spec.variant,'frame_encodes':encoded_frames,
             'microbatches':groups_count,'transfers':transfers}
+        diagnostics = _diagnostics(clip_fraction, explained_variance, grad_mean, grad_max_value,
+            float(learning_rate))
         return {**metrics,'optimizer_steps':self.steps,'optimizer_step_delta':expected,
             'collected_decisions':rollout.collected_decisions,'used_decisions':rollout.used_decisions,
             'parity':parity,'tbptt_length':recipe.tbptt_length,'epochs':recipe.epochs,
             'endpoint_evaluations':denominator,'context_decisions':context_decisions,
-            'suffix_decisions':suffix_decisions,'update_seconds':time.perf_counter()-started}
+            'suffix_decisions':suffix_decisions,'update_seconds':time.perf_counter()-started,
+            'diagnostics':diagnostics}
 
     def snapshot_owned(self, *, budget: Any, save_budget_bytes: int = 512*1024**2,
                        code_revision: str | None = None) -> Any:

@@ -46,7 +46,8 @@ checkpoint-evaluation changes. The probe pins Simulator
 - **PASS** — The final 226-test Python selection covered storage,
   update encoding and resume, evaluation cleanup, campaign and operation
   factories, Rust match handoff and lineage. The separate managed HTTP
-  selection passed all 27 tests with the approved Simulator. Ruff, scoped mypy
+  selection passed all 27 tests with the approved Simulator. The checkpoint
+  evaluation and scheduling selection passed 21 tests. Ruff, scoped mypy
   across 50 production/operation files, and `git diff --check` passed.
 - The initial broad Python sweep recorded 2,151 passes alongside fixture
   failures. After updating the fixtures, all 82 tests in the affected

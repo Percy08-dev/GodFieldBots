@@ -126,6 +126,25 @@ def test_complete_actual_saved_cpu_chain_is_only_structural_evidence(tmp_path):
     assert state["device"] == "cpu" and not list((directory / "collections").iterdir())
 
 
+def test_saved_update_diagnostics_accepts_historical_absence_and_rejects_unknown_key(tmp_path):
+    from gf_models.sharded_arrays import read_json
+    from gf_training.hpo_lineage import validate_hpo_chain
+
+    directory = tmp_path / "parent"
+    advanced_hpo_chain(directory)
+    path = directory / "updates" / "000001.json"
+    update = read_json(path)
+    diagnostics = update["metrics"].pop("diagnostics")
+    atomic_json(path, update)
+    rehash_chain(directory)
+    validate_hpo_chain(directory, max_owned_bytes=1024**3, deadline=time.monotonic() + 30)
+    update["metrics"]["diagnostics"] = dict(diagnostics, evidence=True)
+    atomic_json(path, update)
+    rehash_chain(directory)
+    with pytest.raises(ContractError, match="schema_version"):
+        validate_hpo_chain(directory, max_owned_bytes=1024**3, deadline=time.monotonic() + 30)
+
+
 @pytest.mark.parametrize("budget,updates,collected", [(1, 1, 3), (4, 2, 6)])
 def test_one_and_partial_final_budget_preserve_complete_collected_counts(tmp_path, budget, updates, collected):
     from gf_training.hpo_lineage import validate_hpo_chain

@@ -107,6 +107,66 @@ def test_operation2_refuses_missing_unknown_or_boolean_execution_controls(execut
         validate_operation(operation)
 
 
+def test_initial_hpo_pause_requires_the_distinct_prepared_and_completion_records():
+    from gf_common.domain import digest
+    from gf_common.rust_player import BUDGET_KEYS, validate_operation, validate_prepared
+    from gf_training.rust_player_lineage import validate_completion
+
+    operation = operation_data()
+    operation["execution_request"]["pause_after_update"] = 0
+    with pytest.raises(ContractError):
+        validate_operation(operation)
+    context = {"campaign_id": "campaign", "operation_id": operation["operation_id"],
+        "kind": "training", "run_id": operation["run_id"], "evaluation_id": None}
+    operation.update(mode="hpo", operation_type="hpo-train", expected_context=context)
+    assert validate_operation(operation) == operation
+    identities = {key: operation[key] for key in (
+        "operation_id", "run_id", "config_sha256", "runtime_binding_sha256")}
+    identities.update(supervision_id="a" * 32, invocation_id="b" * 32)
+    admission = {"schema_version": 1, "kind": "rust-player-admission-v1", **identities,
+        "nonce": "c" * 32, "supervisor": {"pid": 1, "start_ticks": 1},
+        "host": {"pid": 2, "pgid": 2, "start_ticks": 2}, "context": context,
+        "budget": dict.fromkeys(BUDGET_KEYS, 1), "deadlines": operation["deadlines"],
+        "producer": producer_data(), "global_ticket": "d" * 32}
+    prepared = {"schema_version": 2, "kind": "rust-player-initial-pause-prepared-v2", **identities,
+        "admission_sha256": digest(admission), "state": "paused", "committed_update": 0,
+        "generation": 0, "state_sha256": "e" * 64, "generation_sha256": "e" * 64,
+        "artifacts_sha256": "e" * 64, "source_manifest_sha256": None,
+        "close_ack_path": "/tmp/close.json", "close_ack_sha256": "e" * 64}
+    assert validate_prepared(prepared, admission, operation=operation) == prepared
+    with pytest.raises(ContractError):
+        validate_prepared(prepared, admission)
+    with pytest.raises(ContractError):
+        validate_prepared(prepared, admission, operation=operation | {
+            "execution_request": {"mode": "fresh", "pause_after_update": 1}})
+    with pytest.raises(ContractError):
+        validate_prepared(prepared | {"source_manifest_sha256": "e" * 64}, admission, operation=operation)
+    completion = {"schema_version": 2, "kind": "rust-player-initial-pause-completion-v2", **identities,
+        "operation_sha256": digest(operation), "prepared_sha256": digest(prepared),
+        "exit_sha256": "f" * 64, "state_sha256": prepared["state_sha256"],
+        "generation_sha256": prepared["generation_sha256"], "source_manifest_sha256": None,
+        "state": "paused", "committed_update": 0, "audit_path": "/tmp/audit.json",
+        "audit_sha256": "f" * 64, "eligible": False, "parent_metadata_validation": None}
+    assert validate_completion(completion) == completion
+    with pytest.raises(ContractError):
+        validate_completion(completion | {"eligible": True})
+
+
+def test_checkpoint_time_cap_uses_the_original_admission_clock():
+    from gf_cli.rust_player_campaign import _checkpoint_time_cap_boundary
+    from gf_common.rust_player import deadline_bits
+
+    operation = operation_data()
+    with pytest.raises(ContractError, match="actual exhausted"):
+        _checkpoint_time_cap_boundary("a" * 64, operation, 99.0)
+    assert _checkpoint_time_cap_boundary("a" * 64, operation, 101.0) == {
+        "phase": "checkpoint-time-cap",
+        "awaiting_sha256": "a" * 64,
+        "admission_bits": operation["deadlines"]["admission_bits"],
+        "observed_bits": deadline_bits(101.0),
+    }
+
+
 @pytest.mark.parametrize("record_type,ordinary,hpo_version", [
     ("collection", 10, 11), ("proof", 4, 7), ("generation", 4, 6),
     ("update", 6, 8), ("registry", 5, 8),
