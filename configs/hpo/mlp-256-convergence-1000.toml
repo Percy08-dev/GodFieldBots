@@ -1,11 +1,13 @@
 # PPO の学習診断を1,000更新まで記録する単独実行。
 # CUDA版PyTorch・Optuna・Native拡張と対応する監督バイナリを備えた
 # Python環境を有効にし、リポジトリ直下で以下を実行する。
+# uv run --active --no-sync は有効化した環境を依存関係の同期なしで使う。
 #
 # run_id=$(uuidgen)
 # experiment_id=$(uuidgen)
 # printf 'run_id=%s experiment_id=%s\n' "$run_id" "$experiment_id"
-# OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python tools/rust_player_operation.py \
+# OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run --active --no-sync \
+#   python tools/rust_player_operation.py \
 #   --config configs/hpo/mlp-256-convergence-1000.toml \
 #   --run-id "$run_id" --experiment-id "$experiment_id" \
 #   --learning-seed 17 --mode fresh
