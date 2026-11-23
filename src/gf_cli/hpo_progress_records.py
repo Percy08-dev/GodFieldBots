@@ -7,6 +7,7 @@ import stat
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from gf_common.domain import ContractError, Json, digest, integer
 from gf_common.hpo_progress import finite_number
@@ -17,6 +18,27 @@ from gf_training.hpo_update_storage import read_hpo_update
 from gf_training.lineage import generation_path
 
 _READ_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError)
+
+
+def collection_games_per_second(games: object, seconds: Any) -> float | None:
+    if (type(games) is not int or not 0 <= games < 2**64
+            or not finite_number(seconds) or seconds <= 0):
+        return None
+    rate = games / seconds
+    return rate if finite_number(rate) else None
+
+
+def _elapsed(state: Json) -> float | None:
+    elapsed = state.get('elapsed_seconds')
+    if elapsed is not None and finite_number(elapsed) and elapsed >= 0:
+        return float(elapsed)
+    start, last = state.get('created_unix'), state.get('last_unix')
+    if (start is not None and last is not None
+            and finite_number(start) and finite_number(last) and last >= start):
+        elapsed = last - start
+        if finite_number(elapsed):
+            return float(elapsed)
+    return None
 
 
 def _standalone_namespace(parent: Path, operation: Json) -> tuple[Path, Json]:
@@ -112,11 +134,13 @@ class StandaloneProgressRecords:
         host_result = state.get('host_result')
         observed: Json = {'availability': 'available', 'status': status, 'model': 'mlp',
             'seed': state['seed'], 'decision_budget': budget, 'target_updates': target,
+            'elapsed_seconds': _elapsed(state),
             'host_result': ('awaiting-supervised-finalization'
                 if host_result == 'awaiting-supervised-finalization' else None),
             'committed_updates': None,
             'committed_used': None, 'committed_collected': None,
-            'latest_metrics': None, 'latest_durations': None}
+            'latest_metrics': None, 'latest_durations': None,
+            'last_collection_games_per_second': None}
         if state['generation_sha256'] is None:
             return observed
         try:
@@ -145,7 +169,8 @@ class StandaloneProgressRecords:
         integer(used, 0, budget)
         integer(collected, used)
         observed: Json = {'committed_updates': number, 'committed_used': used, 'committed_collected': collected,
-            'latest_metrics': None, 'latest_durations': None}
+            'latest_metrics': None, 'latest_durations': None,
+            'last_collection_games_per_second': None}
         if number:
             update = read_hpo_update(self.root, number, state, generation['update_sha256'], scan=scan)
             if (update.get('schema_version') != 8 or update.get('status') != 'complete'
@@ -156,6 +181,8 @@ class StandaloneProgressRecords:
             observed['latest_metrics'] = {name: metrics[name]
                 for name in ('total_loss', 'policy_loss', 'value_mse', 'entropy', 'approx_kl')
                 if finite_number(metrics.get(name))}
+            observed['last_collection_games_per_second'] = collection_games_per_second(
+                update.get('actual_games'), update.get('collection_seconds'))
             observed['latest_durations'] = {name: update[name]
                 for name in ('collection_seconds', 'update_seconds')
                 if finite_number(update.get(name)) and update[name] >= 0}

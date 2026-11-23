@@ -1614,3 +1614,11 @@ their last metrics. Live phase and count data were unavailable in
 that historical run. The smoke verifies the observation path at
 eight games. A 1,000-update monitoring overhead measurement remains
 outside this evidence.
+
+The timing follow-up passed 108 focused cases with the same pytest
+selection. A live run with eight games per update and
+`--pause-after-update 4` showed an ETA after two committed intervals.
+At update 2/4, the watcher displayed 2.48 games/s for the last
+collection, 28.41 seconds elapsed and an estimated 13 seconds
+remaining. The failed historical run showed 7.13 games/s and 372.90
+seconds elapsed. Its ETA was absent.

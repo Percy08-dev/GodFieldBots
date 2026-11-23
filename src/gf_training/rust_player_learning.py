@@ -802,7 +802,8 @@ class RustGameOperations:
             }
             observe(self._progress, {'committed_updates': row['generation'],
                 'committed_used': row['used_decisions'], 'committed_collected': row['collected_decisions'],
-                'latest_metrics': metrics, 'latest_durations': durations})
+                'latest_metrics': metrics, 'latest_durations': durations,
+                'latest_actual_games': None if update is None else update.get('actual_games')})
         return row
 
     def close_batch(self) -> None:

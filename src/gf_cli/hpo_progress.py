@@ -10,12 +10,12 @@ import stat
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from gf_common.domain import ContractError, Json
-from gf_common.hpo_progress import PHASES, ProgressCallback, finite_number
+from gf_common.hpo_progress import PHASES, ActiveRate, ProgressCallback, finite_number
 
 if TYPE_CHECKING:
     from gf_training.lineage import RunOwnership
@@ -49,6 +49,11 @@ def _checked(value: Any) -> Json:
                 raise ValueError('invalid standalone progress counter')
         if (value.get('committed_updates') is None) != (value.get('committed_used') is None):
             raise ValueError('standalone committed counters require both values')
+        for name in ('last_collection_games_per_second', 'invocation_elapsed_seconds',
+                     'eta_seconds'):
+            field = value.get(name)
+            if field is not None and (not finite_number(field) or field < 0):
+                raise ValueError('invalid standalone progress time or rate')
         for name in ('latest_metrics', 'latest_durations'):
             fields = value.get(name)
             if fields is not None and (type(fields) is not dict or
@@ -75,6 +80,9 @@ def read_progress(root: Path, *, now: float | None = None) -> Json:
         value = _checked(json.loads(data))
         age = max(0., (time.time() if now is None else now)-value['updated_unix'])
         stale = age > 5
+        if value.get('standalone') is True and (
+                stale or value['status'] != 'running') and 'eta_seconds' in value:
+            value['eta_seconds'] = None
         return {'availability':'stale' if stale else 'available', 'age_seconds':age, 'snapshot':value,
             'message':'update pending; status is unconfirmed' if stale else 'diagnostic observation only'}
     except FileNotFoundError:
@@ -106,10 +114,18 @@ def render(value: Json) -> str:
         f'[{value["message"]}]')
 
 
+def _standalone_running(live: Json | None, durable: Json | None, availability: str) -> bool:
+    return (live is not None and live.get('standalone') is True
+            and availability == 'available' and live.get('status') == 'running'
+            and (durable is None or durable['status'] == 'running'
+                and durable['availability'] == 'available'))
+
+
 def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> str:
     current = live or {}
     committed = durable or current
     live_availability = value.get('availability', 'available')
+    running = _standalone_running(live, durable, live_availability)
     parts = [f'{committed.get("model", "mlp")} standalone HPO seed={committed.get("seed")}']
     if live is not None and live_availability == 'available':
         parts.append(f'phase={current["phase"]}')
@@ -125,7 +141,8 @@ def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> 
     if committed.get('host_result') == 'awaiting-supervised-finalization':
         parts.append('run record written before supervised finalization')
     if committed.get('committed_updates') is not None:
-        parts.append(f'updates={committed["committed_updates"]}/{committed.get("target_updates")}')
+        target = current.get('target_updates') if running else committed.get('target_updates')
+        parts.append(f'updates={committed["committed_updates"]}/{target}')
         parts.append(f'committed learner decisions={committed["committed_used"]}/{committed.get("decision_budget")}')
         if committed.get('committed_collected') is not None:
             parts.append(f'collected learner decisions={committed["committed_collected"]}')
@@ -137,6 +154,15 @@ def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> 
     for key, label in (('collection_seconds', 'last collect'), ('update_seconds', 'last update/save')):
         if finite_number(durations.get(key)):
             parts.append(f'{label}={durations[key]:.2f}s')
+    throughput = committed.get('last_collection_games_per_second')
+    if finite_number(throughput):
+        parts.append(f'last collection={throughput:.2f} games/s')
+    elapsed = current.get('invocation_elapsed_seconds') if running else committed.get('elapsed_seconds')
+    if finite_number(elapsed):
+        parts.append(f'{"invocation elapsed" if running else "elapsed"}={elapsed:.2f}s')
+    eta = current.get('eta_seconds') if running else None
+    if finite_number(eta):
+        parts.append(f'ETA≈{eta:.0f}s')
     if durable is not None and durable['availability'] == 'stale':
         parts.append('last verified run records')
     elif durable is not None and durable['availability'] == 'partial':
@@ -311,14 +337,47 @@ class _StandaloneProgressStore:
         self.control._require_campaign_ofd(fd)
 
 
+class _StandaloneTiming:
+    """An active invocation's optional elapsed time and bounded commit history."""
+
+    def __init__(self, emit: ProgressCallback, *, target: int, budget: int,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.emit, self.target, self.budget, self.clock = emit, target, budget, clock
+        self.started = clock()
+        self.updates = ActiveRate()
+        self.decisions = ActiveRate()
+        self.estimated_end: float | None = None
+
+    def __call__(self, facts: Json) -> None:
+        from gf_cli.hpo_progress_records import collection_games_per_second
+
+        now = self.clock()
+        elapsed = now - self.started
+        generation, used = facts.get('committed_updates'), facts.get('committed_used')
+        if generation is not None and used is not None:
+            update_eta = self.updates.commit(generation, now=now, budget=self.target)['eta_seconds']
+            decision_eta = self.decisions.commit(used, now=now, budget=self.budget)['eta_seconds']
+            estimates = [eta for eta in (update_eta, decision_eta) if eta is not None]
+            self.estimated_end = now + min(estimates) if estimates else None
+            durations = facts.get('latest_durations') or {}
+            facts = {**facts, 'last_collection_games_per_second': collection_games_per_second(
+                facts.get('latest_actual_games'), durations.get('collection_seconds'))}
+        remaining = None if self.estimated_end is None else max(0., self.estimated_end - now)
+        self.emit({**facts, 'invocation_elapsed_seconds': elapsed, 'eta_seconds': remaining})
+
+
 def standalone_publisher(control: HostControl, config: Any, ownership: RunOwnership) -> ProgressCallback:
     """Activated by the training host only while the original parent is held."""
     owner = ProgressOwner(_StandaloneProgressStore(control, ownership))
-    owner.emit({'standalone': True, 'phase': 'startup', 'model': config.model.model_id,
-        'seed': config.training.seeds[0], 'decision_budget': config.hpo_spec['decision_budget'],
-        'target_updates': config.training.max_updates,
+    limit = config.training.max_updates
+    pause = control.operation['execution_request']['pause_after_update']
+    target = min(limit, pause) if type(pause) is int and pause > 0 else limit
+    budget = config.hpo_spec['decision_budget']
+    timing = _StandaloneTiming(owner.emit, target=target, budget=budget)
+    timing({'standalone': True, 'phase': 'startup', 'model': config.model.model_id,
+        'seed': config.training.seeds[0], 'decision_budget': budget, 'target_updates': target,
         'timing_scope': 'active standalone training invocation monotonic'})
-    return owner.emit
+    return timing
 
 
 async def watch(root: Path, *, interval: float = 1., once: bool = False,
@@ -338,6 +397,11 @@ async def watch(root: Path, *, interval: float = 1., once: bool = False,
                 value = read_progress(records.live_root)
             if durable is not None:
                 value['durable'] = durable
+            live = value['snapshot']
+            if (live is not None and live.get('standalone') is True
+                    and live.get('eta_seconds') is not None
+                    and not _standalone_running(live, durable, value['availability'])):
+                live['eta_seconds'] = None
         print(json.dumps(value,allow_nan=False) if as_json else render(value),file=output,flush=True)
         if once:
             return 0

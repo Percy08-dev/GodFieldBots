@@ -449,7 +449,7 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
 
     update = {'run_id': root.name, 'generation': 6, 'schema_version': 8, 'status': 'complete',
         'metrics': {'total_loss': .07, 'entropy': .6, 'approx_kl': .005},
-        'collection_seconds': 10.4, 'update_seconds': 1.2}
+        'actual_games': 8, 'collection_seconds': 10.4, 'update_seconds': 1.2}
     stored = encode_update(update, compressed=True)
     (root / 'updates/000006.json.zst').write_bytes(stored)
     generation = {'run_id': root.name, 'generation': 6, 'schema_version': 6,
@@ -460,6 +460,7 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
     state = {'schema_version': 5, 'run_variant': 'hpo-ppo-owned-rust-player-v1',
         'run_id': root.name, 'model_id': 'mlp', 'seed': 17, 'status': 'failed',
         'updates': 6, 'used_decisions': 499, 'collected_decisions': 510,
+        'created_unix': 100., 'last_unix': 160., 'elapsed_seconds': 61.2,
         'effective_config': effective, 'config_sha256': digest(effective),
         'generation_sha256': sha256(generation_bytes).hexdigest()}
     (root / 'run.json').write_text(canonical(state))
@@ -480,6 +481,9 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
     assert observed['durable']['committed_collected'] == 126
     assert observed['durable']['latest_metrics']['total_loss'] == .07
     assert observed['durable']['latest_durations']['collection_seconds'] == 10.4
+    assert observed['durable']['last_collection_games_per_second'] == 8 / 10.4
+    assert observed['durable']['elapsed_seconds'] == 61.2
+    assert 'eta_seconds' not in observed['durable']
 
     from gf_cli import hpo_progress_records as records
 
@@ -501,6 +505,9 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
     missing = records.StandaloneProgressRecords(root).read()
     assert missing['availability'] == 'partial'
     assert missing['committed_updates'] is missing['latest_metrics'] is None
+    del state['elapsed_seconds']
+    (root / 'run.json').write_text(canonical(state))
+    assert watcher.read()['elapsed_seconds'] == 60.
 
 
 def test_standalone_render_hides_stale_transient_facts_and_explains_durable_fallback():
@@ -650,3 +657,41 @@ def test_standalone_progress_owner_renders_live_details_to_plain_stream(tmp_path
             'decision_budget': 500})
         assert 'phase=collect' in stream.getvalue()
         assert 'batch games ended=2/8' in stream.getvalue()
+
+
+@pytest.mark.parametrize(('budget', 'estimated'), [(1000, 20.), (50, 10.)])
+def test_standalone_timing_uses_intervals_and_earlier_stop_target(budget, estimated):
+    from gf_cli.hpo_progress import _StandaloneTiming
+
+    now = 100.
+    facts = []
+    observer = _StandaloneTiming(facts.append, target=4, budget=budget, clock=lambda: now)
+    for generation, used in enumerate((20, 30, 40)):
+        observer({'committed_updates': generation, 'committed_used': used,
+            'latest_actual_games': 8, 'latest_durations': {'collection_seconds': 4.}})
+        if generation < 2:
+            assert facts[-1]['eta_seconds'] is None
+        now += 10.
+    assert facts[-1]['invocation_elapsed_seconds'] == 20.
+    assert facts[-1]['last_collection_games_per_second'] == 2.
+    assert facts[-1]['eta_seconds'] == estimated
+
+
+@pytest.mark.parametrize(('availability', 'status', 'has_eta'), [
+    ('available', 'running', True),
+    ('stale', 'running', False),
+    ('available', 'paused', False),
+    ('available', 'failed', False),
+])
+def test_standalone_remaining_requires_current_live_training(availability, status, has_eta):
+    from gf_cli.hpo_progress import render
+
+    live = {'standalone': True, 'phase': 'collect', 'status': 'running', 'model': 'mlp',
+        'seed': 17, 'invocation_elapsed_seconds': 50., 'eta_seconds': 32.}
+    durable = {'availability': 'available', 'model': 'mlp', 'seed': 17,
+        'status': status, 'elapsed_seconds': 120., 'last_collection_games_per_second': 256 / 35.88}
+    text = render({'availability': availability, 'snapshot': live, 'durable': durable,
+        'message': 'observation'})
+    assert '7.13 games/s' in text
+    assert ('ETA' in text) == has_eta
+    assert ('invocation elapsed=50.00s' if has_eta else 'elapsed=120.00s') in text
