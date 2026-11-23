@@ -695,3 +695,150 @@ def test_standalone_remaining_requires_current_live_training(availability, statu
     assert '7.13 games/s' in text
     assert ('ETA' in text) == has_eta
     assert ('invocation elapsed=50.00s' if has_eta else 'elapsed=120.00s') in text
+
+
+_SCREEN_CONTROLS = {'smcup': b'\x1b[?47h', 'rmcup': b'\x1b[?47l', 'clear': b'\x1b[H\x1b[J'}
+
+
+@pytest.fixture
+def watch_terminfo(monkeypatch):
+    import curses
+
+    from gf_cli import hpo_progress as progress
+
+    calls = []
+    active_term = None
+
+    def setup(*, term, fd):
+        nonlocal active_term
+        calls.append((term, fd))
+        if term == 'unknown-term':
+            raise curses.error('no terminal database entry')
+        active_term = term
+
+    def capability(name):
+        if active_term in ('linux', 'vt100') and name != 'clear':
+            return None
+        return _SCREEN_CONTROLS[name]
+
+    monkeypatch.setattr(progress, '_WATCH_TERM', None, raising=False)
+    monkeypatch.setattr(curses, 'setupterm', setup)
+    monkeypatch.setattr(curses, 'tigetstr', capability)
+    return calls
+
+
+def test_watch_refreshes_tty_and_restores_screen_on_cancellation(tmp_path, monkeypatch, watch_terminfo):
+    from gf_cli import hpo_progress as progress
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 42
+
+    frames = 0
+
+    async def stop_after_two(_interval):
+        nonlocal frames
+        frames += 1
+        if frames == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setenv('TERM', 'xterm-256color')
+    monkeypatch.setattr(progress.asyncio, 'sleep', stop_after_two)
+    output = Terminal()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(progress.watch(tmp_path, output=output))
+    text = output.getvalue()
+    assert watch_terminfo == [('xterm-256color', 42)]
+    assert text.startswith('\x1b[?47h\x1b[H\x1b[J')
+    assert text.count('\x1b[H\x1b[J') == 2
+    assert text.count('progress unavailable') == 2
+    assert text.endswith('\x1b[?47l')
+
+
+def test_watch_restores_tty_screen_on_reader_error(tmp_path, monkeypatch, watch_terminfo):
+    from gf_cli import hpo_progress as progress
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 42
+
+    def failed(_root):
+        raise RuntimeError('watch read failed')
+
+    monkeypatch.setenv('TERM', 'xterm')
+    monkeypatch.setattr(progress, 'read_progress', failed)
+    output = Terminal()
+    with pytest.raises(RuntimeError, match='watch read failed'):
+        asyncio.run(progress.watch(tmp_path, output=output))
+    assert watch_terminfo == [('xterm', 42)]
+    assert output.getvalue() == '\x1b[?47h\x1b[?47l'
+
+
+@pytest.mark.parametrize(('term', 'tty', 'once', 'as_json'), [
+    ('xterm', True, True, False),
+    ('xterm', True, False, True),
+    ('xterm', False, False, False),
+    ('dumb', True, False, False),
+    ('linux', True, False, False),
+    ('vt100', True, False, False),
+    ('unknown-term', True, False, False),
+    (None, True, False, False),
+])
+def test_watch_keeps_plain_output_without_repeating_ansi_tty(
+    tmp_path, monkeypatch, watch_terminfo, term, tty, once, as_json,
+):
+    from gf_cli import hpo_progress as progress
+
+    class Output(io.StringIO):
+        def isatty(self):
+            return tty
+
+        def fileno(self):
+            return 43
+
+    async def stop(_interval):
+        raise asyncio.CancelledError
+
+    if term is None:
+        monkeypatch.delenv('TERM', raising=False)
+    else:
+        monkeypatch.setenv('TERM', term)
+    monkeypatch.setattr(progress.asyncio, 'sleep', stop)
+    output = Output()
+    if once:
+        assert asyncio.run(progress.watch(tmp_path, once=True, as_json=as_json, output=output)) == 0
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(progress.watch(tmp_path, as_json=as_json, output=output))
+    text = output.getvalue()
+    assert '\x1b' not in text
+    probed = term in ('linux', 'vt100', 'unknown-term')
+    assert watch_terminfo == ([(term, 43)] if probed else [])
+    if as_json:
+        assert json.loads(text)['availability'] == 'missing'
+    else:
+        assert len(text.splitlines()) == 1 and 'progress unavailable' in text
+
+
+def test_watch_does_not_reuse_cached_terminfo_for_new_term(monkeypatch, watch_terminfo):
+    from gf_cli import hpo_progress as progress
+
+    class Terminal(io.StringIO):
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 43
+
+    output = Terminal()
+    monkeypatch.setenv('TERM', 'xterm')
+    assert progress._terminal_screen(output) == ('\x1b[?47h', '\x1b[?47l', '\x1b[H\x1b[J')
+    monkeypatch.setenv('TERM', 'linux')
+    assert progress._terminal_screen(output) is None
+    assert watch_terminfo == [('xterm', 43)]

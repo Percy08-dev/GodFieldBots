@@ -380,6 +380,33 @@ def standalone_publisher(control: HostControl, config: Any, ownership: RunOwners
     return timing
 
 
+_WATCH_TERM: str | None = None
+
+
+def _terminal_screen(output: TextIO) -> tuple[str, str, str] | None:
+    global _WATCH_TERM
+    term = os.environ.get('TERM', '').strip()
+    if term.lower() in ('', 'dumb') or not output.isatty():
+        return None
+    # Python's curses keeps the first successful setupterm for the process.
+    if _WATCH_TERM is not None and term != _WATCH_TERM:
+        return None
+    try:
+        import curses
+    except ImportError:
+        return None
+    try:
+        if _WATCH_TERM is None:
+            curses.setupterm(term=term, fd=output.fileno())
+            _WATCH_TERM = term
+        enter, leave, clear = (curses.tigetstr(name) for name in ('smcup', 'rmcup', 'clear'))
+        if not enter or not leave or not clear or any(b'$<' in control for control in (enter, leave, clear)):
+            return None
+        return enter.decode('ascii'), leave.decode('ascii'), clear.decode('ascii')
+    except (curses.error, OSError, ValueError):
+        return None
+
+
 async def watch(root: Path, *, interval: float = 1., once: bool = False,
                 as_json: bool = False, output: TextIO | None = None) -> int:
     if not finite_number(interval) or interval <= 0:
@@ -388,21 +415,32 @@ async def watch(root: Path, *, interval: float = 1., once: bool = False,
     from gf_cli.hpo_progress_records import StandaloneProgressRecords
 
     records = StandaloneProgressRecords(root)
-    while True:
-        value = read_progress(root)
-        snapshot = value['snapshot']
-        if value['availability'] != 'available' or snapshot.get('standalone') is True:
-            durable = records.read()
-            if records.live_root is not None:
-                value = read_progress(records.live_root)
-            if durable is not None:
-                value['durable'] = durable
-            live = value['snapshot']
-            if (live is not None and live.get('standalone') is True
-                    and live.get('eta_seconds') is not None
-                    and not _standalone_running(live, durable, value['availability'])):
-                live['eta_seconds'] = None
-        print(json.dumps(value,allow_nan=False) if as_json else render(value),file=output,flush=True)
-        if once:
-            return 0
-        await asyncio.sleep(interval)
+    screen = None if once or as_json else _terminal_screen(output)
+    enter, leave, prefix = screen or ('', '', '')
+    try:
+        if enter:
+            print(enter, end='', file=output, flush=True)
+        while True:
+            value = read_progress(root)
+            snapshot = value['snapshot']
+            if value['availability'] != 'available' or snapshot.get('standalone') is True:
+                durable = records.read()
+                if records.live_root is not None:
+                    value = read_progress(records.live_root)
+                if durable is not None:
+                    value['durable'] = durable
+                live = value['snapshot']
+                if (live is not None and live.get('standalone') is True
+                        and live.get('eta_seconds') is not None
+                        and not _standalone_running(live, durable, value['availability'])):
+                    live['eta_seconds'] = None
+            frame = json.dumps(value, allow_nan=False) if as_json else render(value)
+            print(prefix + frame, file=output, flush=True)
+            if once:
+                return 0
+            await asyncio.sleep(interval)
+    finally:
+        if leave:
+            # Attempt restoration even after a partial write or failed frame.
+            with contextlib.suppress(OSError, ValueError):
+                print(leave, end='', file=output, flush=True)

@@ -1622,3 +1622,8 @@ At update 2/4, the watcher displayed 2.48 games/s for the last
 collection, 28.41 seconds elapsed and an estimated 13 seconds
 remaining. The failed historical run showed 7.13 games/s and 372.90
 seconds elapsed. Its ETA was absent.
+
+An actual pseudo-terminal with `TERM=xterm-256color` redrew repeated
+watch frames in the alternate screen and restored the original screen
+on Ctrl+C. The same check kept line output for `linux` and `vt100`,
+and `--once` emitted plain text.

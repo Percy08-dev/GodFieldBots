@@ -368,6 +368,8 @@ gf-bots hpo watch --path runs/hpo-resident-workers/functional/parents/campaign-m
 
 watchは実行lockを取らず、Torch/Optuna/GPUを読み込まない読み取り専用の監視です。
 campaignまたはcomparisonディレクトリを指定し、Ctrl-Cで監視だけを終了できます。
+対応する対話端末では同じ画面に最新の観測を表示し、終了時に元の画面に戻ります。
+`--once`、`--json`、リダイレクト時は行形式で出力します。
 `telemetry/progress.json`は最大64KiBの最新観測であり、再開・Source資格・目的値・
 終了確認の権威には使いません。欠落・不正・5秒超の更新遅延はそのまま表示します。
 
