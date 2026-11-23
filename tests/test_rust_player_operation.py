@@ -448,3 +448,34 @@ def test_legacy_operation_uses_real_routine_boundary_and_exact_job_ledger(tmp_pa
     assert events == ['admitted', 'collected', 'trained'] + (['completion-closed'] if failure in ('complete', 'completion') else []) + ['job-closed']
     assert_unlocked(namespace / 'lock')
     assert not (namespace / 'campaign.json').exists()
+
+
+def test_standalone_monitor_hint_precedes_exec_and_stays_on_stderr(tmp_path, monkeypatch, capsys):
+    import shlex
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from tools import rust_player_operation as operation
+
+    parent = tmp_path / "owned path with ' quotes"
+    loaded = SimpleNamespace(config=SimpleNamespace(schema_version=6))
+    monkeypatch.setattr(operation, 'operation_inputs',
+        lambda *args, **kwargs: (loaded, object(), context(), tmp_path))
+    monkeypatch.setattr(operation, '_invocation_data', lambda *args, **kwargs: {})
+
+    def execute():
+        captured = capsys.readouterr()
+        assert not captured.out
+        _, command = captured.err.split(': ', 1)
+        assert shlex.split(command) == [sys.executable, '-m', 'gf_cli', 'hpo', 'watch', '--path', str(parent)]
+        raise SystemExit(0)
+
+    @contextmanager
+    def prepare(*args, **kwargs):
+        yield SimpleNamespace(operation={'parent_directory': str(parent)}, execute=execute,
+            store=SimpleNamespace(put=lambda *args: None))
+
+    monkeypatch.setattr(entry, 'prepare_hpo_operation', prepare)
+    with pytest.raises(SystemExit, match='0'):
+        operation.main(['--config', 'unused', '--run-id', RUN_ID, '--experiment-id', EXPERIMENT,
+            '--learning-seed', '17', '--mode', 'fresh'])

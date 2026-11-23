@@ -1109,6 +1109,12 @@ requires a caller-specific stable sort or explicit tie key.
 
 ## Config and compatibility
 
+Standalone supervised HPO6 publishes a bounded latest progress observation
+while the training host holds the original parent. The monitor reads that
+observation and can inspect hash-checked committed metrics from older runs.
+Progress carries aggregate phase and count data and grants no policy, Source
+or completion authority.
+
 Use TOML/dataclasses with closed schemas and explicit type/domain checks.
 Reject unknown keys, bool-as-int, nonfinite numbers, unknown versions, bad
 references/cycles, unsupported models and model/training mismatches before I/O.

@@ -1583,3 +1583,34 @@ The SHA256 of `summary.json` is
 `591d2b88eb08e856216f74d041049f2ff0ae193fcce6b88a6aa14d54e1b75bca`.
 The SHA256 of `times.csv` is
 `a7d82bf724c3779ba4a9ebc51dfa0ab01373b79a4695d0a88cae56281c6d7c4b`.
+
+## Standalone HPO6 progress
+
+The scoped regression suite covers launch-command quoting, post-ACK game
+counts, malformed and stale samples, and the committed-generation fallback.
+It exercises the original operation Store lock and the diagnostic namespace
+outside the training parent. The match-pump tests require local sockets
+and executor wakeup to work.
+
+```sh
+python -m pytest -q -n0 tests/test_hpo_progress.py tests/test_rust_player_operation.py tests/test_rust_player_matches.py
+```
+
+A fresh standalone HPO6 invocation with `--learning-seed 17` and
+`--pause-after-update 1` ran eight games on the corrected Simulator
+`3172da4`. It printed a copyable monitor command to stderr and
+returned one final stdout JSON after cold finalization. An external
+reader observed the collect count increase from 0/8 to 1/8, then
+recorded 8/8 and the update, save and cleanup phases. The last sample
+reported one committed update with 77 learner decisions and the
+matching loss, entropy and approximate KL. Progress was under the
+existing standalone operation Store. The training parent had no
+telemetry directory.
+
+The lock-free watcher also read run
+`c254e6a6-fd44-41a0-9172-6a6f7ff01894` from the earlier preset.
+It showed the failed status, six hash-checked committed updates and
+their last metrics. Live phase and count data were unavailable in
+that historical run. The smoke verifies the observation path at
+eight games. A 1,000-update monitoring overhead measurement remains
+outside this evidence.

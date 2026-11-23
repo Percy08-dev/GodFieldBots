@@ -14,6 +14,7 @@ from typing import Any
 
 from gf_common.diverse_actions import NumericCosts
 from gf_common.domain import ContractError, Json, digest, group_health_failures
+from gf_common.hpo_progress import ProgressCallback
 from gf_common.hpo_storage import (
     check_collection_destinations,
     check_staged_collection_destinations,
@@ -231,9 +232,10 @@ class RustPlayerCollector:
                     contexts[episode.episode_id]['learner_viewer'] = viewer
         return contexts
 
-    async def collect(self, plan: Any, resources: Any = None) -> RustCollectedBatch:
+    async def collect(self, plan: Any, resources: Any = None, *,
+                      progress: ProgressCallback | None = None) -> RustCollectedBatch:
         try:
-            result = await self._collect_owned(plan)
+            result = await self._collect_owned(plan, progress=progress)
         except BaseException as failure:
             if self._work is not None:
                 try:
@@ -267,7 +269,8 @@ class RustPlayerCollector:
                 invocation_id=self.registry.admission.observation["invocation_id"], phase="idle"))
         return result
 
-    async def _collect_owned(self, plan: Any) -> RustCollectedBatch:
+    async def _collect_owned(self, plan: Any, *,
+                             progress: ProgressCallback | None = None) -> RustCollectedBatch:
         from gf_common.card_instance_rules import rule_signature
         from gf_common.card_instance_runtime import game_binding
         from gf_common.domain import EpisodeResult
@@ -372,7 +375,7 @@ class RustPlayerCollector:
                 output=plan.output if work is None else work,
                 execution_deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
                 game_concurrency=self.declaration["game_concurrency"], run_id=self.registry.state["run_id"],
-                batch_id=plan.linkage["batch_id"], evidence=evidence,
+                batch_id=plan.linkage["batch_id"], evidence=evidence, progress=progress,
                 **({} if http_diagnostics is None else {"http_diagnostics": http_diagnostics,
                     "operation_id": actual["operation_id"]}))
             accepted, bound_contexts, completed_groups = execution.accepted, execution.bound_contexts, execution.completed_groups

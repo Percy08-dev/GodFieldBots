@@ -431,3 +431,222 @@ def test_worker_constructor_display_failure_preserves_original_update_close(tmp_
     else:
         # Same shared factory as Wire6; its constructor is display-only.
         assert hpo_progress.optional_diagnostic_emitter(dict(__import__('os').environ),io.StringIO()) is None
+
+
+def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(tmp_path, monkeypatch):
+    from gf_cli.hpo_progress import watch
+    from gf_common.domain import canonical, digest
+    from gf_common.hpo_update_bytes import encode_update
+
+    root = tmp_path / '00000000-0000-0000-0000-000000000017'
+    (root / 'updates').mkdir(parents=True)
+    (root / 'generations').mkdir()
+    effective = {'training': {'max_updates': 100}, 'hpo_spec': {'schema_version': 6,
+        'decision_budget': 500, 'storage': {'hpo_diagnostics': {'update_compression': 'zstd',
+        'http_log_ram_root': '/tmp/ram', 'http_log_archive_root': '/tmp/archive',
+        'http_log_retention': 'errors', 'http_log_compression': 'zstd'}}}}
+    from hashlib import sha256
+
+    update = {'run_id': root.name, 'generation': 6, 'schema_version': 8, 'status': 'complete',
+        'metrics': {'total_loss': .07, 'entropy': .6, 'approx_kl': .005},
+        'collection_seconds': 10.4, 'update_seconds': 1.2}
+    stored = encode_update(update, compressed=True)
+    (root / 'updates/000006.json.zst').write_bytes(stored)
+    generation = {'run_id': root.name, 'generation': 6, 'schema_version': 6,
+        'used_decisions': 123, 'collected_decisions': 126,
+        'update_sha256': sha256(stored).hexdigest()}
+    generation_bytes = canonical(generation).encode()
+    (root / 'generations/000006.json').write_bytes(generation_bytes)
+    state = {'schema_version': 5, 'run_variant': 'hpo-ppo-owned-rust-player-v1',
+        'run_id': root.name, 'model_id': 'mlp', 'seed': 17, 'status': 'failed',
+        'updates': 6, 'used_decisions': 499, 'collected_decisions': 510,
+        'effective_config': effective, 'config_sha256': digest(effective),
+        'generation_sha256': sha256(generation_bytes).hexdigest()}
+    (root / 'run.json').write_text(canonical(state))
+    (root / '.rust-player').mkdir()
+    (root / '.rust-player/operation-fresh.json').write_text(canonical({
+        'schema_version': 2, 'operation_type': 'hpo-train', 'run_id': root.name,
+        'config_sha256': state['config_sha256'],
+    }))
+
+    output = io.StringIO()
+    assert asyncio.run(watch(root, once=True, as_json=True, output=output)) == 0
+    observed = json.loads(output.getvalue())
+    assert observed['availability'] == 'missing'
+    assert observed['snapshot'] is None
+    assert observed['durable']['status'] == 'failed'
+    assert observed['durable']['committed_updates'] == 6
+    assert observed['durable']['committed_used'] == 123
+    assert observed['durable']['committed_collected'] == 126
+    assert observed['durable']['latest_metrics']['total_loss'] == .07
+    assert observed['durable']['latest_durations']['collection_seconds'] == 10.4
+
+    from gf_cli import hpo_progress_records as records
+
+    watcher = records.StandaloneProgressRecords(root)
+    assert watcher.read() == observed['durable']
+
+    def unexpected_update(*args, **kwargs):
+        pytest.fail('unchanged durable generation decoded its update twice')
+
+    monkeypatch.setattr(records, 'read_hpo_update', unexpected_update)
+    state['status'] = 'running'
+    (root / 'run.json').write_text(canonical(state))
+    assert watcher.read() == observed['durable'] | {'status': 'running'}
+
+    # The pointer advances but the counterpart is temporarily unavailable.
+    state.update(updates=7, generation_sha256='a' * 64)
+    (root / 'run.json').write_text(canonical(state))
+    assert watcher.read() == observed['durable'] | {'status': 'running', 'availability': 'stale'}
+    missing = records.StandaloneProgressRecords(root).read()
+    assert missing['availability'] == 'partial'
+    assert missing['committed_updates'] is missing['latest_metrics'] is None
+
+
+def test_standalone_render_hides_stale_transient_facts_and_explains_durable_fallback():
+    from gf_cli.hpo_progress import render
+
+    snapshot = {'standalone': True, 'phase': 'collect', 'status': 'running', 'model': 'mlp',
+        'seed': 17, 'batch_games_ended': 4, 'batch_games_planned': 8}
+    durable = {'availability': 'available', 'model': 'mlp', 'seed': 17, 'status': 'failed',
+        'committed_updates': 6, 'target_updates': 1000, 'committed_used': 123, 'decision_budget': 500}
+    stale = {'availability': 'stale', 'snapshot': snapshot, 'durable': durable, 'message': 'unconfirmed'}
+    expired = render(stale)
+    assert 'phase=' not in expired and 'batch games' not in expired
+    assert 'status=failed' in expired and 'updates=6/1000' in expired
+    assert 'live snapshot stale' in expired
+    live = render({'availability': 'available', 'snapshot': snapshot, 'message': 'observed'})
+    assert 'phase=collect' in live and 'batch games ended=4/8' in live
+
+
+def test_match_progress_is_event_loop_observation_of_acked_terminal_records(tmp_path, monkeypatch):
+    import threading
+
+    from tests.test_rust_player_matches import pump_fixture
+
+    pump, _, _, _, _, events, execute = pump_fixture(tmp_path, monkeypatch)
+    original = pump.execute
+    caller = threading.current_thread()
+    observed = []
+
+    def progress(facts):
+        assert threading.current_thread() is caller
+        ended = len(observed) + 1
+        acked = {entry[1] for entry in events if entry[0] == 'ack'}
+        assert set(range(1, ended + 1)) <= acked
+        assert facts == {'batch_games_ended': ended}
+        observed.append(ended)
+        raise RuntimeError('optional display failure after recording')
+
+    monkeypatch.setattr(pump, 'execute', lambda *args, **kwargs: original(*args, progress=progress, **kwargs))
+    result = asyncio.run(execute())
+    assert observed == list(range(1, result.total + 1))
+
+
+@pytest.mark.parametrize('fault', [None, 'symlink', 'wrong-record', 'unsafe-id'])
+def test_standalone_progress_namespace_is_outside_training_parent(tmp_path, fault):
+    import os
+    from types import SimpleNamespace
+
+    from gf_cli.hpo_progress import ProgressOwner, _StandaloneProgressStore, watch
+    from gf_common.domain import ContractError, canonical
+    from gf_training.lineage import _HELD_RUN_OWNERS, run_lock
+    from gf_training.rust_player_supervision import HostControl
+
+    parent = tmp_path / '00000000-0000-0000-0000-000000000017'
+    experiment = '00000000-0000-0000-0000-000000000018'
+    namespace = tmp_path / '.operation-control' / experiment / parent.name
+    operation = {'schema_version': 2, 'operation_type': 'hpo-train',
+        'run_id': parent.name, 'parent_directory': str(parent), 'config_sha256': 'c' * 64,
+        'expected_context': {'campaign_id': experiment, 'operation_id': 'a' * 32,
+            'kind': 'training', 'run_id': parent.name, 'evaluation_id': None}}
+    with (
+        run_lock(parent, create=True) as held,
+        CampaignStore(namespace, mode='fresh', max_owned_bytes=8*1024**2) as store,
+    ):
+        fd = store._lock.fileno()
+        lock, directory = os.fstat(fd), namespace.stat()
+        record = {'schema_version': 1, 'kind': 'hpo-operation-control-data-v1',
+            'experiment_id': experiment, 'run_id': parent.name, 'namespace_directory': str(namespace),
+            'parent_directory': str(parent), 'config_sha256': 'd' * 64 if fault == 'wrong-record' else 'c' * 64,
+            'namespace_identity': {'directory_device': directory.st_dev, 'directory_inode': directory.st_ino,
+                'lock_device': lock.st_dev, 'lock_inode': lock.st_ino}}
+        store.put('operation-control.json', record)
+        if fault == 'unsafe-id':
+            operation['expected_context']['campaign_id'] = '../unsafe'
+        (parent / '.rust-player').mkdir()
+        (parent / '.rust-player/operation-fresh.json').write_text(canonical(operation))
+        before = {name.relative_to(parent): name.stat().st_size for name in parent.rglob('*')}
+        control = SimpleNamespace(operation=operation,
+            _borrowed={'campaign': {'fd': fd, 'device': lock.st_dev, 'inode': lock.st_ino}},
+            _require_campaign_ofd=HostControl._require_campaign_ofd,
+            _require_parent_borrower=lambda *_: None)
+        original = _HELD_RUN_OWNERS[parent]
+        if fault in ('wrong-record', 'unsafe-id'):
+            with pytest.raises((ContractError, ValueError)):
+                _StandaloneProgressStore(control, held)
+        else:
+            adapter = _StandaloneProgressStore(control, held)
+            # Matching directory/inode is insufficient without the exact
+            # supervised holder of the parent lock.
+            with pytest.raises(ContractError, match='same supervised parent'):
+                adapter._require()
+            original.control = control
+            try:
+                owner = ProgressOwner(adapter, mode='off', stream=io.StringIO())
+                owner.emit({'standalone': True, 'phase': 'collect', 'batch_games_ended': 3,
+                    'batch_games_planned': 8})
+                assert (namespace / 'telemetry/progress.json').exists()
+                if fault == 'symlink':
+                    moved = namespace.with_name('moved')
+                    namespace.rename(moved)
+                    namespace.symlink_to(moved)
+                    owner.emit({'phase': 'source'})
+                    assert owner.disabled
+            finally:
+                original.control = None
+        output = io.StringIO()
+        assert asyncio.run(watch(parent, once=True, as_json=True, output=output)) == 0
+        observed = json.loads(output.getvalue())
+        if fault is None:
+            assert observed['snapshot']['batch_games_ended'] == 3
+        else:
+            assert observed['availability'] == 'missing'
+        assert {name.relative_to(parent): name.stat().st_size for name in parent.rglob('*')} == before
+
+
+@pytest.mark.parametrize('bad', [
+    {'latest_metrics': [1]},
+    {'latest_durations': 'unknown'},
+    {'committed_updates': 1},
+    {'committed_used': 1},
+    {'committed_updates': True, 'committed_used': 1},
+])
+def test_malformed_standalone_snapshot_is_optional_and_does_not_break_watch(tmp_path, bad):
+    from gf_cli.hpo_progress import watch
+
+    folder = tmp_path / 'telemetry'
+    folder.mkdir()
+    snapshot = {'schema_version': 1, 'kind': 'hpo-progress', 'updated_unix': 1,
+        'standalone': True, 'phase': 'collect', 'status': 'running'}
+    (folder / 'progress.json').write_text(json.dumps(snapshot | bad))
+    for as_json in (False, True):
+        output = io.StringIO()
+        assert asyncio.run(watch(tmp_path, once=True, as_json=as_json, output=output)) == 0
+        if as_json:
+            assert json.loads(output.getvalue())['availability'] == 'invalid'
+        else:
+            assert 'invalid snapshot' in output.getvalue()
+
+
+def test_standalone_progress_owner_renders_live_details_to_plain_stream(tmp_path):
+    from gf_cli.hpo_progress import ProgressOwner
+
+    with CampaignStore(tmp_path/'diagnostic-store', mode='fresh', max_owned_bytes=8*1024**2) as store:
+        stream = io.StringIO()
+        owner = ProgressOwner(store, mode='plain', stream=stream)
+        owner.emit({'standalone': True, 'phase': 'collect', 'model': 'mlp', 'seed': 17,
+            'batch_games_ended': 2, 'batch_games_planned': 8, 'target_updates': 1000,
+            'decision_budget': 500})
+        assert 'phase=collect' in stream.getvalue()
+        assert 'batch games ended=2/8' in stream.getvalue()

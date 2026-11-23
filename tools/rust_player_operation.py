@@ -9,9 +9,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import shlex
 import sys
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -135,6 +137,10 @@ def main(argv: list[str] | None = None) -> int:
             prepared.store.put(f'invocations/{context.operation_id}.json',
                 _invocation_data(loaded, materialized, context, mode=args.mode,
                     pause_after_update=args.pause_after_update))
+            with suppress(OSError, ValueError):  # Optional display only.
+                monitor = shlex.join([sys.executable, '-m', 'gf_cli', 'hpo', 'watch',
+                    '--path', prepared.operation['parent_directory']])
+                print(f'HPO monitor: {monitor}', file=sys.stderr, flush=True)
             prepared.execute()  # Actual exec replaces this process; no Python parent remains.
         raise ContractError('fixed operation supervisor exec unexpectedly returned')
     output = asyncio.run(_legacy_operation(loaded, materialized, context, namespace,

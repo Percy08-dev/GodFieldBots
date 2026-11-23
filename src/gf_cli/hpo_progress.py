@@ -12,10 +12,14 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
-from gf_common.domain import Json
-from gf_common.hpo_progress import PHASES, finite_number
+from gf_common.domain import ContractError, Json
+from gf_common.hpo_progress import PHASES, ProgressCallback, finite_number
+
+if TYPE_CHECKING:
+    from gf_training.lineage import RunOwnership
+    from gf_training.rust_player_supervision import HostControl
 
 MAX_BYTES = 65536
 
@@ -36,6 +40,20 @@ def _checked(value: Any) -> Json:
             pending.extend(item)
         elif type(item) in (int,float) and not finite_number(item):
             raise ValueError('nonfinite progress value')
+    if value.get('standalone') is True:
+        for name in ('seed', 'committed_updates', 'committed_used', 'committed_collected',
+                     'decision_budget', 'target_updates', 'batch_games_planned', 'batch_games_ended',
+                     'transient_learner_decisions'):
+            field = value.get(name)
+            if field is not None and (type(field) is not int or field < 0):
+                raise ValueError('invalid standalone progress counter')
+        if (value.get('committed_updates') is None) != (value.get('committed_used') is None):
+            raise ValueError('standalone committed counters require both values')
+        for name in ('latest_metrics', 'latest_durations'):
+            fields = value.get(name)
+            if fields is not None and (type(fields) is not dict or
+                    any(item is not None and not finite_number(item) for item in fields.values())):
+                raise ValueError('invalid standalone progress scalars')
     return value
 
 
@@ -67,6 +85,9 @@ def read_progress(root: Path, *, now: float | None = None) -> Json:
 
 def render(value: Json) -> str:
     snapshot = value.get('snapshot')
+    durable = value.get('durable')
+    if durable is not None or snapshot is not None and snapshot.get('standalone') is True:
+        return _render_standalone(value, snapshot, durable)
     if snapshot is None:
         return value['message']
     used, budget = snapshot.get('committed_used'), snapshot.get('decision_budget')
@@ -83,6 +104,49 @@ def render(value: Json) -> str:
         f'seed={snapshot.get("seed") if snapshot.get("seed") is not None else snapshot.get("left_seed")} '
         f'{snapshot["phase"]} {snapshot["status"]}{committed}{transient}{speed}{loss}{pending} '
         f'[{value["message"]}]')
+
+
+def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> str:
+    current = live or {}
+    committed = durable or current
+    live_availability = value.get('availability', 'available')
+    parts = [f'{committed.get("model", "mlp")} standalone HPO seed={committed.get("seed")}']
+    if live is not None and live_availability == 'available':
+        parts.append(f'phase={current["phase"]}')
+        ended, planned = current.get('batch_games_ended'), current.get('batch_games_planned')
+        if type(ended) is int and type(planned) is int:
+            parts.append(f'batch games ended={ended}/{planned}')
+        pending = current.get('transient_learner_decisions')
+        if type(pending) is int:
+            parts.append(f'batch selected learner decisions={pending}')
+    status = committed.get('status')
+    if status is not None:
+        parts.append(f'{"run record" if durable is not None else "live"} status={status}')
+    if committed.get('host_result') == 'awaiting-supervised-finalization':
+        parts.append('run record written before supervised finalization')
+    if committed.get('committed_updates') is not None:
+        parts.append(f'updates={committed["committed_updates"]}/{committed.get("target_updates")}')
+        parts.append(f'committed learner decisions={committed["committed_used"]}/{committed.get("decision_budget")}')
+        if committed.get('committed_collected') is not None:
+            parts.append(f'collected learner decisions={committed["committed_collected"]}')
+    metrics = committed.get('latest_metrics') or {}
+    for key, label in (('total_loss', 'loss'), ('entropy', 'entropy'), ('approx_kl', 'KL')):
+        if finite_number(metrics.get(key)):
+            parts.append(f'{label}={metrics[key]:.4g}')
+    durations = committed.get('latest_durations') or {}
+    for key, label in (('collection_seconds', 'last collect'), ('update_seconds', 'last update/save')):
+        if finite_number(durations.get(key)):
+            parts.append(f'{label}={durations[key]:.2f}s')
+    if durable is not None and durable['availability'] == 'stale':
+        parts.append('last verified run records')
+    elif durable is not None and durable['availability'] == 'partial':
+        parts.append('committed records unavailable')
+    message = value['message']
+    if durable is not None and live_availability != 'available':
+        live_state = 'stale' if live_availability == 'stale' else 'unavailable'
+        message = f'run records; live snapshot {live_state}'
+    parts.append(f'[{message}]')
+    return ' '.join(parts)
 
 
 class ProgressOwner:
@@ -217,13 +281,63 @@ class ProgressOwner:
                     raise
 
 
+class _StandaloneProgressStore:
+    """Diagnostic-only view of an existing supervised parent lock."""
+
+    def __init__(self, control: HostControl, ownership: RunOwnership) -> None:
+        from gf_cli.hpo_progress_records import checked_namespace
+        from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES, SealedScan
+
+        self.control, self.ownership = control, ownership
+        self.parent = ownership.directory
+        scan = SealedScan(max_owned_bytes=MAX_SEALED_SCAN_BYTES, deadline=time.monotonic() + 1.)
+        self.directory, self.identity, self.lock = checked_namespace(self.parent, control.operation, scan)
+
+    def _require(self) -> None:
+        from gf_cli.hpo_progress_records import namespace_identity
+        from gf_training.lineage import _HELD_RUN_OWNERS, require_hpo_run_owner
+
+        require_hpo_run_owner(self.parent, self.ownership)
+        if (_HELD_RUN_OWNERS[self.parent].control is not self.control
+                or self.control.operation['parent_directory'] != str(self.parent)):
+            raise ContractError('standalone progress requires the same supervised parent owner')
+        mapping = self.control._borrowed['campaign']
+        fd = mapping['fd']
+        lock = os.fstat(fd)
+        if (self.lock != (mapping['device'], mapping['inode'])
+                or self.lock != (lock.st_dev, lock.st_ino)
+                or namespace_identity(self.directory) != (self.identity, self.lock)):
+            raise ContractError('standalone progress original control Store identity changed')
+        self.control._require_campaign_ofd(fd)
+
+
+def standalone_publisher(control: HostControl, config: Any, ownership: RunOwnership) -> ProgressCallback:
+    """Activated by the training host only while the original parent is held."""
+    owner = ProgressOwner(_StandaloneProgressStore(control, ownership))
+    owner.emit({'standalone': True, 'phase': 'startup', 'model': config.model.model_id,
+        'seed': config.training.seeds[0], 'decision_budget': config.hpo_spec['decision_budget'],
+        'target_updates': config.training.max_updates,
+        'timing_scope': 'active standalone training invocation monotonic'})
+    return owner.emit
+
+
 async def watch(root: Path, *, interval: float = 1., once: bool = False,
                 as_json: bool = False, output: TextIO | None = None) -> int:
     if not finite_number(interval) or interval <= 0:
         raise ValueError('watch interval must be finite and positive')
     output = sys.stdout if output is None else output
+    from gf_cli.hpo_progress_records import StandaloneProgressRecords
+
+    records = StandaloneProgressRecords(root)
     while True:
         value = read_progress(root)
+        snapshot = value['snapshot']
+        if value['availability'] != 'available' or snapshot.get('standalone') is True:
+            durable = records.read()
+            if records.live_root is not None:
+                value = read_progress(records.live_root)
+            if durable is not None:
+                value['durable'] = durable
         print(json.dumps(value,allow_nan=False) if as_json else render(value),file=output,flush=True)
         if once:
             return 0

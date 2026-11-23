@@ -766,7 +766,14 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                    'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
                         if game:
                             linkage = ops.linkage(state, directory, generation, groups, registry)
-                        if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
+                        if hpo:
+                            if rust:
+                                ops.phase('collect', batch_games_ended=0,
+                                    batch_games_planned=len(linkage['learner_seats']),
+                                    transient_learner_decisions=None)
+                            else:
+                                ops.phase('collect', transient_games=0, transient_learner_decisions=None,
+                                    transient_total_game_actions=0)
                         transition_phase(performance, 'collection', run_id=state['run_id'], batch_id=batch_id)
                         collection_started = time.monotonic()
                         plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
@@ -920,6 +927,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                   'planned_games': sum(len(group.episodes) for group in groups), 'actual_games': proof['games'], 'health': {},
                                   'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                                   'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
+                        if hpo and rust:
+                            ops.phase('save')
                         transition_phase(performance, 'save')
                         if ops:
                             if game:

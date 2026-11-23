@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 from gf_common.domain import ContractError, Json
+from gf_common.hpo_progress import ProgressCallback, observe
 from gf_models.arrays import sha256
 from gf_models.rust_player import serialized_torch
 from gf_training.rust_player_supervision import HostAdmission
@@ -380,6 +381,8 @@ class RustGameOperations:
         self.collector: Any = None
         self.device_account: Any = None
         self._ownership: Any = None
+        self._progress_factory: Callable[[Any], ProgressCallback] | None = None
+        self._progress: ProgressCallback | None = None
         self.host_health: Json
         self.resume_audit: Any = None
         self._failure_traceback: Any = None
@@ -437,7 +440,13 @@ class RustGameOperations:
                 # The fixed handler retains this SAME pool for the final
                 # protocol serialization after the borrower FD closes. Data
                 # loans retire earlier; the control allowance closes after ACK.
-                yield ownership
+                if self._progress_factory is not None:
+                    with suppress(Exception):  # Optional startup diagnostics only.
+                        self._progress = self._progress_factory(ownership)
+                try:
+                    yield ownership
+                finally:
+                    self._progress = None
                 if self.resume_audit is not None:
                     self.resume_audit.close()
         return held()
@@ -685,7 +694,8 @@ class RustGameOperations:
         from gf_training.rust_player_registry import RustSavedPolicy
         if registry is not self.registry:
             raise ContractError('actual current native collection registry required')
-        collection = await self.collector.collect(plan, registry)
+        options = {} if self._progress is None else {'progress': self._progress}
+        collection = await self.collector.collect(plan, registry, **options)
         directory = self._ownership.directory / 'retirement'
         directory.mkdir(exist_ok=True)
         accounting = {'schema_version': 1, 'kind': 'rust-player-source-accounting-v1',
@@ -782,6 +792,17 @@ class RustGameOperations:
             self.sample_cuda(f'generation-{generation}-published')
         if update is not None:
             self.last_source_manifest_sha256 = update['collection_manifest_sha256']
+        if self._progress is not None:
+            metrics = None if update is None else {
+                name: update['metrics'].get(name) for name in
+                ('total_loss', 'policy_loss', 'value_mse', 'entropy', 'approx_kl')
+            }
+            durations = None if update is None else {
+                name: update.get(name) for name in ('collection_seconds', 'update_seconds')
+            }
+            observe(self._progress, {'committed_updates': row['generation'],
+                'committed_used': row['used_decisions'], 'committed_collected': row['collected_decisions'],
+                'latest_metrics': metrics, 'latest_durations': durations})
         return row
 
     def close_batch(self) -> None:
@@ -1069,11 +1090,12 @@ def run_ordinary(control: Any, operation: Json, *, loaded: Any) -> Json:
 
 def run_hpo(control: Any, operation: Json, *, loaded: Any,
             _campaign_parent_scope: Any = None, _campaign_owner: Any = None,
-            _campaign_admitted: Any = None) -> Json:
+            _campaign_admitted: Any = None,
+            _progress_factory: Callable[[Any], ProgressCallback] | None = None) -> Json:
     """Fixed internal Model4 entry under actual global HPO admission."""
     return _run_local(control, operation, loaded=loaded, hpo=True,
         _campaign_parent_scope=_campaign_parent_scope, _campaign_owner=_campaign_owner,
-        _campaign_admitted=_campaign_admitted)
+        _campaign_admitted=_campaign_admitted, _progress_factory=_progress_factory)
 
 
 @contextmanager
@@ -1138,7 +1160,8 @@ def _configure_device_environment(config: Any) -> bool:
 
 def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
                _campaign_parent_scope: Any = None, _campaign_owner: Any = None,
-               _campaign_admitted: Any = None) -> Json:
+               _campaign_admitted: Any = None,
+               _progress_factory: Callable[[Any], ProgressCallback] | None = None) -> Json:
     from gf_simulator_client.performance_diagnostics import host_diagnostics, transition_phase
     performance = host_diagnostics()
     transition_phase(performance, 'startup', run_id=operation.get('run_id'),
@@ -1212,6 +1235,7 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
             admitted_sequence = control._next_sequence
             ops = RustHpoOperations(control, loaded, admission) if hpo else RustGameOperations(control, loaded, admission)
             ops._outgoing_owner = outgoing
+            ops._progress_factory = _progress_factory
             try:
                 report = asyncio.run(_run_ppo(loaded, ops.collect, parent,
                     mode=request['mode'], pause_after_update=request['pause_after_update'], _game_ops=ops))
@@ -1344,6 +1368,8 @@ class RustHpoOperations(RustGameOperations):
 
     def phase(self, phase: str, **facts: Any) -> None:
         self.coordinator_phase = phase
+        if self._progress is not None:
+            observe(self._progress, {'phase': phase, **facts})
 
     def groups(self, config: Any, generation: int, label: str, snapshots: tuple[str, ...], rng: Any) -> Any:
         from dataclasses import asdict

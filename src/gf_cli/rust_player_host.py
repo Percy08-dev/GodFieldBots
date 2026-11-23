@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,8 @@ def _cold_output(control: HostControl, result: Any, loaded: Any) -> str:
 
 def _dispatch(control: HostControl, phase: str) -> str | None:
     arguments: tuple[Any, ...]
-    campaign = control.initial_operation['operation_type'] == 'campaign-continue'
+    initial = control.initial_operation['operation_type']
+    campaign = initial == 'campaign-continue'
     if campaign:
         _ = control.campaign_bootstrap  # mandatory authenticated original purpose; no directory guess
         if phase == 'campaign-return':
@@ -96,7 +98,13 @@ def _dispatch(control: HostControl, phase: str) -> str | None:
         loaded = load_rust_player_effective(
             Path(operation["config_path"]), expected_sha256=operation["config_sha256"]
         )
-        result = handler(*arguments, loaded=loaded)
+        if phase == 'host' and initial == 'hpo-train' and function_name == 'run_hpo':
+            from gf_cli.hpo_progress import standalone_publisher
+
+            result = handler(*arguments, loaded=loaded,
+                _progress_factory=partial(standalone_publisher, control, loaded.config))
+        else:
+            result = handler(*arguments, loaded=loaded)
         if phase == "cold":
             try:
                 output = _cold_output(control, result, loaded)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gf_common.domain import ContractError, EpisodeGroup, Json, clone, digest
+from gf_common.hpo_progress import ProgressCallback, observe
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.http_diagnostics import HttpFacts, HttpPairCapture
 from gf_simulator_client.process import ManagedServer
@@ -57,7 +58,8 @@ class RustMatchPump:
                       cleanup_deadline: float, game_concurrency: int, run_id: str,
                       batch_id: str, evidence: CardInstanceRuntimeEvidence,
                       http_diagnostics: HPODiagnosticsConfig | None = None,
-                      operation_id: str | None = None) -> RustMatchResult:
+                      operation_id: str | None = None,
+                      progress: ProgressCallback | None = None) -> RustMatchResult:
         """Caller already preflighted; errors return through its original cleanup."""
         accepted: list[Json] = []
         bound_contexts: dict[int, str] = {}
@@ -189,6 +191,10 @@ class RustMatchPump:
                     await terminal_ready.wait()
                     continue
                 terminal_count += 1
+                if progress is not None:
+                    # Terminal receipts include abnormal closures. Storage ACK
+                    # precedes the event-loop observation, not durable sealing.
+                    observe(progress, {'batch_games_ended': terminal_count})
                 index = episode_group[row['episode']]
                 positions[index] += 1
                 group = groups[index]

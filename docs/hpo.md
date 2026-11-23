@@ -380,6 +380,18 @@ device全体ピークは別に扱います。進捗保存・表示の失敗は�
 現在の実装受入範囲と実機検証の状態は
 [常駐worker検証記録](verification/hpo-resident-workers.md)を参照してください。
 
+### 単独 HPO6 ランの進捗
+
+`tools/rust_player_operation.py` は起動時に、そのランの保存先を指定した
+`hpo watch` コマンドを stderr に表示します。別端末に貼り付けて監視できます。
+最終結果の JSON は stdout に出力します。
+
+進捗表示には、現在の処理フェーズ、バッチ内で終了を受領した試合数、
+確定済みの更新数・学習判断数、直近の loss・entropy・近似 KL が含まれます。
+最新の観測は操作記録側の `telemetry/progress.json` に保存します。
+以前の単独ランでは、watch が記録済みの世代と更新を照合し、確定済みの値を表示します。
+進捗の取得や表示は読み取り専用で、`Ctrl+C` は監視だけを終了します。
+
 ## 資源と保存先
 
 `[operating]`でRAM・CUDA・Source・数値配列・保存・収集の各予算、対戦並列数、
