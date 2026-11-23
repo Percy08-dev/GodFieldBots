@@ -422,12 +422,15 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 ### 保存先の設定
 
-[256試合プローブ用テンプレート](../configs/hpo/mlp-256-update-budget-probe-template.toml)を
-`configs/hpo/`内にコピーして使います。このテンプレートはちからの粉を訂正した
+[実行用TOML](../configs/hpo/mlp-256-update-budget-probe.toml)を
+`tools/rust_player_operation.py` に渡して256試合プローブを実行します。
+実行用TOMLと[テンプレート](../configs/hpo/mlp-256-update-budget-probe-template.toml)は
+ちからの粉を訂正した
 [基礎実験TOML](../configs/experiments/hpo-rust-mlp-strength-powder-base.toml)を参照します。
-実験名を変える場合は`stage`と保存先の`strength-powder`を揃えて変えます。
+別の実験ではテンプレートを `configs/hpo/` 内にコピーし、
+`stage` と保存先の `strength-powder` を揃えて変えます。
 相対パスの基準はHPO TOMLのあるディレクトリです。
-旧プローブの再現には記録済みのSimulatorと[旧実行用TOML](../configs/hpo/mlp-256-update-budget-probe.toml)を使います。
+旧プローブの再現には記録済みのSimulatorとコミット `1076f80` 時点の実行用TOMLを使います。
 
 | `[storage]`の項目 | 指定と用途 |
 | --- | --- |
@@ -441,15 +444,14 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 256試合プローブの実行用TOMLとテンプレートは、HDD上の専用ext4 VHDXを
 `/mnt/gf_data` にマウントする構成です。確定済み原本DB、親・数値データ、
-Optuna、保持するHTTPログの保存先は、新規用テンプレートが `ppo-hpo/strength-powder`、
-旧プローブの実行用TOMLが `ppo-hpo/mlp-256-probe` です。
+Optuna、保持するHTTPログを、このマウントの `ppo-hpo/strength-powder` 配下に保存します。
 別のマウント先を使う環境では、コピーしたHPO TOMLの保存先を実際の専用ext4に揃えます。
 開始時に書き込み可能な専用ext4とtmpfsを確認します。現在の空き容量で
 1万更新を完走できるかは別に測定します。
 
 #### 学習の収集作業領域をtmpfsに置く
 
-新旧の256試合プローブの基礎実験TOMLには
+256試合プローブの基礎実験TOMLには
 `collection_work_root = "/dev/shm/godfieldbots/collections"` が設定済みです。
 他の通常PPOやHPO6で使う場合は、実験側の `[storage]` に同じ項目を追加します。
 通常PPOは実験側の `db_root`、HPO6はHPO側の `originals_root` に

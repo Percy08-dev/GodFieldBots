@@ -4,7 +4,7 @@ schema_version = 6
 kind = "ppo-hpo"
 origin = "producer-owned-v1"
 encoder = "canonical-rust"
-base_experiment = "../experiments/hpo-rust-mlp-256-base.toml"
+base_experiment = "../experiments/hpo-rust-mlp-strength-powder-base.toml"
 model_id = "mlp"
 stage = "mlp-256-update-budget-probe"
 trial_count = 1
@@ -174,16 +174,17 @@ parent_budget_bytes = 1073741824
 
 [storage]
 # 収集作業は基礎実験のtmpfsを使い、確定した原本と学習データを専用ext4に保存します。
-parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
-numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
-originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/originals"
-optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-probe/study.sqlite3"
+parent_root = "/mnt/gf_data/ppo-hpo/strength-powder/parents"
+numeric_root = "/mnt/gf_data/ppo-hpo/strength-powder/parents"
+campaign_dir = "/mnt/gf_data/ppo-hpo/strength-powder/parents/campaign"
+originals_root = "/mnt/gf_data/ppo-hpo/strength-powder/originals"
+optuna_path = "/mnt/gf_data/ppo-hpo/strength-powder/study.sqlite3"
 destination_capacity_bytes = 107374182400
 admission_reservation_bytes = 1073741824
 
 [storage.hpo_diagnostics]
 http_log_ram_root = "/dev/shm/godfieldbots/http-logs"
-http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/http-logs"
+http_log_archive_root = "/mnt/gf_data/ppo-hpo/strength-powder/http-logs"
 http_log_retention = "errors"
 http_log_compression = "zstd"
 update_compression = "zstd"

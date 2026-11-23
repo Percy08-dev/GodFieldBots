@@ -41,9 +41,9 @@ the Simulator continues to own legality.
 
 The revised candidate pool can shift subsequent random draws. Acceptance uses
 controlled positions for the revised rule, and the original p11 fixture uses
-its recorded source and binary. The fresh HPO template selects the revised
-profile and uses a dedicated output namespace. The older probe config remains
-available for reproducing its original runs.
+its recorded source and binary. The HPO probe and its template select the
+revised profile and use a dedicated output namespace. The earlier probe
+configuration is available from Git at commit `1076f80`.
 
 Independent design review cleared the public information boundary and historical
 compatibility design before implementation. Release identities, checks and run
