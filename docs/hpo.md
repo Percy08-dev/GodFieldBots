@@ -424,6 +424,8 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 [実行用TOML](../configs/hpo/mlp-256-update-budget-probe.toml)を
 `tools/rust_player_operation.py` に渡して256試合プローブを実行します。
+単独実行用のHPO TOMLには、先頭のコメントに必要なPython環境と
+IDの生成を含む起動コマンドを記載します。実行時は対象TOMLのコマンドを使います。
 実行用TOMLと[テンプレート](../configs/hpo/mlp-256-update-budget-probe-template.toml)は
 ちからの粉を訂正した
 [基礎実験TOML](../configs/experiments/hpo-rust-mlp-strength-powder-base.toml)を参照します。
