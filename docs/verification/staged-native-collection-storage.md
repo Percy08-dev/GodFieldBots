@@ -115,8 +115,17 @@ The seed-17 HPO two-update attempt committed update 1. The Simulator
 returned HTTP 422 with INVALID_ACTION on pair p11 in update 2. The earlier
 direct-storage HPO run logged the same HTTP status and error code for the
 same pair. In the staged attempt the second HDD batch did not appear and
-the tmpfs workspace retired. The eight-game same-boot HPO6 continuation
-provides a separate successful full-audit check.
+the tmpfs workspace retired. The 256-game HPO6 continuation stopped during
+this collection. The eight-game same-boot HPO6 continuation completed its
+second update and passed full audit in a separate run.
+
+The direct and staged attempts had identical G1 weight and resume payloads,
+the same 39 accepted actions, and the same rejected command at revision 39.
+The fixed-seed replay reproduced the rejection independently of training or
+Pack transfer. Dream made the additional weapon appear as a discardable
+utility to the candidate generator. See the
+[diagnostic evidence and reproduction](../issues/0013-hpo-dream-discard-hidden-weapon.md).
+The storage design and its performance baseline were accepted for operation.
 
 ## Automated checks
 

@@ -1,0 +1,140 @@
+{
+  "simulator_revision": "072dabbca1458c9526897781d2fd64edeeb4f9ca",
+  "seed": "70d3a731-c339-505c-9b2d-52ba0e238abe",
+  "actor": 1,
+  "revision": 39,
+  "turn": 34,
+  "required_choice": "turn_action",
+  "own": {
+    "player_id": 1,
+    "hp": 8,
+    "mp": 10,
+    "money": 20,
+    "cards": [
+      {
+        "kind": "artifact",
+        "card_ref": "c1_4c1d6029cc925ebeb4d2c5c155a0bfb6",
+        "definition_id": "sun-amulet"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_9141215d2abe88a963a26ad8f84356a5",
+        "definition_id": "strength-powder"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_4cafcad1268a78342289c547e9c91ff2",
+        "definition_id": "buy"
+      }
+    ],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": true,
+      "dream": true,
+      "dark_cloud": false
+    },
+    "guardian": null,
+    "ascended": false
+  },
+  "end_times": false,
+  "hints": {
+    "action_options_schema_version": "2",
+    "rule_set_version": "true-match-1v1-v2",
+    "card_ref_scheme": "aes256-card-ref-v1",
+    "actor": 1,
+    "state_revision": 39,
+    "required_choice": "turn_action",
+    "usable_cards": [
+      {
+        "card_ref": "c1_9141215d2abe88a963a26ad8f84356a5",
+        "definition_id": "strength-powder"
+      }
+    ],
+    "candidate_groups": {
+      "additional_attack": [
+        {
+          "card_ref": "c1_9141215d2abe88a963a26ad8f84356a5",
+          "definition_id": "strength-powder"
+        }
+      ],
+      "utility": [
+        {
+          "card_ref": "c1_9141215d2abe88a963a26ad8f84356a5",
+          "definition_id": "strength-powder"
+        }
+      ]
+    },
+    "exchange_cards": [],
+    "sell_cards": [],
+    "buy_cards": [
+      {
+        "card_ref": "c1_4cafcad1268a78342289c547e9c91ff2",
+        "definition_id": "buy"
+      }
+    ],
+    "phenomenon_cards": [],
+    "valid_targets": [
+      1,
+      2
+    ],
+    "can_pray": false,
+    "can_discard": true,
+    "can_sacrifice": false,
+    "can_allow": false
+  },
+  "submitted": {
+    "card_refs": [
+      "c1_9141215d2abe88a963a26ad8f84356a5"
+    ],
+    "type": "discard"
+  },
+  "response": {
+    "http_status": 422,
+    "code": "INVALID_ACTION",
+    "rejection_code": "invalid_parameter",
+    "revision": 39,
+    "invalid_attempt_count": 1
+  },
+  "prefix": [
+    {"player": 2, "action": {"card_refs": ["c1_74845da310ec1fc0d984407719244ce4", "c1_fc0422558b7c788c30d5a4ba30ac1736"], "type": "discard"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_01c1d7ba8cb9072933435dfc3e1da6b2", "c1_78ff31e5ea9918bfe134f036ddcb0da7"], "target": 1, "type": "play_sequence"}},
+    {"player": 2, "action": {"card_refs": ["c1_654a4b1dfa5a477b53affb8b86ff17b6", "c1_1b484433dce47fab8119c2f1d1ff503e"], "type": "discard"}},
+    {"player": 1, "action": {"card_refs": ["c1_c6f5f214b1cc5a5d315b389b83deb627", "c1_d8802d37c66e9318ad19b7bd2ab24a63", "c1_cea464cc6665afb6774d1aec895e258d", "c1_18f0b263847e4a8732e553ff5cd7036c", "c1_50a2dd072b4a234910d4ddc6b7d5a375", "c1_bc19d238799ee8750682e574a2db91d1"], "type": "discard"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_58b5f27fba189883ecdffcfa42fd5532", "c1_9e056bfba5b27272fb8874ee23df0984"], "target": 2, "type": "play_sequence"}},
+    {"player": 1, "action": {"card_refs": ["c1_f5f833c8a522ca0bdd3c272584d6bd83"], "type": "discard"}},
+    {"player": 2, "action": {"card_refs": ["c1_82d7b6a612d273bbc09ae73c378c9afa", "c1_e6d1ee81f2e73e386af6d4e9a729d61e"], "type": "discard"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_221c6ca96c0e5807136b52cd78bdd974"], "target": 2, "type": "play_sequence"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_a10f37a615ff2659d7a01d9b210c90d2"], "type": "respond"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_61e725e3b993b98046c474fd8128ded9"], "target": 1, "type": "play_sequence"}},
+    {"player": 1, "action": {"ordered_card_refs": [], "type": "respond"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_dff5f20e0334dd3d348202c452e1dd01"], "target": 1, "type": "play_sequence"}},
+    {"player": 2, "action": {"card_refs": ["c1_dfe9d46a32cf8a785a12109fcaa384dd", "c1_f91af91f184e1f65d8e774fe4800fac6"], "type": "discard"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_64bdecb545cae80120c25f9bab755e91"], "target": 2, "type": "play_sequence"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_b0fcd83d607174a6bb0bdedd0ae7f21f"], "type": "respond"}},
+    {"player": 2, "action": {"card_ref": "c1_6d96756145855e9d66a5b128baf36c61", "hp": 15, "money": 9, "mp": 14, "type": "exchange"}},
+    {"player": 1, "action": {"card_refs": ["c1_b1c3afce0779110db3d077804e3b0fed"], "type": "discard"}},
+    {"player": 2, "action": {"card_ref": "c1_c18f1f5ba999198c5d9ee9bb3aa6935f", "hp": 18, "money": 1, "mp": 19, "type": "exchange"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_6daef9b1526479ae29dcda979f68e2a6"], "target": 1, "type": "play_sequence"}},
+    {"player": 2, "action": {"card_refs": ["c1_49253ece0bbb79065ec5f2f43429aec3"], "type": "discard"}},
+    {"player": 1, "action": {"type": "pray"}},
+    {"player": 2, "action": {"type": "pray"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_35e0087a3a6ae21ce0d931fed159093d"], "target": 2, "type": "play_sequence"}},
+    {"player": 2, "action": {"ordered_card_refs": [], "type": "respond"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_dacbb338cb54520b6759b3504cf0f0f1"], "target": 2, "type": "play_sequence"}},
+    {"player": 1, "action": {"card_refs": ["c1_3cb82f24ad6c5a9720446f0db726b9b6"], "type": "discard"}},
+    {"player": 2, "action": {"type": "pray"}},
+    {"player": 1, "action": {"type": "pray"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_dd80769e8278133acbe8f8a718a5d188"], "target": 2, "type": "play_sequence"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_acd7be83b080f7810cdaf5be30c2fbac"], "target": 1, "type": "play_sequence"}},
+    {"player": 2, "action": {"card_ref": "c1_6923c1e3a50b63f5b0610fa603641060", "hp": 6, "money": 27, "mp": 13, "type": "exchange"}},
+    {"player": 1, "action": {"type": "pray"}},
+    {"player": 2, "action": {"ordered_card_refs": ["c1_656645f7f1f06c487db0ed4d7a784834"], "target": 1, "type": "play_sequence"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_b9761d8414bec762f638fe8450a4d5a9"], "type": "respond"}},
+    {"player": 1, "action": {"card_ref": "c1_744aeab2b62535cb068b25296c6b2593", "sold_card_ref": "c1_080084a38ff837e0f50a94a138d9b2f5", "target": 1, "type": "sell"}},
+    {"player": 2, "action": {"card_ref": "c1_b6b516d879cac86cfd087d75859e0d78", "hp": 22, "money": 14, "mp": 10, "type": "exchange"}},
+    {"player": 1, "action": {"ordered_card_refs": ["c1_080084a38ff837e0f50a94a138d9b2f5"], "target": 2, "type": "play_sequence"}},
+    {"player": 2, "action": {"ordered_card_refs": [], "type": "respond"}},
+    {"player": 2, "action": {"card_refs": ["c1_a42cab476c1d1520abf225bb64d732aa"], "type": "discard"}}
+  ]
+}
