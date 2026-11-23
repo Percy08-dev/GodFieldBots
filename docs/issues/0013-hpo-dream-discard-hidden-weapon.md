@@ -1,6 +1,7 @@
 # HPO6の〈夢〉で追加武器をDiscard候補に含める問題
 
-状態は原因特定・再現済み。候補生成と公開入力契約の対応は別件です。
+旧構成で原因を特定し、拒否を再現しました。訂正版の採用と検証は
+[ちからの粉の契約検証記録](../verification/strength-powder-simulator-contract.md)に記録しています。
 HDD同期保存の採用判断は [ストレージ検証記録](../verification/staged-native-collection-storage.md) に残します。
 
 ## 対象と再現条件
@@ -66,23 +67,65 @@ Journalの対象decisionにACKはなく、episodeの終端は `incomplete` で�
 
 ## 原因と入力境界
 
+オーナー確認では、ちからの粉はダメージ追加を持つ雑貨です。単独使用は
+できず、武器と同じActionで使います。固定カタログでダメージ追加を持つ
+雑貨は `strength-powder` 1種です。〈夢〉の互換候補がないため、
+ちからの粉は偽装元にも偽装先にもなりません。
+[固定カタログ](../../../GodFieldSimurator/assets/rules/true-match-1v1-v1/official-ja.json)
+
 固定seedのTestServerで受理済み39手を再生した状態を診断専用Dumpで
 確認しました。対象参照の実体は追加武器 `wand-of-mystic-water` で、
-〈夢〉で `strength-powder` に見えていました。表の生成は、公開カタログと
-行動者に見える定義、および汎用の `can_discard` を使います。見かけ上雑貨の
-ため、Rust候補生成はこの参照をDiscardに含めました。Engineは実際の定義で
-廃棄可否を判定し、武器に対して `WeaponCannotBeDiscarded` を返します。
-HTTP側の `invalid_parameter` はこのドメインエラーの投影です。
-Dream中の実体での検証と武器のDiscard禁止はSimulator spec 09 §18.4・§11.1
-に対応します。
+〈夢〉で `strength-powder` に見えていました。Simulatorの `dream_group` は
+通常の追加武器と攻撃効果を持つ追加雑貨の両方に `weapon:additional:plain`
+を割り当てます。これにより、互換性のないワンドからちからの粉への偽装が
+発生しました。この誤った表示が422につながった発端です。
+[Simulatorの偽装グループ](../../../GodFieldSimurator/src/engine/catalog/mod.rs)
+
+Rust候補生成は公開カタログと行動者に見える定義から雑貨と判定し、
+`can_discard=true` の局面でこの参照をDiscard候補に含めました。Engineは
+実体が武器なので `WeaponCannotBeDiscarded` を返しました。この拒否自体は
+Simulator spec 09 §18.4・§11.1の実体による判定と武器のDiscard禁止に従います。
 [候補生成](../../native/src/player_runtime/search.rs)・
 [SimulatorのDiscard処理](../../../GodFieldSimurator/src/engine/resolution/turn.rs)・
 [拒否コードの投影](../../../GodFieldSimurator/src/server/history/record/mod.rs)
+
+表のindex 2・3は、ちからの粉に見える参照を単独使用する提案です。この試合では
+どちらも送信されていません。別の仕様差として、Simulatorの攻撃雑貨の分岐は
+ダメージを加算する際に併用武器の有無を検査せず、Rustの攻撃候補生成も
+追加攻撃を持つ雑貨だけの並びを許します。ちからの粉そのものを単独使用できない
+ことの検証は、偽装グループの訂正と区別します。
+[Simulatorの攻撃処理](../../../GodFieldSimurator/src/engine/resolution/choice.rs)・
+[Rustの攻撃候補判定](../../native/src/player_runtime/rules.rs)
 
 spec 07 §21.1の入力境界を維持します。再現テストは、同じ行動者の公開入力だけから
 Native候補を生成し、診断Dumpはその後の原因照合に限ります。Dump、GameSeed、
 他者の非公開情報、拒否詳細は方策入力に入れません。
 [公開入力契約](../../../GodFieldSimurator/docs/spec/07-external-interfaces-adapters.md)
+
+## 採用した修正方針
+
+1. **Simulatorの〈夢〉**。 `dream_group` で、ダメージ追加の雑貨を追加武器から
+   分けます。固定カタログのちからの粉に互換候補は0件となり、追加武器は
+   ちからの粉を偽装先に選べなくなります。追加武器同士の既存の互換性を保ちます。
+   候補が空の場合は既存の乱数消費規則に従います。この変更で後続の抽選結果が
+   変わり得るため、旧p11の39手は固定版の再現証拠として保存します。
+2. **Simulatorの使用判定**。Action確定前に、同じ並びで効果を使う実体の
+   `ArtifactKind::Weapon` がある場合だけちからの粉を使えます。追加武器は
+   この条件を満たし、習得した奇跡やCostCutの補助として扱う武器は条件を
+   満たしません。攻撃値や攻撃元の種別で代用すると、ちからの粉自身がこの
+   条件を満たしてしまいます。通常武器を先に置く既存の順序を適用します。
+3. **Botの候補生成**。訂正版Simulatorと公開仕様を版固定した後、同じ条件を
+   Python・Rustの攻撃候補に適用します。方策が参照するのは行動者に見える
+   公開カタログの `weapons` 分類です。武器を追加できる探索途中の並びを
+   調べる場合も、武器なしの組合せを完成候補としては出しません。訂正後の
+   規則識別子を記録し、過去の候補表・チェックポイントは元の識別子で扱います。
+
+Simulatorの受入ケースは、ちからの粉の偽装候補が空、通常の追加武器同士は
+互換、粉だけの1枚・2枚は拒否、通常武器→粉は累計ダメージが正しい、
+追加武器単独と追加武器＋粉は成立です。粉と攻撃奇跡だけの組合せや、
+武器がCostCutの補助に回る並びも確認し、拒否時の状態・乱数を照合します。
+Botでは同じ公開入力に対するPython・Rustの完成候補を照合します。
+訂正版での受入には、旧p11の再生列とは別に制御された局面を使います。
 
 ## 再現手順と検証範囲
 

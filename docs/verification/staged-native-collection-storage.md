@@ -122,8 +122,10 @@ second update and passed full audit in a separate run.
 The direct and staged attempts had identical G1 weight and resume payloads,
 the same 39 accepted actions, and the same rejected command at revision 39.
 The fixed-seed replay reproduced the rejection independently of training or
-Pack transfer. Dream made the additional weapon appear as a discardable
-utility to the candidate generator. See the
+Pack transfer. The historical Simulator's Dream grouping let an additional
+weapon appear as Strength Powder, a damage-adding utility with no compatible
+disguise under the owner-confirmed rule. The candidate generator included
+Discard based on that perceived definition. See the
 [diagnostic evidence and reproduction](../issues/0013-hpo-dream-discard-hidden-weapon.md).
 The storage design and its performance baseline were accepted for operation.
 
