@@ -18,12 +18,13 @@ from gf_common.card_instance import (
     CardInstanceContract,
     dream_compat_card_instance_contract,
     moon_dream_card_instance_contract,
+    pestle_mirage_card_instance_contract,
     shared_card_instance_contract,
     strength_powder_card_instance_contract,
 )
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_validation import decision_input, reconcile_replay
-from gf_common.diverse_actions import NumericCosts
+from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV3
 from gf_common.domain import DecisionInput, Json
 from gf_common.structured import DecisionFrame, EventBank, Selection, event_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
@@ -37,20 +38,23 @@ from gf_training.card_instance_journal import CardInstanceJournal, read_card_ins
 _ROOT = Path(__file__).parents[1]
 
 
-def _assert_native_search_admits_action(
+def _public_frame(value: DecisionInput, episode: str) -> tuple[DecisionFrame, EventBank]:
+    actor = value.observation["viewer_player_id"]
+    bank = EventBank(actor, episode, layout=LAYOUT)
+    bank.append(event_delta(actor, bank.episode, 0, bank.boundary.prefix_hash,
+                            value.events, layout=LAYOUT))
+    return DecisionFrame.from_input(value, bank, 0, layout=LAYOUT), bank
+
+
+def _native_search_actions(
     value: DecisionInput,
-    submitted: Json,
     search: Callable[[bytes], bytes],
     *,
     contract: CardInstanceContract,
     clock_calls: int,
-) -> None:
-    """Check public-only candidate generation with a deterministic diagnostic clock."""
-    actor = value.observation["viewer_player_id"]
-    bank = EventBank(actor, "historical-dream-diagnostic", layout=LAYOUT)
-    bank.append(event_delta(actor, bank.episode, 0, bank.boundary.prefix_hash,
-                            value.events, layout=LAYOUT))
-    frame = DecisionFrame.from_input(value, bank, 0, layout=LAYOUT)
+) -> list[Json]:
+    """Generate from the participant's public inputs with a deterministic clock."""
+    frame, _ = _public_frame(value, "historical-hpo-diagnostic")
     actions = ActionConfigV3(action_contract=contract)
     rules = card_instance_rules()
     request = {
@@ -66,9 +70,22 @@ def _assert_native_search_admits_action(
     generated = parse_game_generated_v3(
         result["generated"], action_contract=actions.action_contract, rules=rules
     )
-    assert submitted in [
+    return [
         generated.table.to_action(index, frame) for index in range(len(generated.table.kinds))
     ]
+
+
+def _assert_native_search_admits_action(
+    value: DecisionInput,
+    submitted: Json,
+    search: Callable[[bytes], bytes],
+    *,
+    contract: CardInstanceContract,
+    clock_calls: int,
+) -> None:
+    assert submitted in _native_search_actions(
+        value, search, contract=contract, clock_calls=clock_calls,
+    )
 
 
 @pytest.mark.integration
@@ -444,5 +461,126 @@ def test_hpo_moon_god_mirage_reaches_weapon_defense(tmp_path: Path) -> None:
             health = await server.stop()
         assert health["exit_code"] == 0
         assert health["log_error"] is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "release,env,repaired",
+    [
+        pytest.param(moon_dream_card_instance_contract(), "GFB_MOON_DREAM_TEST", False, id="archived"),
+        pytest.param(pestle_mirage_card_instance_contract(), "GFB_PESTLE_MIRAGE_TEST", True, id="repaired"),
+    ],
+)
+def test_hpo_pestle_mirage_replays_recorded_target(
+    tmp_path: Path, release: CardInstanceContract, env: str, repaired: bool,
+) -> None:
+    binary = os.environ.get(f"{env}_SERVER")
+    source = os.environ.get(f"{env}_SOURCE")
+    config = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_CONFIG")
+    if not binary or not source or not config:
+        pytest.skip("explicit managed Simulator binary/config/approved source required")
+    native = pytest.importorskip("gf_native")
+    case = json.loads((_ROOT / "docs/issues/cases/0017-pestle-mirage-target.json").read_text())
+    old = case["rejected"]
+    expected = case["expected_repaired"]
+    actor, revision = old["actor"], old["revision"]
+    opponent = expected["submitted_target"]
+    assert old["action"]["target"] == actor and opponent == 3 - actor
+    if not repaired:
+        assert case["original_revision"] == release.simulator_revision
+    evidence = CardInstanceRuntimeEvidence(Path(binary), Path(source), contract=release)
+    evidence.preflight()
+    server = ManagedServer(binary, config, case["game_seed"], 1, tmp_path / "server")
+
+    async def run() -> None:
+        startup = await server.start()
+        try:
+            evidence.verify_executed(server.process)
+            client = AttestedClient(
+                startup["base_url"],
+                expected_fingerprint=seed_fingerprint(case["game_seed"]),
+                fixed_seed_experiment=True,
+                expected_effective=startup["test_server_config"],
+                startup_info=startup["test_server_info"],
+                contract=release,
+                retries=0,
+            )
+            try:
+                game = (await client.create())["game_id"]
+                for player in (1, 2):
+                    assert (await client.join(game, str(uuid.uuid4())))["player_id"] == player
+                assert len(case["accepted"]) == revision
+                for previous, step in enumerate(case["accepted"]):
+                    assert step["revision"] == previous
+                    receipt = await client.act(game, step["actor"], {
+                        "command_id": str(uuid.uuid4()),
+                        "expected_revision": previous,
+                        "action": step["action"],
+                    })
+                    assert receipt["state_revision"] == previous + 1 and receipt["status"] == "active"
+
+                observation = await client.observe(game, actor)
+                assert observation["state_revision"] == revision and observation["actionable"] is True
+                assert observation["current_player"] == actor
+                refs = old["action"]["ordered_card_refs"]
+                visible = {row["card_ref"]: row["definition_id"] for row in observation["own"]["cards"]}
+                assert [visible[ref] for ref in refs] == ["dangerous-pestle", "mirage"]
+                hints = await client.actor_options(game, actor, observation)
+                assert set(hints["action_options"]["valid_targets"]) == {actor, opponent}
+                events, cursor = await client.events(game, actor, None)
+                value = decision_input(observation, events, cursor, await client.public_catalog(), hints)
+
+                frame, bank = _public_frame(value, "pestle-mirage-diagnostic")
+                generated = PublicCandidateGeneratorV3(
+                    ActionConfigV3(action_contract=release), rules=card_instance_rules(), clock=lambda: 0.0,
+                ).generate_game(frame, bank.view(), Random(17), NumericCosts())
+                py_actions = [generated.table.to_action(i, frame) for i in range(len(generated.table.kinds))]
+                native_actions = _native_search_actions(
+                    value, native.player_search_v5, contract=release, clock_calls=1_000_000,
+                )
+                for actions in (py_actions, native_actions):
+                    assert {action["target"] for action in actions
+                            if action["type"] == "play_sequence" and action["ordered_card_refs"] == refs
+                            } == ({opponent} if repaired else {actor, opponent})
+
+                submitted = old["action"] | {"target": opponent} if repaired else old["action"]
+                request = {"command_id": str(uuid.uuid4()), "expected_revision": revision, "action": submitted}
+                if not repaired:
+                    with pytest.raises(ApiError) as caught:
+                        await client.act(game, actor, request)
+                    error = caught.value.body["error"]
+                    assert (caught.value.status, error["details"]["rejection_code"]) == (
+                        old["http_status"], old["rejection_code"],
+                    )
+                    assert await client.observe(game, actor) == observation
+                    return
+
+                receipt = await client.act(game, actor, request)
+                assert receipt["state_revision"] == expected["revision"] and receipt["status"] == "active"
+                declared = {"type": "attack_declared", "attacker": actor,
+                            "target": expected["drawn_target"], "attack": expected["attack"]}
+                defender = await client.observe(game, expected["drawn_target"])
+                assert defender["current_player"] == expected["drawn_target"]
+                assert defender["required_choice"] == "defense"
+                visible_events, _ = await client.events(game, expected["drawn_target"], None)
+                assert declared in visible_events
+
+                # Read the authoritative packet only after the policy and submission are finished.
+                response = await client.http.get(f"/debug/v1/games/{game}/dump")
+                response.raise_for_status()
+                diagnostic = response.json()
+                assert diagnostic["state_revision"] == expected["revision"]
+                pending = diagnostic["full_state"]["pending_attack"]
+                assert {key: pending[key] for key in ("target", "attack", "attribute")} == {
+                    "target": expected["drawn_target"], "attack": expected["attack"],
+                    "attribute": expected["attribute"],
+                }
+            finally:
+                await client.close()
+        finally:
+            health = await server.stop()
+            assert health["exit_code"] == 0 and health["log_error"] is None
 
     asyncio.run(run())

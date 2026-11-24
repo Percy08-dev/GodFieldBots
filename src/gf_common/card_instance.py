@@ -30,6 +30,17 @@ MOON_DREAM_REVIEWED_SPEC_CHANGES = MappingProxyType({
     "docs/spec/godfield_rule_verification_register.md":
         "ddf7e9d94239176794fb5a8b84921d1fee02e8eced9aaaae7c1dda73db0b07da",
 })
+PESTLE_MIRAGE_PROFILE = "card-instance-simulator-v2-shared-20261125-pestle"
+PESTLE_MIRAGE_SIMULATOR_REVISION = "6d50603dab3f6d2df34ea4e433bab7dca96f52c1"
+PESTLE_MIRAGE_SPEC_INVENTORY_HASH = "05b68761d1c23a3784d04093b417875b2b5893739a1e6c73367a969dc83db753"
+PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES = MappingProxyType({
+    "docs/spec/03-game-engine.md": "3a2e9595f7de0ecca297eee0af8eac94bed7cc05e5699da259ff58d8f350da95",
+    "docs/spec/06-persistence-history.md": "af6a30d485195b95825f1a4e182508b7b24855fa750744e167e04f4074d44960",
+    "docs/spec/08-test-requirements.md": "169e852529e6bc1cd3a0f08b163fa4554aac25d3e57f12a8f255ad960419ed74",
+    "docs/spec/09-gameplay-rules.md": "02df399100b785ebc6fd2e19af5e3a859c38efb7252df25072c3ccd410f87e43",
+    "docs/spec/godfield_rule_verification_register.md":
+        "5a5269fcb62acbd1dd1507c38d9a65d29228cf9266929af4a84b82e10f6274b5",
+})
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -69,7 +80,13 @@ class CardInstanceContract:
 
     @property
     def requires_powder_weapon(self) -> bool:
-        return self.profile_id in (STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE)
+        return self.profile_id in (
+            STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE,
+        )
+
+    @property
+    def mirage_danger_requires_opponent(self) -> bool:
+        return self.profile_id == PESTLE_MIRAGE_PROFILE
 
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
@@ -114,6 +131,14 @@ _MOON_DREAM_PIN: tuple[Any, ...] = tuple(
     }.get(name, default)
     for name, default in zip(_CONTRACT_FIELD_NAMES, _DREAM_COMPAT_PIN, strict=True)
 )
+_PESTLE_MIRAGE_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": PESTLE_MIRAGE_PROFILE,
+        "simulator_revision": PESTLE_MIRAGE_SIMULATOR_REVISION,
+        "spec_inventory_sha256": PESTLE_MIRAGE_SPEC_INVENTORY_HASH,
+    }.get(name, default)
+    for name, default in zip(_CONTRACT_FIELD_NAMES, _MOON_DREAM_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
@@ -122,6 +147,7 @@ _CONTRACT_PINS = MappingProxyType(
         STRENGTH_POWDER_PROFILE: _STRENGTH_POWDER_PIN,
         DREAM_COMPAT_PROFILE: _DREAM_COMPAT_PIN,
         MOON_DREAM_PROFILE: _MOON_DREAM_PIN,
+        PESTLE_MIRAGE_PROFILE: _PESTLE_MIRAGE_PIN,
     }
 )
 
@@ -150,12 +176,17 @@ def moon_dream_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _MOON_DREAM_PIN, strict=True)))
 
 
+def pestle_mirage_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _PESTLE_MIRAGE_PIN, strict=True)))
+
+
 def is_shared_contract(contract: object) -> bool:
     return type(contract) is CardInstanceContract and contract.profile_id in (
         "card-instance-simulator-v2-shared-20261118",
         STRENGTH_POWDER_PROFILE,
         DREAM_COMPAT_PROFILE,
         MOON_DREAM_PROFILE,
+        PESTLE_MIRAGE_PROFILE,
     )
 
 
@@ -187,6 +218,8 @@ def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
             )
         elif contract.profile_id == MOON_DREAM_PROFILE:
             specs.update(MOON_DREAM_REVIEWED_SPEC_CHANGES)
+        elif contract.profile_id == PESTLE_MIRAGE_PROFILE:
+            specs.update(PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES)
         return specs
     return dict(CORRECTED_REVIEWED_SPEC_HASHES if is_corrected_contract(contract) else REVIEWED_SPEC_HASHES)
 

@@ -37,6 +37,7 @@ pub fn heuristic(input: &Input, config: &Config, rows: &[Proposal]) -> Result<us
                     &input.usable,
                     input.context,
                     config.requires_powder_weapon,
+                    config.mirage_danger_requires_opponent,
                 );
                 ensure(
                     a.complete,
@@ -114,6 +115,7 @@ fn facts(input: &Input, config: &Config, rows: &[Proposal]) -> Result<Vec<Fact>>
                     &input.usable,
                     Incoming::Unknown,
                     config.requires_powder_weapon,
+                    config.mirage_danger_requires_opponent,
                 );
                 ensure(
                     a.complete,

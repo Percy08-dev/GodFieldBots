@@ -11,6 +11,8 @@ from gf_common.card_instance import (
     DREAM_COMPAT_PROFILE,
     MOON_DREAM_PROFILE,
     MOON_DREAM_REVIEWED_SPEC_CHANGES,
+    PESTLE_MIRAGE_PROFILE,
+    PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES,
     STRENGTH_POWDER_PROFILE,
     CardInstanceContract,
     is_corrected_contract,
@@ -93,6 +95,29 @@ MOON_DREAM_CHANGE_FILES = MappingProxyType(
     }
 )
 
+PESTLE_MIRAGE_BINARY_SHA256 = "500d55cd8eb03126f65d3c24fe58b6091bf8acdb2fc20aed76622a8679f4000d"
+PESTLE_MIRAGE_CHANGE_SHA256 = "eb801942ca482a6d6e381442faff2857fa45f70c16432ad517ac190724785342"
+PESTLE_MIRAGE_CHANGE_FILES = MappingProxyType(
+    {
+        **MOON_DREAM_CHANGE_FILES,
+        **PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES,
+        "src/engine/model/state.rs":
+            "d95b1e4a761c4d3c7f43e42872bba7eb9560ae08f5dba7e068846e34fb114472",
+        "src/engine/resolution/choice.rs":
+            "a29f6b7692cff865c50295ac061cccc707e655cdb3cfb980f307edf14a647ab4",
+        "src/engine/resolution/combat.rs":
+            "fa19b9f3816436c754e3ef510e4d528ce21e1b30af13191acb28b86b9eae3d17",
+        "src/engine/resolution/mod.rs":
+            "0e0c47d4ef1bc7b12ce09f03365ca238e39f49e88cf5bf3357796e99459443a4",
+        "src/engine/resolution/status.rs":
+            "6b4ad16a0f2b6d4ee1f648b2b9f9ebd45eebbfe83526b86220720e0a7c50527f",
+        "src/engine/resolution/tests.rs":
+            "683ad4cd7d251b8c09e8fc75e32a87ceda167393cdc9aac6908e0eb12642d626",
+        "src/server/history/record/mod.rs":
+            "1f28fe9a5496c5718bde3fe50da34ae997c97f04df4d6c67b459dbc63f3cc43a",
+    }
+)
+
 
 def require_corrected_contract(contract: CardInstanceContract) -> None:
     if type(contract) is not CardInstanceContract or not is_corrected_contract(contract):
@@ -101,6 +126,8 @@ def require_corrected_contract(contract: CardInstanceContract) -> None:
 
 def approved_binary_sha256(contract: CardInstanceContract) -> str:
     require_corrected_contract(contract)
+    if contract.profile_id == PESTLE_MIRAGE_PROFILE:
+        return PESTLE_MIRAGE_BINARY_SHA256
     if contract.profile_id == MOON_DREAM_PROFILE:
         return MOON_DREAM_BINARY_SHA256
     if contract.profile_id == DREAM_COMPAT_PROFILE:
@@ -114,7 +141,9 @@ def approved_binary_sha256(contract: CardInstanceContract) -> str:
 
 def approved_runtime_build(contract: CardInstanceContract) -> Json:
     binary_sha256 = approved_binary_sha256(contract)
-    if contract.profile_id == MOON_DREAM_PROFILE:
+    if contract.profile_id == PESTLE_MIRAGE_PROFILE:
+        change_hash, change_files = PESTLE_MIRAGE_CHANGE_SHA256, PESTLE_MIRAGE_CHANGE_FILES
+    elif contract.profile_id == MOON_DREAM_PROFILE:
         change_hash, change_files = MOON_DREAM_CHANGE_SHA256, MOON_DREAM_CHANGE_FILES
     elif contract.profile_id == DREAM_COMPAT_PROFILE:
         change_hash, change_files = DREAM_COMPAT_CHANGE_SHA256, DREAM_COMPAT_CHANGE_FILES

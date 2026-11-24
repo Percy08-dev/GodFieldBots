@@ -63,7 +63,9 @@ class CardInstanceBaseline:
             refs = {card["card_ref"]: index for index, card in enumerate(own["cards"])}
             hints = raw["action_options"]["action_options"]
             usable = frozenset(refs[row["card_ref"]] for row in hints["usable_cards"])
-            requires_powder_weapon = self.actions.action_contract.requires_powder_weapon
+            contract = self.actions.action_contract
+            requires_powder_weapon = contract.requires_powder_weapon
+            mirage_danger_requires_opponent = contract.mirage_danger_requires_opponent
             scores = []
             for row, kind in enumerate(table.kinds):
                 selected = table.slots[table.offsets[row] : table.offsets[row + 1]]
@@ -90,6 +92,7 @@ class CardInstanceBaseline:
                         rules=self.rules,
                         context=context,
                         requires_powder_weapon=requires_powder_weapon,
+                        mirage_danger_requires_opponent=mirage_danger_requires_opponent,
                     )
                     if not facts.complete:
                         raise ContractError(

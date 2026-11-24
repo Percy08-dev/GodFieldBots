@@ -287,8 +287,9 @@ def test_journal6_rejects_valid_receipt_from_different_action_contract(tmp_path,
 @pytest.mark.parametrize("previous, current, profile_id", [
     ("strength_powder", "dream_compat", "card-instance-simulator-v2-shared-20261124"),
     ("dream_compat", "moon_dream", "card-instance-simulator-v2-shared-20261125"),
+    ("moon_dream", "pestle_mirage", "card-instance-simulator-v2-shared-20261125-pestle"),
 ])
-def test_dream_compat_release_and_powder_behavior_are_pinned_independently(previous, current, profile_id):
+def test_simulator_release_and_powder_behavior_are_pinned_independently(previous, current, profile_id):
     old = getattr(card_instance, f"{previous}_card_instance_contract")()
     new = getattr(card_instance, f"{current}_card_instance_contract")()
     assert new.profile_id == profile_id

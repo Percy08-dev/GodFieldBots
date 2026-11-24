@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from gf_common import card_instance
 from gf_common.action_contract import engineering_contract
 from gf_common.card_instance import (
     ActionConfigV3,
@@ -47,6 +48,38 @@ from tests.test_card_instance_structured import frame_for
 
 def plays(actions):
     return [action for action in actions if action["type"] == "play_sequence"]
+
+
+@pytest.mark.parametrize("profile,configured,hints,expected_pair,expected_single", [
+    ("moon_dream", ("opponent", "self"), (1, 2), {1, 2}, {1, 2}),
+    ("pestle_mirage", ("opponent", "self"), (1, 2), {2}, {1, 2}),
+    ("pestle_mirage", ("self",), (1, 2), set(), {1}),
+    ("pestle_mirage", ("opponent", "self"), (1,), set(), {1}),
+])
+def test_pestle_mirage_targets_apply_to_counting_and_candidates(
+    profile, configured, hints, expected_pair, expected_single,
+):
+    contract = getattr(card_instance, f"{profile}_card_instance_contract")()
+    value = inputs(
+        [("dangerous-pestle", None), ("mirage", "unused")], targets=hints,
+        can_pray=True, discard=False,
+    )
+    layout = layout_for_contract(contract)
+    bank = EventBank(1, "pestle-mirage", layout=layout)
+    bank.append(event_delta(1, bank.episode, 0, bank.boundary.prefix_hash, (), layout=layout))
+    frame = DecisionFrame.from_input(value, bank, 0, layout=layout)
+    result = PublicCandidateGeneratorV3(
+        ActionConfigV3(action_contract=contract, targets=configured),
+        rules=card_instance_rules(), clock=lambda: 0.0,
+    ).generate_game(frame, bank.view(), random.Random(17), NumericCosts())
+    actions = [result.table.to_action(index, frame) for index in range(len(result.table.kinds))]
+    combined = [action["target"] for action in plays(actions)
+                if action["ordered_card_refs"] == list(frame.references)]
+    standalone = [action["target"] for action in plays(actions)
+                  if action["ordered_card_refs"] == list(frame.references[:1])]
+    assert set(combined) == expected_pair and len(combined) == len(expected_pair)
+    assert set(standalone) == expected_single and len(standalone) == len(expected_single)
+    assert result.report.precount.complete == result.report.discovered == len(actions)
 
 
 class FakeClock:

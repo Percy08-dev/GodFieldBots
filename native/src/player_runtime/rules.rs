@@ -152,6 +152,7 @@ pub fn analyze(
     usable: &[bool],
     context: Incoming,
     requires_powder_weapon: bool,
+    mirage_danger_requires_opponent: bool,
 ) -> Analysis {
     let empty = || Analysis {
         attribute: "neutral".into(),
@@ -363,7 +364,9 @@ pub fn analyze(
         attack: attack.saturating_mul(rounds),
         attribute: attr.unwrap_or("neutral".into()),
         effects,
-        opponent_only: mirages > 0 && !effective.iter().any(|r| cards[*r].ability == "danger"),
+        opponent_only: mirages > 0
+            && (mirage_danger_requires_opponent
+                || !effective.iter().any(|r| cards[*r].ability == "danger")),
         effective,
     }
 }

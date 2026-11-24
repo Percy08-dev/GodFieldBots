@@ -1,0 +1,156 @@
+{
+  "run_id": "501db816-6740-498a-bdd2-835248827399",
+  "learning_seed": 17,
+  "batch_id": "batch-000027",
+  "pair_id": "p0",
+  "game_id": "01M875TB5KKM9QX1ZH5JP4AJNW",
+  "game_seed": "329034df-8efd-582c-a06a-6a24911f0ded",
+  "http_log_sha256": "100a1693dfec7b2866c06fe9413939ac130eb9f2b8c091208f460b6154bc0d0f",
+  "original_revision": "f394a7b57b0ffb12c6b5782ff52fdb8842ec7534",
+  "accepted": [
+    {
+      "actor": 1,
+      "revision": 0,
+      "action": {
+        "card_refs": [
+          "c1_461dd89ae84dd4ee42afc802c658459d",
+          "c1_3cb472e0bd7fb7197e90d16efdfc5526",
+          "c1_42106165da49179adad8a4995a639117"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 1,
+      "action": {
+        "card_ref": "c1_ee439a28f7602bf343e1e4419a6f5035",
+        "hp": 20,
+        "money": 17,
+        "mp": 33,
+        "type": "exchange"
+      }
+    },
+    {
+      "actor": 1,
+      "revision": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_7477302f22fae60f2c60737d040a2c43",
+          "c1_89a3c0c96eb84dbaae0eb90102e4e084"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 3,
+      "action": {
+        "ordered_card_refs": [
+          "c1_442ab4030d51192d10a69ddfabbe73fb",
+          "c1_432e24a28b1b04e740deac3a04108c96",
+          "c1_3a5c9b070abf1d95f6e242c8619f504e",
+          "c1_81f4dfa339a3a22c34114f7af093c60e"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 4,
+      "action": {
+        "card_refs": [
+          "c1_6113ac5c65c0199a59eff354f93fee39",
+          "c1_b14b8383c277fef6eab3a5e9efc8e777",
+          "c1_8c6d9347bd43d22e60ab8a7ced3826e7",
+          "c1_935d6941e12006cb47849077a7b93eb5"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "actor": 1,
+      "revision": 5,
+      "action": {
+        "card_refs": [
+          "c1_ee48fd74667390565cf6ae317eafaa37",
+          "c1_e69419b9447a6ba8cbd456f3da3204a5",
+          "c1_31d768ff6ed4337c1f1db7598171c1e7"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 6,
+      "action": {
+        "ordered_card_refs": [
+          "c1_984184fee58c35b8d9c06e9c7c3300ac"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 1,
+      "revision": 7,
+      "action": {
+        "ordered_card_refs": [
+          "c1_6a11c122cf90fb41ded7d89e63855775"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 8,
+      "action": {
+        "ordered_card_refs": [
+          "c1_f2c7499aee47ab06fe15025f049ecf19"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "actor": 2,
+      "revision": 9,
+      "action": {
+        "ordered_card_refs": [
+          "c1_0c5807b9e423253b8550f028d4633f2b"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 1,
+      "revision": 10,
+      "action": {
+        "type": "pray"
+      }
+    }
+  ],
+  "rejected": {
+    "actor": 2,
+    "revision": 11,
+    "action": {
+      "ordered_card_refs": [
+        "c1_f9afbf82f8c5a76e4c23531c30741f52",
+        "c1_479c7961591be1e79726e8d9de33552f"
+      ],
+      "target": 2,
+      "type": "play_sequence"
+    },
+    "http_status": 422,
+    "rejection_code": "invalid_target"
+  },
+  "expected_repaired": {
+    "revision": 12,
+    "submitted_target": 1,
+    "drawn_target": 1,
+    "attack": 30,
+    "attribute": "none"
+  }
+}

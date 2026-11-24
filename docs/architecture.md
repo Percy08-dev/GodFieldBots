@@ -2,8 +2,14 @@
 
 ## Status and scope
 
+[ADR0070](adr/0070-pestle-mirage-simulator.md) adopts the Dangerous Pestle and
+Mirage patch for new HPO6 convergence runs. The Simulator owns the composed
+attack attribute and actual target draw. The new shared Action profile binds
+the patched release and selects opponent submissions for effective Mirage
+through the existing Python and Rust candidate searches.
+
 [ADR0069](adr/0069-moon-dream-simulator.md) binds the combined Moon God,
-Dream, and Strength Powder release for the default HPO6 convergence run.
+Dream, and Strength Powder release used by the previous HPO6 convergence run.
 The Simulator owns the automatic Full Moon Blade attack. Existing
 actor-visible event and candidate interfaces carry its projection.
 

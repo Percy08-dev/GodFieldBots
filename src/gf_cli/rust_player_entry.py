@@ -484,16 +484,23 @@ def require_native_hpo_storage(storage: Any, identity: Json) -> None:
 
 
 def require_native_hpo_action_profile(actions: object, build: Json) -> None:
-    from gf_common.card_instance import DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, ActionConfigV3
+    from gf_common.card_instance import (
+        DREAM_COMPAT_PROFILE,
+        MOON_DREAM_PROFILE,
+        PESTLE_MIRAGE_PROFILE,
+        ActionConfigV3,
+    )
     from gf_training.native_backend import require_native_concealed_draw
 
     if not isinstance(actions, ActionConfigV3):
         return
     profile = actions.action_contract.profile_id
-    if profile in (DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE):
+    if profile in (DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE):
         require_native_concealed_draw(build)
     if profile == MOON_DREAM_PROFILE and build.get('card_instance_moon_dream') != MOON_DREAM_PROFILE:
         raise ContractError('Moon God and Dream profile requires a matching native runtime wheel')
+    if profile == PESTLE_MIRAGE_PROFILE and build.get('card_instance_pestle_mirage') != PESTLE_MIRAGE_PROFILE:
+        raise ContractError('Dangerous Pestle and Mirage profile requires a matching native runtime wheel')
 
 
 @contextmanager

@@ -349,6 +349,7 @@ impl<'a> Space<'a> {
             &self.input.usable,
             self.input.context,
             self.config.requires_powder_weapon,
+            self.config.mirage_danger_requires_opponent,
         )
     }
     fn valid(&self, f: Family, r: &[usize]) -> bool {

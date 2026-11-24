@@ -221,6 +221,7 @@ def analyze_sequence(
     rules: CardInstanceRules,
     context: DefenseContext = UNKNOWN_DEFENSE_CONTEXT,
     requires_powder_weapon: bool = False,
+    mirage_danger_requires_opponent: bool = False,
 ) -> SequenceAnalysis:
     """Separate extendable prefixes from completed affordable public proposals.
 
@@ -373,6 +374,8 @@ def analyze_sequence(
         min(SATURATION, attack * rounds),
         attribute or "neutral",
         tuple(sorted({card.ability for card in effective if card.ability})),
-        bool(mirages) and not any(card.ability == "danger" for card in effective),
+        bool(mirages) and (
+            mirage_danger_requires_opponent or not any(card.ability == "danger" for card in effective)
+        ),
         uncertain,
     )

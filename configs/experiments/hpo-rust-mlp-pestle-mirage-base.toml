@@ -1,0 +1,46 @@
+# Simulator revision, API v2, and catalog schema 2 match the corrected shared action profile.
+# This HPO base supplies the server, model reference, and phase budgets.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2-shared-pestle-mirage.toml"
+model = "../models/card-instance-mlp.toml"
+opponent = "../models/random.toml"
+preprocessing = "../preprocessing/card-instance-python.toml"
+
+[run]
+name = "hpo-rust-mlp-pestle-mirage-base"
+output_dir = "/mnt/gf_data/ppo-hpo/pestle-mirage-compat/parents"
+split = "train"
+wall_seconds = 3600
+admission_seconds = 2400
+execution_seconds = 2700
+finalization_seconds = 900
+sampling_seeds = [17]
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "6d50603dab3f6d2df34ea4e433bab7dca96f52c1"
+source_dir = "../../runs/pestle-mirage-compat/simulator"
+binary = "../../runs/pestle-mirage-compat/simulator/target/release/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+
+[model.inference]
+device = "cuda:0"
+
+[training]
+algorithm = "ppo"
+device = "cuda:0"
+seeds = [17]
+
+[storage]
+budget_mib = 8192
+db_root = "/mnt/gf_data/ppo-hpo/pestle-mirage-compat/originals"
+ram_root = "/dev/shm/godfieldbots/pack-work"
+# 収集中の原本SQLiteとSimulator作業領域を置くtmpfsです。
+collection_work_root = "/dev/shm/godfieldbots/collections"
+
+[preprocessing]
+memory_budget_mib = 12288

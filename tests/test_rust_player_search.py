@@ -588,6 +588,21 @@ def test_sequence_payment_roles_rounds_and_uncertain_defense(spec, options):
         )
 
 
+@pytest.mark.parametrize("profile", ["moon_dream", "pestle_mirage"])
+@pytest.mark.parametrize("targets,hints", [
+    (("opponent", "self"), (1, 2)), (("self",), (1, 2)),
+    (("opponent", "self"), (1,)),
+])
+def test_pestle_mirage_search_matches_python_for_each_release(profile, targets, hints):
+    contract = getattr(card_instance, f"{profile}_card_instance_contract")()
+    result = differential(
+        inputs([("dangerous-pestle", None), ("mirage", "unused")],
+               targets=hints, can_pray=True, discard=False),
+        contract=contract, targets=targets,
+    )
+    assert result is not None
+
+
 @pytest.mark.parametrize("mutation", ["kind", "target", "carrier", "presence", "negative_mp"])
 def test_supplied_table_boundary_validates_typed_syntax(mutation):
     episode = json.loads(ORIGINALS.read_text())["episodes"][2]
@@ -742,7 +757,7 @@ def test_baseline_capacity_is18_while_generator_capacity_remains128(maximum, kin
         ([("strength-powder", None), ("wand-of-mystic-water", None)], {(0, 1), (1, 0)}),
     ],
 )
-@pytest.mark.parametrize("release", ["strength_powder", "dream_compat", "moon_dream"])
+@pytest.mark.parametrize("release", ["strength_powder", "dream_compat", "moon_dream", "pestle_mirage"])
 def test_strength_powder_public_candidates(spec, powder_attacks, release):
     value = inputs(spec, can_pray=True)
     value.observation["own"]["status"]["dream"] = True
@@ -790,12 +805,16 @@ def test_historical_shared_strength_powder_remains_a_completed_singleton():
     assert "play_sequence" in native["generated"]["table"]["kinds"]
 
 
-def test_native_binds_both_dream_release_profiles_to_their_exact_pins():
+@pytest.mark.parametrize("older,newer", [
+    ("dream_compat", "moon_dream"),
+    ("moon_dream", "pestle_mirage"),
+])
+def test_native_binds_release_profiles_to_their_exact_pins(older, newer):
     value = inputs([("bronze-club", None)], can_pray=True)
     frame, _ = own_frame(value)
-    previous = card_instance.dream_compat_card_instance_contract()
-    current = card_instance.moon_dream_card_instance_contract()
-    assert dict(gf_native.build_info())["card_instance_moon_dream"] == current.profile_id
+    previous = getattr(card_instance, f"{older}_card_instance_contract")()
+    current = getattr(card_instance, f"{newer}_card_instance_contract")()
+    assert dict(gf_native.build_info())[f"card_instance_{newer}"] == current.profile_id
     for own, foreign in ((previous, current), (current, previous)):
         request = {
             "frame": frame_dict(frame, layout=LAYOUT), "events": value.events,
