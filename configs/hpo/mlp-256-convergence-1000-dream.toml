@@ -180,7 +180,8 @@ managed_ram_bytes = 25769803776
 managed_cuda_bytes = 12884901888
 collector_budget_bytes = 8589934592
 source_budget_bytes = 12884901888
-numeric_budget_bytes = 1073741824
+# The 3,454-decision sixth batch required over 1 GiB under the numeric admission guard.
+numeric_budget_bytes = 1610612736
 save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
 
