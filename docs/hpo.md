@@ -409,12 +409,19 @@ uv sync --locked --inexact --extra tensorboard
 uv run --no-sync gf-bots hpo watch --path /path/to/hpo/parents/RUN_ID
 ```
 
-URL を開き、Time Series で total loss、policy loss、value MSE、entropy、近似 KL、
-追加の学習診断を確認できます。横軸には `Step`（確定済み PPO 更新番号）を選びます。
-イベントの時刻には監視側が記録を読んだ時刻を使います。
-ブラウザに新しい点を自動で表示するには、TensorBoard の **Settings → Reload data** を
-有効にします。watch は起動時に保存済みの履歴を読み、その後は `--interval`（既定1秒）で
-新しく確定した更新だけを取り込みます。点は更新の確定時に増えます。
+URL を開くと、**Overview** と **Time Series** を使えます。
+
+- **Overview** では、ランの状態、現在のバッチ、確定済みの進捗、直近の更新を確認できます。
+  現在のバッチにはフェーズ、終了試合数、暫定判断数が出ます。観測できる場合は現在の実行区間の ETA も表示します。
+  確定済みの進捗には更新数と判断数の目標が、直近の更新には loss・entropy・近似 KL、
+  所要時間、収集速度が出ます。観測の遅れや欠落も同じ場所に表示します。
+- **Time Series** では、確定した更新ごとの loss、entropy、近似 KL、その他の学習診断を
+  確認できます。横軸には `Step`（PPO 更新番号）を選びます。イベントの時刻には監視側が
+  記録を読んだ時刻を使います。
+
+ブラウザの自動更新には、TensorBoard の **Settings → Reload data** を使います。
+watch は `--interval`（既定1秒）で観測し、Overview は表示内容が変わったときに、
+学習曲線は新しい更新が確定したときに更新されます。
 
 学習ランは読み取り専用で開き、描画用のイベントは監視終了時に片付ける一時領域に
 出力します。TensorBoard が使えない場合も通常の監視は続きます。

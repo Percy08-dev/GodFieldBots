@@ -121,6 +121,82 @@ def _standalone_running(live: Json | None, durable: Json | None, availability: s
                 and durable['availability'] == 'available'))
 
 
+def _standalone_overview(value: Json) -> tuple[int | None, str] | None:
+    """Project the merged watch observation into four display groups."""
+    committed = value.get('durable')
+    if committed is None:
+        return None
+    live = value.get('snapshot')
+    if live is not None and live.get('standalone') is not True:
+        live = None
+    current = live or {}
+    availability = value['availability']
+    running = _standalone_running(live, committed, availability)
+
+    run = [('Model', committed['model']), ('Seed', f'{committed["seed"]:,}'),
+           ('Recorded status', committed['status'])]
+    if committed.get('host_result') == 'awaiting-supervised-finalization':
+        run.append(('Finalization', 'Pending supervised finalization'))
+
+    batch = []
+    if live is not None and availability == 'available':
+        batch.append(('Phase', current['phase']))
+        ended, planned = current.get('batch_games_ended'), current.get('batch_games_planned')
+        if type(ended) is int and type(planned) is int:
+            batch.append(('Games ended / planned', f'{ended:,} / {planned:,}'))
+        if type(pending := current.get('transient_learner_decisions')) is int:
+            batch.append(('Selected learner decisions', f'{pending:,}'))
+    else:
+        batch.append(('Live observation', 'Stale' if availability == 'stale' else 'Unavailable'))
+    elapsed = current.get('invocation_elapsed_seconds') if running else committed.get('elapsed_seconds')
+    if finite_number(elapsed):
+        batch.append(('Invocation elapsed' if running else 'Run elapsed', f'{elapsed:.2f} s'))
+    eta = current.get('eta_seconds') if running else None
+    if finite_number(eta):
+        batch.append(('Invocation ETA', f'{eta:.0f} s'))
+
+    progress = []
+    committed_availability = committed['availability']
+    if committed_availability == 'stale':
+        progress.append(('Availability', 'Last verified run records'))
+    elif committed_availability != 'available' or committed.get('committed_updates') is None:
+        progress.append(('Availability', 'Committed records unavailable'))
+    updates = committed.get('committed_updates')
+    if updates is None:
+        progress.append(('Step 0', 'Unconfirmed placeholder'))
+    else:
+        target = current.get('target_updates') if running else committed.get('target_updates')
+        progress.append(('Updates', f'{updates:,} / {target:,}' if target is not None else f'{updates:,}'))
+        used, budget = committed['committed_used'], committed.get('decision_budget')
+        used_label = f'{used:,} / {budget:,}' if budget is not None else f'{used:,}'
+        progress.append(('Used learner decisions', used_label))
+        if (collected := committed.get('committed_collected')) is not None:
+            progress.append(('Collected learner decisions', f'{collected:,}'))
+
+    latest = []
+    metrics = committed.get('latest_metrics') or {}
+    for key, label in (('total_loss', 'Loss'), ('entropy', 'Entropy'), ('approx_kl', 'Approximate KL')):
+        if finite_number(metric := metrics.get(key)):
+            latest.append((label, f'{metric:.4g}'))
+    durations = committed.get('latest_durations') or {}
+    for key, label in (('collection_seconds', 'Collection'), ('update_seconds', 'Update / save')):
+        if finite_number(duration := durations.get(key)):
+            latest.append((label, f'{duration:.2f} s'))
+    rates = [f'{rate:.2f} {unit}/s' for unit in ('games', 'actions')
+             if finite_number(rate := committed.get(f'last_collection_{unit}_per_second'))]
+    if rates:
+        latest.append(('Collection rate', ' · '.join(rates)))
+    if not latest:
+        latest.append(('Availability', 'No update available'))
+
+    markdown = '\n\n'.join(
+        f'## {title}\n\n' + ' · '.join(f'**{label}** {datum}' for label, datum in fields)
+        for title, fields in (('Run', run), ('Current batch', batch),
+                              ('Committed progress', progress), ('Latest update', latest))
+    )
+    return updates, markdown
+
+
 def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> str:
     current = live or {}
     committed = durable or current
@@ -450,6 +526,11 @@ async def watch(root: Path, *, interval: float = 1., once: bool = False,
 
                 dashboard = TensorBoardWatch(root, interval=interval)
             if dashboard is not None:
+                try:
+                    overview = _standalone_overview(value)
+                except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+                    overview = None
+                dashboard.publish_overview(overview)
                 line = dashboard.line()
                 if screen is not None or line != previous_line:
                     frame = f'{frame}\n{line}'

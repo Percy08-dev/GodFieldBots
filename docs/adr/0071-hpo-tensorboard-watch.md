@@ -28,6 +28,30 @@ contracts. The log is derived anew on watcher startup and is for observation.
 
 Usage is documented in the [HPO operator guide](../hpo.md#tensorboard-で学習曲線を表示する).
 
+## Run overview follow-up
+
+The watcher projects the current terminal observation into the Overview tab.
+Four groups give the run state, current batch, committed progress, and most
+recent committed update. The table shows freshness explicitly and uses the
+same rules as the terminal for ETA and transient values. The standard Time
+Series tab continues to show verified per-update history.
+
+Use one atomically replaced snapshot and TensorBoard's native Text renderer.
+Appending text events on every sample would retain transient state and grow
+the local event log. A custom frontend would require a separate design and
+maintenance path. The bounded snapshot keeps one current view with no extra
+telemetry reads. The adapter relies on the pinned Text plugin API. Recheck its
+listing and item endpoints when updating TensorBoard.
+
+Independent correctness and architecture conformance reviews cleared the
+Overview follow-up. A live PTY smoke on the same Pestle–Mirage parent found
+the native Overview tab and run selector through the TensorBoard HTTP API.
+The four groups showed committed step 23, the current observation refreshed
+in place, and the Time Series entropy endpoint returned all 23 points.
+Ctrl-C stopped the server. The focused suite listed below returned 127 passed,
+two skipped, and one deselected after the follow-up. Scoped Ruff, mypy, and
+`git diff --check` passed.
+
 ## Verification
 
 The worktree's Python 3.14.10 environment resolved TensorBoard 2.21.0 and its

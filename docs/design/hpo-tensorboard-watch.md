@@ -62,6 +62,42 @@ formats observed in the designated Pestle–Mirage parent on Simulator
 TensorBoard's scalar sampling limit applies on runs longer than this
 1,000-update preset.
 
+## Run overview
+
+The Overview tab shows what the terminal watcher currently knows. Present
+four groups, in this order:
+
+| Group | Fields |
+| --- | --- |
+| Run | Model, seed, recorded status, and any pending finalization |
+| Current batch | Phase, ended/planned games, selected learner decisions, elapsed time, and active invocation ETA when available |
+| Committed progress | Updates/target, used decisions/budget, and collected decisions |
+| Latest update | Loss, entropy, approximate KL, collection and update durations, and collection games/s and actions/s |
+
+Use the same already-merged observation that drives terminal rendering.
+Identify missing or stale live observations in Current batch and partial or
+stale committed records in Committed progress. Suppress transient counts
+and phase for an unavailable live observation. Reuse the watcher's rules for
+ETA, elapsed time, and the active update target. Keep Time Series for saved
+per-update curves. There are no charts for in-progress counters or ETA.
+
+The watcher publishes one compact snapshot to its existing private temporary
+workspace, by atomic replacement only when the displayed data changes. It
+projects only the displayed fields. No new reads of the original run are
+needed. A pinned TensorBoard 2.21 adapter serves this snapshot through the
+native Text tab, renamed Overview, using the standard safe Markdown renderer.
+The displayed native step is the committed update number when known. Only
+one current row is returned. The temporary snapshot grants no authority
+and does not enter the event history. A snapshot failure can make Overview
+unavailable independently of terminal rendering and scalar export.
+
+Verify grouped values, active and stale observation transitions, unchanged
+output modes, no write on identical display data, the native plugin listing
+and current row before/after refresh, and Time Series coexistence. Use the
+same isolated checkout as the original TensorBoard feature while the target
+learner runs. The architecture reviewer accepted the Overview design before
+implementation.
+
 ## Alternatives and verification
 
 TensorBoard supplies the recurring reload and the scalar UI. A Plotly HTML

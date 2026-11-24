@@ -1141,7 +1141,9 @@ or completion authority.
 companion for interactive monitoring of standalone HPO6 parents. The companion
 reads a hash-verified prefix of the committed generation chain and appends only
 new scalar points. Its temporary event log and loopback HTTP server share the
-watcher's lifetime. Training keeps ownership of the run directory and its records.
+watcher's lifetime. The native Overview tab uses a single temporary snapshot
+from the same observation as terminal rendering. Training keeps ownership of
+the run directory and its records.
 
 Use TOML/dataclasses with closed schemas and explicit type/domain checks.
 Reject unknown keys, bool-as-int, nonfinite numbers, unknown versions, bad

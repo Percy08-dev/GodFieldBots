@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import json
 import os
 import select
 import subprocess
@@ -11,11 +13,18 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from gf_cli.hpo_progress_records import StandaloneScalarHistory
+from gf_common.domain import Json, integer
+from gf_common.hpo_progress import finite_number
 
 _STARTING = 'TensorBoard: starting'
+_OVERVIEW_FILE = 'overview.json'
+_OVERVIEW_TAG = 'HPO watch'
+_OVERVIEW_BYTES = 8192  # The snapshot contains only the four bounded display groups.
+_OVERVIEW_UNAVAILABLE = '<p>HPO watch overview unavailable.</p>'
 
 
 class TensorBoardWatch:
@@ -25,6 +34,7 @@ class TensorBoardWatch:
         self._workspace: tempfile.TemporaryDirectory[str] | None = None
         self._child: subprocess.Popen[bytes] | None = None
         self._startup = _STARTING
+        self._overview: tuple[int | None, str] | None = None
         if importlib.util.find_spec('tensorboard') is None:
             self._startup = 'TensorBoard: optional extra tensorboard is not installed'
             return
@@ -66,6 +76,30 @@ class TensorBoardWatch:
             line += ' (waiting for consistent committed records)'
         return line
 
+    def publish_overview(self, overview: tuple[int | None, str] | None) -> None:
+        if (self._workspace is None or self._child is None or self._child.poll() is not None
+                or self._overview == overview):
+            return
+        snapshot = Path(self._workspace.name) / _OVERVIEW_FILE
+        try:
+            if overview is None:
+                snapshot.unlink(missing_ok=True)
+            else:
+                step, markdown = overview
+                raw = json.dumps({'wall_time': time.time(), 'step': step,
+                                  'markdown': markdown}).encode('ascii')
+                if len(raw) > _OVERVIEW_BYTES:
+                    raise ValueError('oversized overview snapshot')
+                pending = snapshot.with_suffix('.next')
+                pending.write_bytes(raw)
+                pending.replace(snapshot)
+        except (OSError, ValueError):
+            with contextlib.suppress(OSError):
+                snapshot.unlink(missing_ok=True)
+                self._overview = None
+        else:
+            self._overview = overview
+
     def close(self) -> None:
         child, self._child = self._child, None
         workspace, self._workspace = self._workspace, None
@@ -91,6 +125,53 @@ def _status(work_dir: Path, port: int, waiting: bool) -> None:
     pending.replace(work_dir / 'status')
 
 
+def _read_overview(work_dir: Path) -> tuple[float, int | None, str]:
+    with (work_dir / _OVERVIEW_FILE).open('rb') as source:
+        raw = source.read(_OVERVIEW_BYTES + 1)
+    if len(raw) > _OVERVIEW_BYTES:
+        raise ValueError('oversized overview snapshot')
+    snapshot = json.loads(raw)
+    wall_time, step, markdown = snapshot['wall_time'], snapshot['step'], snapshot['markdown']
+    if not finite_number(wall_time) or type(markdown) is not str:
+        raise ValueError('invalid overview snapshot')
+    return wall_time, None if step is None else integer(step), markdown
+
+
+def _overview_plugins(work_dir: Path) -> list[Any]:
+    default = importlib.import_module('tensorboard.default')
+    base = importlib.import_module('tensorboard.plugins.base_plugin')
+    plugin_util = importlib.import_module('tensorboard.plugin_util')
+    text_plugin = importlib.import_module('tensorboard.plugins.text.text_plugin')
+
+    class Overview(text_plugin.TextPlugin):  # type: ignore[name-defined]
+        def is_active(self) -> bool:
+            return True
+
+        def frontend_metadata(self) -> Any:
+            return base.FrontendMetadata(element_name='tf-text-dashboard', tab_name='Overview')
+
+        def index_impl(self, ctx: Any, experiment: str) -> dict[str, list[str]]:
+            return {'.': [_OVERVIEW_TAG]}
+
+        def text_impl(self, ctx: Any, run: str, tag: str, experiment: str,
+                      enable_markdown: bool) -> list[Json]:
+            if (run, tag) != ('.', _OVERVIEW_TAG):
+                return []
+            wall_time = 0.
+            step: int | None = None
+            try:
+                wall_time, step, markdown = _read_overview(work_dir)
+                render = plugin_util.markdown_to_safe_html if enable_markdown else plugin_util.safe_html
+                html = render(markdown)
+            except Exception:  # noqa: BLE001 - isolate optional snapshot and renderer failures
+                html = _OVERVIEW_UNAVAILABLE
+                if step is None:
+                    html += '<p>Step 0 is an unconfirmed placeholder.</p>'
+            return [{'wall_time': wall_time, 'step': 0 if step is None else step, 'text': html}]
+
+    return [Overview if plugin is text_plugin.TextPlugin else plugin for plugin in default.get_plugins()]
+
+
 def _worker(root: Path, work_dir: Path, interval: float) -> None:
     program = importlib.import_module('tensorboard.program')
     event_pb2 = importlib.import_module('tensorboard.compat.proto.event_pb2')
@@ -100,7 +181,7 @@ def _worker(root: Path, work_dir: Path, interval: float) -> None:
     writer_module = importlib.import_module('tensorboard.summary.writer.event_file_writer')
 
     logdir = work_dir / 'events'
-    board = program.TensorBoard()
+    board = program.TensorBoard(plugins=_overview_plugins(work_dir))
     board.configure(['tensorboard', '--host=127.0.0.1', '--port=0', '--load_fast=false',
                      '--logdir', str(logdir), '--reload_interval', str(interval)])
     history = StandaloneScalarHistory(root)
