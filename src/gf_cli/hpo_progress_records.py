@@ -20,11 +20,11 @@ from gf_training.lineage import generation_path
 _READ_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError)
 
 
-def collection_games_per_second(games: object, seconds: Any) -> float | None:
-    if (type(games) is not int or not 0 <= games < 2**64
+def collection_rate(count: object, seconds: Any) -> float | None:
+    if (type(count) is not int or not 0 <= count < 2**64
             or not finite_number(seconds) or seconds <= 0):
         return None
-    rate = games / seconds
+    rate = count / seconds
     return rate if finite_number(rate) else None
 
 
@@ -140,7 +140,7 @@ class StandaloneProgressRecords:
             'committed_updates': None,
             'committed_used': None, 'committed_collected': None,
             'latest_metrics': None, 'latest_durations': None,
-            'last_collection_games_per_second': None}
+            'last_collection_games_per_second': None, 'last_collection_actions_per_second': None}
         if state['generation_sha256'] is None:
             return observed
         try:
@@ -170,7 +170,7 @@ class StandaloneProgressRecords:
         integer(collected, used)
         observed: Json = {'committed_updates': number, 'committed_used': used, 'committed_collected': collected,
             'latest_metrics': None, 'latest_durations': None,
-            'last_collection_games_per_second': None}
+            'last_collection_games_per_second': None, 'last_collection_actions_per_second': None}
         if number:
             update = read_hpo_update(self.root, number, state, generation['update_sha256'], scan=scan)
             if (update.get('schema_version') != 8 or update.get('status') != 'complete'
@@ -181,8 +181,11 @@ class StandaloneProgressRecords:
             observed['latest_metrics'] = {name: metrics[name]
                 for name in ('total_loss', 'policy_loss', 'value_mse', 'entropy', 'approx_kl')
                 if finite_number(metrics.get(name))}
-            observed['last_collection_games_per_second'] = collection_games_per_second(
-                update.get('actual_games'), update.get('collection_seconds'))
+            seconds = update.get('collection_seconds')
+            proof = update.get('source_proof')
+            actions = proof.get('accepted_decisions') if type(proof) is dict else None
+            observed['last_collection_games_per_second'] = collection_rate(update.get('actual_games'), seconds)
+            observed['last_collection_actions_per_second'] = collection_rate(actions, seconds)
             observed['latest_durations'] = {name: update[name]
                 for name in ('collection_seconds', 'update_seconds')
                 if finite_number(update.get(name)) and update[name] >= 0}

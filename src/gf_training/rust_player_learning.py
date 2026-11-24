@@ -800,10 +800,12 @@ class RustGameOperations:
             durations = None if update is None else {
                 name: update.get(name) for name in ('collection_seconds', 'update_seconds')
             }
+            proof = None if update is None else update.get('source_proof')
             observe(self._progress, {'committed_updates': row['generation'],
                 'committed_used': row['used_decisions'], 'committed_collected': row['collected_decisions'],
                 'latest_metrics': metrics, 'latest_durations': durations,
-                'latest_actual_games': None if update is None else update.get('actual_games')})
+                'latest_actual_games': None if update is None else update.get('actual_games'),
+                'latest_actual_game_actions': proof.get('accepted_decisions') if type(proof) is dict else None})
         return row
 
     def close_batch(self) -> None:

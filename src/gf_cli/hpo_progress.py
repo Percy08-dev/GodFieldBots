@@ -49,7 +49,7 @@ def _checked(value: Any) -> Json:
                 raise ValueError('invalid standalone progress counter')
         if (value.get('committed_updates') is None) != (value.get('committed_used') is None):
             raise ValueError('standalone committed counters require both values')
-        for name in ('last_collection_games_per_second', 'invocation_elapsed_seconds',
+        for name in ('last_collection_games_per_second', 'last_collection_actions_per_second', 'invocation_elapsed_seconds',
                      'eta_seconds'):
             field = value.get(name)
             if field is not None and (not finite_number(field) or field < 0):
@@ -154,9 +154,13 @@ def _render_standalone(value: Json, live: Json | None, durable: Json | None) -> 
     for key, label in (('collection_seconds', 'last collect'), ('update_seconds', 'last update/save')):
         if finite_number(durations.get(key)):
             parts.append(f'{label}={durations[key]:.2f}s')
-    throughput = committed.get('last_collection_games_per_second')
-    if finite_number(throughput):
-        parts.append(f'last collection={throughput:.2f} games/s')
+    rates = []
+    for unit in ('games', 'actions'):
+        rate = committed.get(f'last_collection_{unit}_per_second')
+        if finite_number(rate):
+            rates.append(f'{rate:.2f} {unit}/s')
+    if rates:
+        parts.append('last collection=' + ', '.join(rates))
     elapsed = current.get('invocation_elapsed_seconds') if running else committed.get('elapsed_seconds')
     if finite_number(elapsed):
         parts.append(f'{"invocation elapsed" if running else "elapsed"}={elapsed:.2f}s')
@@ -349,10 +353,11 @@ class _StandaloneTiming:
         self.estimated_end: float | None = None
 
     def __call__(self, facts: Json) -> None:
-        from gf_cli.hpo_progress_records import collection_games_per_second
+        from gf_cli.hpo_progress_records import collection_rate
 
         now = self.clock()
-        elapsed = now - self.started
+        snapshot = {**facts, 'invocation_elapsed_seconds': now - self.started}
+        actions = snapshot.pop('latest_actual_game_actions', None)
         generation, used = facts.get('committed_updates'), facts.get('committed_used')
         if generation is not None and used is not None:
             update_eta = self.updates.commit(generation, now=now, budget=self.target)['eta_seconds']
@@ -360,10 +365,11 @@ class _StandaloneTiming:
             estimates = [eta for eta in (update_eta, decision_eta) if eta is not None]
             self.estimated_end = now + min(estimates) if estimates else None
             durations = facts.get('latest_durations') or {}
-            facts = {**facts, 'last_collection_games_per_second': collection_games_per_second(
-                facts.get('latest_actual_games'), durations.get('collection_seconds'))}
-        remaining = None if self.estimated_end is None else max(0., self.estimated_end - now)
-        self.emit({**facts, 'invocation_elapsed_seconds': elapsed, 'eta_seconds': remaining})
+            seconds = durations.get('collection_seconds')
+            snapshot['last_collection_games_per_second'] = collection_rate(facts.get('latest_actual_games'), seconds)
+            snapshot['last_collection_actions_per_second'] = collection_rate(actions, seconds)
+        snapshot['eta_seconds'] = None if self.estimated_end is None else max(0., self.estimated_end - now)
+        self.emit(snapshot)
 
 
 def standalone_publisher(control: HostControl, config: Any, ownership: RunOwnership) -> ProgressCallback:

@@ -433,7 +433,17 @@ def test_worker_constructor_display_failure_preserves_original_update_close(tmp_
         assert hpo_progress.optional_diagnostic_emitter(dict(__import__('os').environ),io.StringIO()) is None
 
 
-def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(tmp_path, monkeypatch):
+@pytest.mark.parametrize(('proof_fields', 'expected_rate'), [
+    ({'source_proof': {'accepted_decisions': 520}}, 50.),
+    ({}, None),
+    ({'source_proof': []}, None),
+    ({'source_proof': {'accepted_decisions': True}}, None),
+    ({'source_proof': {'accepted_decisions': -1}}, None),
+    ({'source_proof': {'accepted_decisions': 1.5}}, None),
+    ({'source_proof': {'accepted_decisions': 0}}, 0.),
+])
+def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(
+        tmp_path, monkeypatch, proof_fields, expected_rate):
     from gf_cli.hpo_progress import watch
     from gf_common.domain import canonical, digest
     from gf_common.hpo_update_bytes import encode_update
@@ -449,7 +459,8 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
 
     update = {'run_id': root.name, 'generation': 6, 'schema_version': 8, 'status': 'complete',
         'metrics': {'total_loss': .07, 'entropy': .6, 'approx_kl': .005},
-        'actual_games': 8, 'collection_seconds': 10.4, 'update_seconds': 1.2}
+        'accepted_decisions': 120, 'actual_games': 8, 'collection_seconds': 10.4,
+        'update_seconds': 1.2, **proof_fields}
     stored = encode_update(update, compressed=True)
     (root / 'updates/000006.json.zst').write_bytes(stored)
     generation = {'run_id': root.name, 'generation': 6, 'schema_version': 6,
@@ -482,6 +493,7 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(t
     assert observed['durable']['latest_metrics']['total_loss'] == .07
     assert observed['durable']['latest_durations']['collection_seconds'] == 10.4
     assert observed['durable']['last_collection_games_per_second'] == 8 / 10.4
+    assert observed['durable']['last_collection_actions_per_second'] == expected_rate
     assert observed['durable']['elapsed_seconds'] == 61.2
     assert 'eta_seconds' not in observed['durable']
 
@@ -628,6 +640,10 @@ def test_standalone_progress_namespace_is_outside_training_parent(tmp_path, faul
     {'committed_updates': 1},
     {'committed_used': 1},
     {'committed_updates': True, 'committed_used': 1},
+    {'last_collection_actions_per_second': True},
+    {'last_collection_actions_per_second': -1.},
+    {'last_collection_actions_per_second': '50'},
+    {'last_collection_actions_per_second': float('inf')},
 ])
 def test_malformed_standalone_snapshot_is_optional_and_does_not_break_watch(tmp_path, bad):
     from gf_cli.hpo_progress import watch
@@ -668,12 +684,14 @@ def test_standalone_timing_uses_intervals_and_earlier_stop_target(budget, estima
     observer = _StandaloneTiming(facts.append, target=4, budget=budget, clock=lambda: now)
     for generation, used in enumerate((20, 30, 40)):
         observer({'committed_updates': generation, 'committed_used': used,
-            'latest_actual_games': 8, 'latest_durations': {'collection_seconds': 4.}})
+            'latest_actual_games': 8, 'latest_actual_game_actions': 400,
+            'latest_durations': {'collection_seconds': 4.}})
         if generation < 2:
             assert facts[-1]['eta_seconds'] is None
         now += 10.
     assert facts[-1]['invocation_elapsed_seconds'] == 20.
     assert facts[-1]['last_collection_games_per_second'] == 2.
+    assert facts[-1]['last_collection_actions_per_second'] == 100.
     assert facts[-1]['eta_seconds'] == estimated
 
 
@@ -695,6 +713,77 @@ def test_standalone_remaining_requires_current_live_training(availability, statu
     assert '7.13 games/s' in text
     assert ('ETA' in text) == has_eta
     assert ('invocation elapsed=50.00s' if has_eta else 'elapsed=120.00s') in text
+
+
+@pytest.mark.parametrize(('games_rate', 'actions_rate', 'expected'), [
+    (2., 100., 'last collection=2.00 games/s, 100.00 actions/s'),
+    (None, 100., 'last collection=100.00 actions/s'),
+    (2., None, 'last collection=2.00 games/s'),
+    (None, None, ''),
+])
+def test_standalone_renders_only_the_available_committed_rates(games_rate, actions_rate, expected):
+    from gf_cli.hpo_progress import render
+
+    live = {'standalone': True, 'phase': 'collect', 'status': 'running', 'model': 'mlp',
+        'seed': 17, 'last_collection_games_per_second': games_rate,
+        'last_collection_actions_per_second': actions_rate}
+    text = render({'availability': 'available', 'snapshot': live, 'message': 'observation'})
+    assert ('last collection=' in text) == bool(expected)
+    if expected:
+        assert text.split('last collection=', 1)[1].split(' [')[0] == expected.removeprefix('last collection=')
+
+
+def test_standalone_commit_publishes_both_players_actions_after_registry_commit(tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from gf_cli.hpo_progress import _StandaloneTiming
+    from gf_training.rust_player_learning import RustHpoOperations
+
+    state = {'updates': 0}
+    row = {'generation': 1, 'used_decisions': 60, 'collected_decisions': 63}
+    recorded = []
+    emitted = []
+    owner = object.__new__(RustHpoOperations)
+    owner.registry = SimpleNamespace(
+        state=state, directory=tmp_path, records={1: row}, commit=lambda *args, **kwargs: row,
+        publish=lambda generation, **kwargs: recorded.append(generation),
+    )
+    monkeypatch.setattr(owner, 'sample_cuda', lambda _: None)
+
+    def observe(facts):
+        emitted.append((recorded.copy(), facts))
+
+    owner._progress = _StandaloneTiming(observe, target=10, budget=1000)
+    update = {'collection_manifest_sha256': 'a' * 64, 'metrics': {'total_loss': .07},
+        'actual_games': 8, 'collection_seconds': 4., 'accepted_decisions': 60,
+        'source_proof': {'accepted_decisions': 400}}
+    assert owner.commit(tmp_path, state, None, generation=1, update=update, controls={},
+        acknowledgement={'pair': object()}, deadline=time.monotonic() + 10) == row
+    (published, snapshot), = emitted
+    assert published == [1]
+    assert snapshot['committed_used'] == 60
+    assert snapshot['last_collection_actions_per_second'] == 100.
+
+
+def test_bad_private_action_count_does_not_hide_valid_live_progress(tmp_path):
+    from gf_cli.hpo_progress import ProgressOwner, _StandaloneTiming, read_progress
+
+    with CampaignStore(tmp_path / 'diagnostic-store', mode='fresh', max_owned_bytes=8 * 1024**2) as store:
+        owner = ProgressOwner(store, mode='off', stream=io.StringIO())
+        timing = _StandaloneTiming(owner.emit, target=10, budget=1000)
+        facts = {'standalone': True, 'phase': 'collect', 'committed_updates': 1, 'committed_used': 60,
+            'latest_actual_games': 8, 'latest_actual_game_actions': float('inf'),
+            'latest_durations': {'collection_seconds': 4.}}
+        timing(facts)
+        observed = read_progress(store.directory)
+        assert observed['availability'] == 'available'
+        snapshot = observed['snapshot']
+        assert snapshot['committed_updates'] == 1
+        assert snapshot['last_collection_games_per_second'] == 2.
+        assert snapshot['last_collection_actions_per_second'] is None
+        assert 'latest_actual_game_actions' not in snapshot
+        assert facts['latest_actual_game_actions'] == float('inf')
 
 
 _SCREEN_CONTROLS = {'smcup': b'\x1b[?47h', 'rmcup': b'\x1b[?47l', 'clear': b'\x1b[H\x1b[J'}

@@ -1627,3 +1627,14 @@ An actual pseudo-terminal with `TERM=xterm-256color` redrew repeated
 watch frames in the alternate screen and restored the original screen
 on Ctrl+C. The same check kept line output for `linux` and `vt100`,
 and `--once` emitted plain text.
+
+The standalone action rate uses both seats' accepted actions from the
+committed Source proof and the same collection duration as `games/s`.
+`gf-bots hpo watch --once --path` on archived run
+`cd05a376-93f2-44b4-8516-913c96f49518` displayed
+`last collection=5.65 games/s, 172.13 actions/s` from update 16.
+The JSON value matched the 7,795 stored accepted actions divided by its
+45.286-second collection. The existing `uv run --no-sync` fresh command
+passed configuration materialization and the current Native profile check.
+The progress, operation, and match-pump pytest command above passed 143
+cases on the host. Ruff, mypy, and the independent reviews passed.
