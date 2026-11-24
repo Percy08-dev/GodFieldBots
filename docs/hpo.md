@@ -439,29 +439,20 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 ### 保存先の設定
 
-[実行用TOML](../configs/hpo/mlp-256-update-budget-probe.toml)を
-`tools/rust_player_operation.py` に渡して256試合プローブを実行します。
-単独実行用のHPO TOMLには、先頭のコメントに必要なPython環境と
-IDの生成を含む起動コマンドを記載します。実行時は対象TOMLのコマンドを使います。
-リポジトリの `.venv` に
+新規の[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000.toml)と
+[256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)は、
+〈夢〉の互換性を訂正したSimulator `9e47d4c` を使います。収束診断のTOML先頭に
+新しいIDの生成と `tools/rust_player_operation.py` の起動例を記載しています。
 `uv sync --locked --inexact --extra torch-cuda --extra hpo --extra shared-inference`
-で学習依存関係を揃え、ソースと `Cargo.lock` に対応する監督バイナリ入りの
-Nativeホイールをインストールします。`uv run --no-sync` でその環境を使います。
-実行用TOMLと[テンプレート](../configs/hpo/mlp-256-update-budget-probe-template.toml)は
-ちからの粉を訂正した
-[基礎実験TOML](../configs/experiments/hpo-rust-mlp-strength-powder-base.toml)を参照します。
-別の実験ではテンプレートを `configs/hpo/` 内にコピーし、
-`stage` と保存先の `strength-powder` を揃えて変えます。
-相対パスの基準はHPO TOMLのあるディレクトリです。
-旧プローブの再現には記録済みのSimulatorとコミット `1076f80` 時点の実行用TOMLを使います。
+で `.venv` に依存関係を揃え、非公開ドローに対応したNativeホイールを同じ環境に
+インストールします。起動時は `uv run --no-sync` でその環境を使います。
+検証済みwheelは `runs/concealed-dream-draw.2yyZLu/wheels-final` にあります。
+[実行版の検証記録](verification/concealed-dream-draw.md)
 
-〈夢〉の互換性を訂正したSimulatorで新しく実行する場合は、
-[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000-dream.toml)、
-[256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)、
-または[新しいテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)
-を使います。ローカルの対応するNativeホイールとPython環境は
-`runs/dream-compat` に用意します。新しいプリセットの保存先とAction profileの
-対応関係は[実行版の検証記録](verification/dream-simulator-contract.md)を参照してください。
+別の実験では[プローブのテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)
+を `configs/hpo/` 内にコピーし、`stage` と保存先を揃えて変えます。
+相対パスの基準はHPO TOMLのあるディレクトリです。過去の収集を再現する場合は
+runに記録されたTOML、Simulator、Nativeビルドを使います。
 
 | `[storage]`の項目 | 指定と用途 |
 | --- | --- |
@@ -475,7 +466,8 @@ Nativeホイールをインストールします。`uv run --no-sync` でその�
 
 256試合プローブの実行用TOMLとテンプレートは、HDD上の専用ext4 VHDXを
 `/mnt/gf_data` にマウントする構成です。確定済み原本DB、親・数値データ、
-Optuna、保持するHTTPログを、このマウントの `ppo-hpo/strength-powder` 配下に保存します。
+Optuna、保持するHTTPログを、このマウントの `ppo-hpo/mlp-256-update-budget-probe-dream`
+配下に保存します。
 別のマウント先を使う環境では、コピーしたHPO TOMLの保存先を実際の専用ext4に揃えます。
 開始時に書き込み可能な専用ext4とtmpfsを確認します。現在の空き容量で
 1万更新を完走できるかは別に測定します。

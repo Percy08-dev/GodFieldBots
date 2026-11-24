@@ -49,6 +49,10 @@ candidate-columns-v2, and persisted version identifiers stay pinned. The p65
 parent remains failed and quarantined. Live resume retains its recorded binary
 identity requirement.
 
+The default convergence preset selects the corrected Dream release, the
+1.5 GiB numeric budget, and the established Dream output paths for new runs.
+Historical audit and replay use the settings and artifacts recorded at launch.
+
 The architecture reviewer cleared this design before implementation after
 checking the Simulator and ADRs 0062, 0065 and 0067. The review identified both
 prepared-array shape gates and the Native serving count as points to verify.

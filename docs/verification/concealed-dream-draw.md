@@ -95,3 +95,29 @@ post-run command was `tools/rust_player_verify_operation.py --lane native-hpo
 --learning-seed 17 --full-source-audit`. The exact arguments, configuration,
 IDs and outputs are in `runs/concealed-dream-draw.2yyZLu/retry`. The full audit
 SHA-256 is `296bbbd15936aaff37f5f2a08a22d0bc70f3e76520afa05384b3bd0bfb7fabf3`.
+
+## Default convergence preset
+
+**PASS** `configs/hpo/mlp-256-convergence-1000.toml` and the versioned
+`mlp-256-convergence-1000-dream.toml` load with identical effective settings
+and configuration digest `094559a4c9b4015a787f839db97c7a5c6ae64db370682ddffdb4465b9d6c6114`.
+Using the default preset, `operation_inputs(..., mode="fresh")` and
+`startup_preview` selected 256 games, 1,000 updates, CUDA and the 1.5 GiB
+numeric budget. `CardInstanceRuntimeEvidence.preflight`,
+`check_native_collection_storage`, `check_storage`, the Native capability
+check and companion discovery passed for the real host paths. The preceding
+wheel failed the concealed-draw capability check. This was preflight only.
+
+**PASS** `uv sync --offline --locked --inexact --extra torch-cuda --extra hpo
+--extra shared-inference` restored the project environment. The verified wheel
+was installed with `uv pip install --offline --no-deps --reinstall --python
+.venv/bin/python`. `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run --no-sync python`
+then passed the fresh-operation preflight with the same extension SHA-256,
+CUDA Torch `2.14.1+cu132` on the RTX 5070 Ti, and the staged storage settings.
+This check created no training parent.
+
+Run `9520c66d-4f65-46bd-9349-702a1d1f57d1` used the earlier default preset
+and Simulator `3172da4`. Its HTTP archive matched the 46 accepted p41 actions
+and the rejection in issue 0014. The exact old TOML with SHA-256
+`32e9e77bbf1ff01a4b29416efcf6af114b93a8c4ab9acdcca73d521f844a89bb` is retained
+in `runs/concealed-dream-draw.2yyZLu/historical-configs`.

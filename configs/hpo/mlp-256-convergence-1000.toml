@@ -1,6 +1,5 @@
-# PPO の学習診断を1,000更新まで記録する単独実行。
-# プロジェクトの .venv に学習依存関係と監督バイナリ入りの
-# Nativeホイールを揃え、リポジトリ直下で以下を実行する。
+# 修正版SimulatorとNativeホイールでPPO学習診断を1,000更新まで記録する。
+# 修正版Nativeホイールをプロジェクトの .venv にインストールしてから実行する。
 #
 # run_id=$(uuidgen)
 # experiment_id=$(uuidgen)
@@ -15,9 +14,9 @@ schema_version = 6
 kind = "ppo-hpo"
 origin = "producer-owned-v1"
 encoder = "canonical-rust"
-base_experiment = "../experiments/hpo-rust-mlp-strength-powder-base.toml"
+base_experiment = "../experiments/hpo-rust-mlp-dream-base.toml"
 model_id = "mlp"
-stage = "mlp-256-convergence-1000"
+stage = "mlp-256-convergence-1000-dream"
 trial_count = 1
 # The update cap ends this diagnostic run. D exceeds 1,000 × 256 × 1,024.
 decision_budget = 262_144_001
@@ -180,7 +179,8 @@ managed_ram_bytes = 25769803776
 managed_cuda_bytes = 12884901888
 collector_budget_bytes = 8589934592
 source_budget_bytes = 12884901888
-numeric_budget_bytes = 1073741824
+# 記録済みの第6収集では数値データの必要量が1 GiBを超えた。
+numeric_budget_bytes = 1610612736
 save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
 
@@ -188,23 +188,23 @@ parent_budget_bytes = 1073741824
 # The fixed operation preserves inference weights at these milestones.
 enabled = true
 wall_seconds = 1_200
-updates = [0, 100, 250, 500, 1000]
+updates = [0, 1, 10, 50, 100, 200, 350, 500, 750, 1000]
 
 [storage]
 # 収集作業は基礎実験のtmpfsを使い、確定した原本と学習データを専用ext4に保存します。
-parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/parents"
-numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/parents"
-campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/parents/campaign"
-originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/originals"
-optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/study.sqlite3"
+parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents"
+numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents"
+campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents/campaign"
+originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/originals"
+optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/study.sqlite3"
 # About 105 GiB for 1,000 batches at the measured numeric + original size.
 # Capacity also covers checkpoint artifacts, evaluation data, and larger batches.
 destination_capacity_bytes = 171798691840
 admission_reservation_bytes = 1073741824
 
 [storage.hpo_diagnostics]
-http_log_ram_root = "/dev/shm/godfieldbots/http-logs/mlp-256-convergence-1000"
-http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000/http-logs"
+http_log_ram_root = "/dev/shm/godfieldbots/http-logs/mlp-256-convergence-1000-dream"
+http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/http-logs"
 http_log_retention = "errors"
 http_log_compression = "zstd"
 update_compression = "zstd"
