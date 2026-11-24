@@ -1,0 +1,718 @@
+{
+  "simulator_revision": "3172da407e37a4ad57ac82e70a96910c3ac6fbb8",
+  "seed": "9eff245e-a303-55ec-a17b-a3441aa184e7",
+  "actor": 2,
+  "revision": 46,
+  "turn": 32,
+  "required_choice": "turn_action",
+  "own": {
+    "player_id": 2,
+    "hp": 3,
+    "mp": 0,
+    "money": 20,
+    "cards": [
+      {
+        "kind": "artifact",
+        "card_ref": "c1_046386d6ca09f68e76f98df9020971fc",
+        "definition_id": "heart-shell"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_499748cfe65ab8d88a14d099d3d547b8",
+        "definition_id": "rainbow-curtain"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_95000f1f2041e98174b7948c208413b3",
+        "definition_id": "smile-flower"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_70ec3dc54c43402a877a0a75e46b6262",
+        "definition_id": "smile-shell"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_6864cec3d7242a72f18a51bee9af5699",
+        "definition_id": "release",
+        "state": "unused"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_f67a7f319a7f7ea4f4a72f8dbaea37fb",
+        "definition_id": "flash",
+        "state": "unused"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_49a9e68719eb2612f87e67c8b9cb0779",
+        "definition_id": "mars-ring"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_45e4f9e77c796860cda1271b5b6ad64e",
+        "definition_id": "heart-shell"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_191cb3c08e8d8f3188be1c379fffcba6",
+        "definition_id": "ice-age",
+        "state": "unused"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_87492ae8be7315aa8fa4160dc82bda38",
+        "definition_id": "heart-shell"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_146a0c2273b23c9665ccef06a34fc4c5",
+        "definition_id": "ice",
+        "state": "learned"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_ac1710c9467f9ec4d18d85a2aad31fb1",
+        "definition_id": "mercury-ring"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_6b6e34129f2b8162ee1cf164e1f77b65",
+        "definition_id": "treasure",
+        "state": "unused"
+      },
+      {
+        "kind": "miracle",
+        "card_ref": "c1_4e5db0bed74d3ec2160fbda7e1231819",
+        "definition_id": "avalanche",
+        "state": "unused"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_4dd96d6b78ed785d8c52ccf969c92de9",
+        "definition_id": "core-barrier"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_2652fb49c4402c57910fe7656e4a0759",
+        "definition_id": "smile-shell"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_83f3341489d35f3144b788cf8f1e09d3",
+        "definition_id": "heart-dew"
+      },
+      {
+        "kind": "artifact",
+        "card_ref": "c1_f438f68d0a448e9a6222499a1c2546c4",
+        "definition_id": "spiritual-staff"
+      }
+    ],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": true,
+      "dream": true,
+      "dark_cloud": false
+    },
+    "guardian": null,
+    "ascended": false
+  },
+  "end_times": false,
+  "hints": {
+    "action_options_schema_version": "2",
+    "rule_set_version": "true-match-1v1-v2",
+    "card_ref_scheme": "aes256-card-ref-v1",
+    "actor": 2,
+    "state_revision": 46,
+    "required_choice": "turn_action",
+    "usable_cards": [
+      {
+        "card_ref": "c1_046386d6ca09f68e76f98df9020971fc",
+        "definition_id": "heart-shell"
+      },
+      {
+        "card_ref": "c1_95000f1f2041e98174b7948c208413b3",
+        "definition_id": "smile-flower"
+      },
+      {
+        "card_ref": "c1_70ec3dc54c43402a877a0a75e46b6262",
+        "definition_id": "smile-shell"
+      },
+      {
+        "card_ref": "c1_6864cec3d7242a72f18a51bee9af5699",
+        "definition_id": "release"
+      },
+      {
+        "card_ref": "c1_f67a7f319a7f7ea4f4a72f8dbaea37fb",
+        "definition_id": "flash"
+      },
+      {
+        "card_ref": "c1_45e4f9e77c796860cda1271b5b6ad64e",
+        "definition_id": "heart-shell"
+      },
+      {
+        "card_ref": "c1_191cb3c08e8d8f3188be1c379fffcba6",
+        "definition_id": "ice-age"
+      },
+      {
+        "card_ref": "c1_87492ae8be7315aa8fa4160dc82bda38",
+        "definition_id": "heart-shell"
+      },
+      {
+        "card_ref": "c1_6b6e34129f2b8162ee1cf164e1f77b65",
+        "definition_id": "treasure"
+      },
+      {
+        "card_ref": "c1_4e5db0bed74d3ec2160fbda7e1231819",
+        "definition_id": "avalanche"
+      },
+      {
+        "card_ref": "c1_2652fb49c4402c57910fe7656e4a0759",
+        "definition_id": "smile-shell"
+      },
+      {
+        "card_ref": "c1_83f3341489d35f3144b788cf8f1e09d3",
+        "definition_id": "heart-dew"
+      },
+      {
+        "card_ref": "c1_f438f68d0a448e9a6222499a1c2546c4",
+        "definition_id": "spiritual-staff"
+      },
+      {
+        "card_ref": "c1_146a0c2273b23c9665ccef06a34fc4c5",
+        "definition_id": "ice"
+      }
+    ],
+    "candidate_groups": {
+      "cost_cut": [
+        {
+          "card_ref": "c1_f438f68d0a448e9a6222499a1c2546c4",
+          "definition_id": "spiritual-staff"
+        }
+      ],
+      "miracle:utility": [
+        {
+          "card_ref": "c1_6864cec3d7242a72f18a51bee9af5699",
+          "definition_id": "release"
+        },
+        {
+          "card_ref": "c1_6b6e34129f2b8162ee1cf164e1f77b65",
+          "definition_id": "treasure"
+        }
+      ],
+      "miracle:weapon": [
+        {
+          "card_ref": "c1_f67a7f319a7f7ea4f4a72f8dbaea37fb",
+          "definition_id": "flash"
+        },
+        {
+          "card_ref": "c1_191cb3c08e8d8f3188be1c379fffcba6",
+          "definition_id": "ice-age"
+        },
+        {
+          "card_ref": "c1_4e5db0bed74d3ec2160fbda7e1231819",
+          "definition_id": "avalanche"
+        },
+        {
+          "card_ref": "c1_146a0c2273b23c9665ccef06a34fc4c5",
+          "definition_id": "ice"
+        }
+      ],
+      "utility": [
+        {
+          "card_ref": "c1_046386d6ca09f68e76f98df9020971fc",
+          "definition_id": "heart-shell"
+        },
+        {
+          "card_ref": "c1_95000f1f2041e98174b7948c208413b3",
+          "definition_id": "smile-flower"
+        },
+        {
+          "card_ref": "c1_70ec3dc54c43402a877a0a75e46b6262",
+          "definition_id": "smile-shell"
+        },
+        {
+          "card_ref": "c1_6864cec3d7242a72f18a51bee9af5699",
+          "definition_id": "release"
+        },
+        {
+          "card_ref": "c1_45e4f9e77c796860cda1271b5b6ad64e",
+          "definition_id": "heart-shell"
+        },
+        {
+          "card_ref": "c1_87492ae8be7315aa8fa4160dc82bda38",
+          "definition_id": "heart-shell"
+        },
+        {
+          "card_ref": "c1_6b6e34129f2b8162ee1cf164e1f77b65",
+          "definition_id": "treasure"
+        },
+        {
+          "card_ref": "c1_2652fb49c4402c57910fe7656e4a0759",
+          "definition_id": "smile-shell"
+        },
+        {
+          "card_ref": "c1_83f3341489d35f3144b788cf8f1e09d3",
+          "definition_id": "heart-dew"
+        }
+      ],
+      "weapon": [
+        {
+          "card_ref": "c1_f67a7f319a7f7ea4f4a72f8dbaea37fb",
+          "definition_id": "flash"
+        },
+        {
+          "card_ref": "c1_191cb3c08e8d8f3188be1c379fffcba6",
+          "definition_id": "ice-age"
+        },
+        {
+          "card_ref": "c1_4e5db0bed74d3ec2160fbda7e1231819",
+          "definition_id": "avalanche"
+        },
+        {
+          "card_ref": "c1_f438f68d0a448e9a6222499a1c2546c4",
+          "definition_id": "spiritual-staff"
+        },
+        {
+          "card_ref": "c1_146a0c2273b23c9665ccef06a34fc4c5",
+          "definition_id": "ice"
+        }
+      ]
+    },
+    "exchange_cards": [],
+    "sell_cards": [],
+    "buy_cards": [],
+    "phenomenon_cards": [],
+    "valid_targets": [
+      2,
+      1
+    ],
+    "can_pray": false,
+    "can_discard": true,
+    "can_sacrifice": false,
+    "can_allow": false
+  },
+  "prefix": [
+    {
+      "player": 1,
+      "action": {
+        "card_refs": [
+          "c1_436f54bc4e64d6b34f631f74ebf6d58b",
+          "c1_9cb457af718a272f46f4d3d2272c1bf5",
+          "c1_bc4bc3ad71f6530a6753248744dfc12f",
+          "c1_8ce452bb9816cecd26182dcaff062b84"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_146a0c2273b23c9665ccef06a34fc4c5"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_c8dbaa4221824011d19156afb485d0a9",
+          "c1_2fc0c91b7bda4dee5806e692dc7b29d4"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_4952ae31cb15661ee6170712793477e8",
+          "c1_42a49a0355c18aacfebaf128f80b99dd",
+          "c1_bbced5d4bf493543bda834741fc41a57",
+          "c1_e44d7f3c7d01b019fe1220144a20ac39",
+          "c1_4e4a16ecc21c36cd439c3ca06454430f"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_161b66e7a8a0d11859d36aaf7aa71990"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_a8b8c111b0c7253a9a88a6f4ed97745d",
+          "c1_b86beb26c18afc7dbeb34024f56e678c"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "card_refs": [
+          "c1_b3063565e5cb74255db6ce63c4600065",
+          "c1_61c7ef91c12002c505c3b59574fe897e"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_146a0c2273b23c9665ccef06a34fc4c5"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_4ed04bc93d9a6dbaa524ac05f4936908"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_146a0c2273b23c9665ccef06a34fc4c5"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_cbc2ba5fdf305bd25f8b75a54e470fc5"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_0f5b9ee42b3f8bd45286be57174f6274"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_146a0c2273b23c9665ccef06a34fc4c5"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_f9f08c1e6aaffdfa79b324e1935e312f",
+          "c1_64f9a1ca3dd390b2422ee068412e5f55"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_82ae0f8805fe2f18217c5e3e3f5ff32c"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_146a0c2273b23c9665ccef06a34fc4c5"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_e88c2b8d60ee25067626741eb524db4e"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_6e11e389f47f6339493c2575cefdb514"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_3eeee37842c447e8d40f70d3289e58f1"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_6f699c790f84fdc2408a6be479a78d5a"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_9f26838ba26a7e23cdf09864161b9477"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_07828771fd13585c5819827aab7a47a8"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "card_ref": "c1_1a419075af39b38f0eee43850944bde4",
+        "hp": 13,
+        "money": 17,
+        "mp": 1,
+        "type": "exchange"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_701ff0ad87dfcad0d446735670a693f8"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "card_refs": [
+          "c1_8adc1c188d4c3f3fd456000227624372",
+          "c1_bc1df9f30352b2d66cb8f4aae2ec5ba3"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_46acddd6a32a1161362d43bff0095099"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [
+          "c1_868d29911e166290d987479ba3f9984c"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "card_refs": [
+          "c1_9edd80574ddca551ba3425ef854a85eb"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "type": "pray"
+      }
+    },
+    {
+      "player": 1,
+      "action": {
+        "ordered_card_refs": [
+          "c1_a50aca4f8ebb91457f5e3023a81e6796"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player": 2,
+      "action": {
+        "ordered_card_refs": [],
+        "type": "respond"
+      }
+    }
+  ],
+  "submitted": {
+    "ordered_card_refs": [
+      "c1_191cb3c08e8d8f3188be1c379fffcba6",
+      "c1_f438f68d0a448e9a6222499a1c2546c4"
+    ],
+    "target": 1,
+    "type": "play_sequence"
+  },
+  "response": {
+    "http_status": 422,
+    "code": "INVALID_ACTION",
+    "rejection_code": "illegal_combination",
+    "revision": 46,
+    "invalid_attempt_count": 1
+  }
+}

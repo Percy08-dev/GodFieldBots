@@ -63,8 +63,22 @@ fn strength_powder_card_instance_contract() -> &'static Value {
     &CONTRACT
 }
 
+fn dream_compat_card_instance_contract() -> &'static Value {
+    static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
+        let mut contract = strength_powder_card_instance_contract().clone();
+        contract["profile_id"] = json!("card-instance-simulator-v2-shared-20261124");
+        contract["simulator_revision"] = json!("9e47d4c5f8cd3f60437f9aeabc95076c1dc04321");
+        contract["spec_inventory_sha256"] =
+            json!("afefd6f3b9113b813c90aaae7bb7b18f1e6299e52bf814ef34ec22112362ab5e");
+        contract
+    });
+    &CONTRACT
+}
+
 fn is_shared_card_instance_contract(contract: &Value) -> bool {
-    contract == shared_card_instance_contract() || contract == strength_powder_card_instance_contract()
+    contract == shared_card_instance_contract()
+        || contract == strength_powder_card_instance_contract()
+        || contract == dream_compat_card_instance_contract()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -130,11 +144,14 @@ impl Config {
                 .all(|w| *w > 0 && *w <= i32::MAX as u64),
             "invalid channel weight",
         )?;
-        c.requires_powder_weapon = c.action_contract == *strength_powder_card_instance_contract();
+        c.requires_powder_weapon = c.action_contract == *strength_powder_card_instance_contract()
+            || c.action_contract == *dream_compat_card_instance_contract();
         Ok(c)
     }
     fn simulator_binary_sha256(&self) -> &'static str {
-        if self.requires_powder_weapon {
+        if self.action_contract == *dream_compat_card_instance_contract() {
+            "f95fadbc8eaad23fbe63e17ac9bdb0ebeca4b237956dedeab09d86f30cfd94bc"
+        } else if self.action_contract == *strength_powder_card_instance_contract() {
             "45ac711b2f172dfd89c23edf30ba0045ab0704c0215a6995d4e8626af1cfb923"
         } else {
             "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"

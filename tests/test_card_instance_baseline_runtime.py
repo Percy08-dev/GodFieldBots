@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from gf_common import card_instance
 from gf_common.candidate_columns import (
     decode_candidate_columns,
     decode_candidate_columns_v2,
@@ -28,7 +29,7 @@ from gf_common.card_instance import (
     corrected_card_instance_contract,
     strength_powder_card_instance_contract,
 )
-from gf_common.card_instance_rules import card_instance_rules
+from gf_common.card_instance_rules import card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import (
     APPROVED_BINARY_SHA256,
     APPROVED_CHANGE_FILES,
@@ -103,8 +104,7 @@ def receipt():
     }
 
 
-def strength_powder_runtime_receipt():
-    contract = strength_powder_card_instance_contract()
+def shared_runtime_receipt(contract):
     build = approved_runtime_build(contract)
     value = receipt()
     value.update(schema_version=2, action_contract=asdict(contract), build=build)
@@ -118,7 +118,7 @@ def strength_powder_runtime_receipt():
     return value
 
 
-def game(value=None, seed=17):
+def game(value=None, seed=17, *, actions=ACTIONS):
     frame, bank, delta = records(
         inputs([("fireball", "learned"), ("fireball", "unused"), ("spiritual-staff", None)], mp=20)
         if value is None
@@ -127,15 +127,15 @@ def game(value=None, seed=17):
     search_seed = int(
         digest({"recipe": "structured-search-stream-v1", "sampling_seed": seed})[:16], 16
     )
-    generated = PublicCandidateGeneratorV3(ACTIONS, rules=RULES, clock=lambda: 0.0).generate_game(
+    generated = PublicCandidateGeneratorV3(actions, rules=RULES, clock=lambda: 0.0).generate_game(
         frame, bank.view(), random.Random(search_seed), NumericCosts()
     )
     return frame, bank, delta, generated
 
 
-def writer(tmp_path, seed=17, *, value=None):
-    frame, bank, delta, generated = game(value, seed=seed)
-    policy = CardInstanceBaseline("heuristic", ACTIONS, rules=RULES)
+def writer(tmp_path, seed=17, *, value=None, actions=ACTIONS, runtime_evidence=None):
+    frame, bank, delta, generated = game(value, seed=seed, actions=actions)
+    policy = CardInstanceBaseline("heuristic", actions, rules=RULES)
     selected = policy.select_frame(frame, bank.view(), generated)
     command = {
         "command_id": str(uuid.uuid4()),
@@ -149,12 +149,12 @@ def writer(tmp_path, seed=17, *, value=None):
         policy.version,
         run_id="run",
         game_id="game",
-        actions=ACTIONS,
+        actions=actions,
         bank_episode=bank.episode,
         caps=asdict(WorkerCaps(max_positions=4, max_candidates=50)),
         numeric_costs=asdict(NumericCosts()),
         model_id="heuristic",
-        runtime_evidence=receipt(),
+        runtime_evidence=receipt() if runtime_evidence is None else runtime_evidence,
         sampling_seed=seed,
     )
     return journal, frame, delta, generated, selected, command
@@ -277,11 +277,51 @@ def test_journal6_rejects_valid_receipt_from_different_action_contract(tmp_path,
     journal, *_ = writer(tmp_path)
     journal.finish("incomplete", None)
     header = copy.deepcopy(journal.header)
-    header["runtime_evidence"] = strength_powder_runtime_receipt()
+    header["runtime_evidence"] = shared_runtime_receipt(strength_powder_card_instance_contract())
     monkeypatch.setattr(journals, "EventBank",
         lambda *args, **kwargs: pytest.fail("foreign runtime reached bank allocation"))
     with pytest.raises(ContractError, match="runtime receipt action contract mismatch"):
         journals._Context(ACTIONS, RULES).validate_header(header)
+
+
+def test_dream_compat_release_and_powder_behavior_are_pinned_independently():
+    old = strength_powder_card_instance_contract()
+    new = card_instance.dream_compat_card_instance_contract()
+    assert new.profile_id == "card-instance-simulator-v2-shared-20261124"
+    assert old.requires_powder_weapon and new.requires_powder_weapon
+    assert old.simulator_revision != new.simulator_revision
+    assert old.spec_inventory_sha256 != new.spec_inventory_sha256
+    assert rule_signature(old, RULES) != rule_signature(new, RULES)
+    old_receipt, new_receipt = (shared_runtime_receipt(profile) for profile in (old, new))
+    assert old_receipt["binary"]["sha256"] != new_receipt["binary"]["sha256"]
+    for profile, original, foreign in ((old, old_receipt, new_receipt), (new, new_receipt, old_receipt)):
+        build = original["build"]
+        assert digest(build["spec_files"]) == profile.spec_inventory_sha256
+        assert digest(build["change_files"]) == build["change_inventory_sha256"]
+        for field in ("build", "binary", "source", "executed", "action_contract"):
+            with pytest.raises(ContractError):
+                validate_runtime_receipt(
+                    original | {field: foreign[field]}, require_executed=True, expected_contract=profile
+                )
+
+
+@pytest.mark.parametrize("use_new", [False, True], ids=["old", "new"])
+def test_journal6_accepts_own_dream_release_and_rejects_foreign_receipt(tmp_path, use_new):
+    old = strength_powder_card_instance_contract()
+    new = card_instance.dream_compat_card_instance_contract()
+    own, foreign = (new, old) if use_new else (old, new)
+    actions = replace(ACTIONS, action_contract=own)
+    journal, *_ = writer(tmp_path, actions=actions, runtime_evidence=shared_runtime_receipt(own))
+    journal.finish("incomplete", None)
+    original = read_card_instance_journal(journal.final_path, actions=actions)
+    assert canonical(original.header) == canonical(journal.header)
+
+    lines = journal.final_path.read_bytes().splitlines(keepends=True)
+    header = json.loads(lines[0]) | {"runtime_evidence": shared_runtime_receipt(foreign)}
+    lines[0] = canonical(header).encode() + b"\n"
+    journal.final_path.write_bytes(b"".join(lines))
+    with pytest.raises(ContractError, match="runtime receipt action contract mismatch"):
+        read_card_instance_journal(journal.final_path, actions=actions)
 
 
 def test_game_layout_signature_fixed128_is_separate_from_journal_aggregate_window(tmp_path):

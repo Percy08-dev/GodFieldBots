@@ -8,6 +8,7 @@ from pathlib import Path
 import gf_native
 import pytest
 
+from gf_common import card_instance
 from gf_common.card_instance import (
     ActionConfigV3,
     shared_card_instance_contract,
@@ -742,10 +743,15 @@ def test_baseline_capacity_is18_while_generator_capacity_remains128(maximum, kin
         ([("strength-powder", None), ("wand-of-mystic-water", None)], {(0, 1), (1, 0)}),
     ],
 )
-def test_strength_powder_public_candidates(spec, powder_attacks):
+@pytest.mark.parametrize("use_new", [False, True], ids=["powder-release", "dream-release"])
+def test_strength_powder_public_candidates(spec, powder_attacks, use_new):
     value = inputs(spec, can_pray=True)
     value.observation["own"]["status"]["dream"] = True
-    native = differential(value, contract=strength_powder_card_instance_contract())
+    contract = (
+        card_instance.dream_compat_card_instance_contract() if use_new
+        else strength_powder_card_instance_contract()
+    )
+    native = differential(value, contract=contract)
     assert native is not None
     table = native["generated"]["table"]
     attacks = set()
@@ -756,6 +762,30 @@ def test_strength_powder_public_candidates(spec, powder_attacks):
         if kind == "discard":
             assert all(spec[slot][0] != "wand-of-mystic-water" for slot in slots)
     assert attacks == powder_attacks
+
+
+@pytest.mark.parametrize(
+    "choice,miracle,visible_card,kind,expected",
+    [
+        ("turn_action", "ice-age", "saw-boom-boom", "play_sequence", False),
+        ("turn_action", "ice-age", "spiritual-staff", "play_sequence", True),
+        ("defense", "wall", "leather-cap", "respond", False),
+        ("defense", "wall", "spiritual-socks", "respond", True),
+        ("defense", "wall", "spiritual-hood", "respond", True),
+        ("defense", "wall", "spiritual-sash", "respond", True),
+    ],
+)
+def test_dream_compat_costcut_candidates_use_visible_roles_only(choice, miracle, visible_card, kind, expected):
+    value = inputs([(miracle, "unused"), (visible_card, None)], mp=0, choice=choice, can_pray=True)
+    value.observation["own"]["status"]["dream"] = True
+    native = differential(value, contract=card_instance.dream_compat_card_instance_contract())
+    assert native is not None
+    table = native["generated"]["table"]
+    has_combo = any(
+        action_kind == kind and table["slots"][table["offsets"][i]:table["offsets"][i + 1]] == [0, 1]
+        for i, action_kind in enumerate(table["kinds"])
+    )
+    assert has_combo is expected
 
 
 def test_historical_shared_strength_powder_remains_a_completed_singleton():

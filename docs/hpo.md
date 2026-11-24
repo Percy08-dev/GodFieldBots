@@ -455,6 +455,14 @@ Nativeホイールをインストールします。`uv run --no-sync` でその�
 相対パスの基準はHPO TOMLのあるディレクトリです。
 旧プローブの再現には記録済みのSimulatorとコミット `1076f80` 時点の実行用TOMLを使います。
 
+〈夢〉の互換性を訂正したSimulatorで新しく実行する場合は、
+[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000-dream.toml)、
+[256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)、
+または[新しいテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)
+を使います。ローカルの対応するNativeホイールとPython環境は
+`runs/dream-compat` に用意します。新しいプリセットの保存先とAction profileの
+対応関係は[実行版の検証記録](verification/dream-simulator-contract.md)を参照してください。
+
 | `[storage]`の項目 | 指定と用途 |
 | --- | --- |
 | `parent_root`、`numeric_root` | 同じext4パスを指定。モデル・再開状態・更新記録・学習用数値データを保存します。省略時は両方とも`runs/hpo`です。 |

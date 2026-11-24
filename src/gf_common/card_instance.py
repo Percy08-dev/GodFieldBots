@@ -17,6 +17,9 @@ CORRECTED_SPEC_INVENTORY_HASH = "131890dfe579bc6951f5189e460971d33658339106e219a
 STRENGTH_POWDER_PROFILE = "card-instance-simulator-v2-shared-20261123"
 STRENGTH_POWDER_SIMULATOR_REVISION = "3172da407e37a4ad57ac82e70a96910c3ac6fbb8"
 STRENGTH_POWDER_SPEC_INVENTORY_HASH = "6403eef771b64c34e78eb653c2baefe65ceca5308051b506a7092151e9316c59"
+DREAM_COMPAT_PROFILE = "card-instance-simulator-v2-shared-20261124"
+DREAM_COMPAT_SIMULATOR_REVISION = "9e47d4c5f8cd3f60437f9aeabc95076c1dc04321"
+DREAM_COMPAT_SPEC_INVENTORY_HASH = "afefd6f3b9113b813c90aaae7bb7b18f1e6299e52bf814ef34ec22112362ab5e"
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -56,7 +59,7 @@ class CardInstanceContract:
 
     @property
     def requires_powder_weapon(self) -> bool:
-        return self.profile_id == STRENGTH_POWDER_PROFILE
+        return self.profile_id in (STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE)
 
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
@@ -85,12 +88,21 @@ _STRENGTH_POWDER_PIN: tuple[Any, ...] = tuple(
     }.get(name, default)
     for name, default in zip(_CONTRACT_FIELD_NAMES, _SHARED_PIN, strict=True)
 )
+_DREAM_COMPAT_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": DREAM_COMPAT_PROFILE,
+        "simulator_revision": DREAM_COMPAT_SIMULATOR_REVISION,
+        "spec_inventory_sha256": DREAM_COMPAT_SPEC_INVENTORY_HASH,
+    }.get(name, default)
+    for name, default in zip(_CONTRACT_FIELD_NAMES, _STRENGTH_POWDER_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
         "card-instance-simulator-v2-20261104": _CORRECTED_PIN,
         "card-instance-simulator-v2-shared-20261118": _SHARED_PIN,
         STRENGTH_POWDER_PROFILE: _STRENGTH_POWDER_PIN,
+        DREAM_COMPAT_PROFILE: _DREAM_COMPAT_PIN,
     }
 )
 
@@ -111,10 +123,15 @@ def strength_powder_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _STRENGTH_POWDER_PIN, strict=True)))
 
 
+def dream_compat_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _DREAM_COMPAT_PIN, strict=True)))
+
+
 def is_shared_contract(contract: object) -> bool:
     return type(contract) is CardInstanceContract and contract.profile_id in (
         "card-instance-simulator-v2-shared-20261118",
         STRENGTH_POWDER_PROFILE,
+        DREAM_COMPAT_PROFILE,
     )
 
 
@@ -133,9 +150,16 @@ def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
             "docs/spec/07-external-interfaces-adapters.md":
                 "8e5223b45a6e8c4c80e272736ed97b9e271136c939eca74427a035ddfdbfcac2",
         }
-        if contract.requires_powder_weapon:
+        if contract.profile_id == STRENGTH_POWDER_PROFILE:
             specs["docs/spec/09-gameplay-rules.md"] = (
                 "b6cf7e55c078df3eb893312e30215e58127117792ebce1cc0ce250b51fcbaefa"
+            )
+        elif contract.profile_id == DREAM_COMPAT_PROFILE:
+            specs["docs/spec/09-gameplay-rules.md"] = (
+                "74dacf30ee3fbbef9a8b34a10f09fd8e21a8f22385195fbad91dcfbc52324bc1"
+            )
+            specs["docs/spec/godfield_rule_verification_register.md"] = (
+                "b00c6823bf2b0a862fe953fa8dab2263eb3cbf2207bdaa7e37d63bfa1c50faa0"
             )
         return specs
     return dict(CORRECTED_REVIEWED_SPEC_HASHES if is_corrected_contract(contract) else REVIEWED_SPEC_HASHES)

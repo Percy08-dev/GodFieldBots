@@ -291,7 +291,7 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def managed(tmp_path, *, count=1):
+def managed(tmp_path, *, count=1, source=None, binary=None, contract=None):
     import asyncio
     import threading
 
@@ -299,8 +299,11 @@ def managed(tmp_path, *, count=1):
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
     from gf_simulator_client.process import ManagedServer
 
-    simulator = Path("/tmp/gf-issue72-shared-inference")
-    binary = Path("/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server")
+    simulator = Path("/tmp/gf-issue72-shared-inference") if source is None else source
+    binary = (
+        Path("/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server")
+        if binary is None else binary
+    )
     if not binary.exists():
         pytest.skip("approved external Simulator release unavailable")
     loop = asyncio.new_event_loop()
@@ -314,7 +317,7 @@ def managed(tmp_path, *, count=1):
         tmp_path / "server",
     )
     evidence = CardInstanceRuntimeEvidence(
-        binary, simulator, contract=shared_card_instance_contract()
+        binary, simulator, contract=shared_card_instance_contract() if contract is None else contract
     )
     evidence.preflight()
     try:

@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0067](adr/0067-dream-simulator-contract.md) pins the Simulator's Dream
+exclusions and separate CostCut armor compatibility for the shared HPO6
+path. Python and Rust validate the named release independently of the
+Strength Powder completion rule. The [verification record](verification/dream-simulator-contract.md)
+tracks new-run and historical compatibility evidence.
+
 [ADR0065](adr/0065-staged-native-collection-storage.md) defines opt-in
 collection staging for supervised native PPO and HPO6. The existing writer
 collects on tmpfs, then verifies and synchronizes the closed SQLite Pack

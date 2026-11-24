@@ -499,15 +499,22 @@ def hashlib_sha(view):
 
 
 @pytest.mark.parametrize(
-    "failure", ["duplicate", "sql", "publication", "command", "interval-prefix", "mixed-profile"]
+    "failure",
+    [
+        "duplicate", "sql", "publication", "command", "interval-prefix", "mixed-profile",
+        "old-writer-new-table", "new-writer-old-table",
+    ],
 )
 def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     tmp_path, monkeypatch, failure
 ):
+    import os
     from contextlib import suppress
     from dataclasses import replace
+    from pathlib import Path
     from types import SimpleNamespace
 
+    from gf_common import card_instance
     from gf_common.domain import ContractError, digest
     from gf_simulator_client.rust_player import RustPlayerRuntime
     from gf_training import group_pack_worker as database_module
@@ -520,6 +527,22 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     )
     from tests.test_rust_player_runtime import game_spec, managed, runtime_config
 
+    release = {}
+    foreign_contract = None
+    if failure in ("old-writer-new-table", "new-writer-old-table"):
+        old_writer = failure == "old-writer-new-table"
+        env = "GFB_P41_TEST" if old_writer else "GFB_DREAM_COMPAT_TEST"
+        source, binary = os.environ.get(f"{env}_SOURCE"), os.environ.get(f"{env}_SERVER")
+        if not source or not binary:
+            pytest.skip("explicit managed Dream release binary/approved source required")
+        old = card_instance.strength_powder_card_instance_contract()
+        new = card_instance.dream_compat_card_instance_contract()
+        own, foreign_contract = (old, new) if old_writer else (new, old)
+        release = {"source": Path(source), "binary": Path(binary), "contract": own}
+    elif failure == "mixed-profile":
+        foreign_contract = card_instance.strength_powder_card_instance_contract()
+
+    rejects_pending = failure in ("command", "interval-prefix") or foreign_contract is not None
     prefix_rejected = False
     if failure == "interval-prefix":
         begin_native_frame = storage_module._Journal._begin_native_frame
@@ -558,7 +581,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             raise rejected.value
 
         monkeypatch.setattr(storage_module._Journal, "_begin_native_frame", wrong_prefix)
-    elif failure in ("command", "mixed-profile"):
+    elif rejects_pending:
         decode = storage_module.decode_original
 
         def wrong_pending(bundle):
@@ -567,11 +590,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
                 if failure == "command":
                     value["command"]["action"] = {"type": "invalid test action"}
                 else:
-                    from gf_common.card_instance import strength_powder_card_instance_contract
-
-                    value["generated"]["table"]["action_contract"] = asdict(
-                        strength_powder_card_instance_contract()
-                    )
+                    value["generated"]["table"]["action_contract"] = asdict(foreign_contract)
             return value
 
         monkeypatch.setattr(storage_module, "decode_original", wrong_pending)
@@ -604,8 +623,9 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     writer = None
     held = None
     try:
-        with managed(tmp_path / "server") as (startup, receipt):
+        with managed(tmp_path / "server", **release) as (startup, receipt):
             spec = game_spec(startup, receipt)
+            spec["actions"]["action_contract"] = receipt["action_contract"]
             writer = RustPlayerStorage(
                 runtime,
                 tmp_path / "collection",
@@ -621,7 +641,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             runtime.start([spec])
             while True:
                 bundle = runtime.next_storage(time.monotonic() + 10)
-                if failure in ("command", "interval-prefix", "mixed-profile") and bundle.kind == "pending":
+                if rejects_pending and bundle.kind == "pending":
                     held = bundle.view()
                     with pytest.raises(RuntimeError, match="storage failed") as caught:
                         writer.accept(bundle)

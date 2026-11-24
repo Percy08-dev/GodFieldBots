@@ -8,6 +8,8 @@ from typing import Any
 
 from gf_common.card_instance import (
     CORRECTED_REVIEWED_SPEC_HASHES,
+    DREAM_COMPAT_PROFILE,
+    STRENGTH_POWDER_PROFILE,
     CardInstanceContract,
     is_corrected_contract,
     is_shared_contract,
@@ -51,6 +53,22 @@ STRENGTH_POWDER_CHANGE_FILES = MappingProxyType(
             "c205750ea1c6cf934429592087294f1881ea99f0bb241b1f582be30c4af2c04b",
     }
 )
+DREAM_COMPAT_BINARY_SHA256 = "f95fadbc8eaad23fbe63e17ac9bdb0ebeca4b237956dedeab09d86f30cfd94bc"
+DREAM_COMPAT_CHANGE_SHA256 = "eb56add45d4b4e89af3baf44ec25b0a909886229ed0dffe6d41e20b9c0019951"
+DREAM_COMPAT_CHANGE_FILES = MappingProxyType(
+    {
+        "docs/spec/09-gameplay-rules.md":
+            "74dacf30ee3fbbef9a8b34a10f09fd8e21a8f22385195fbad91dcfbc52324bc1",
+        "docs/spec/godfield_rule_verification_register.md":
+            "b00c6823bf2b0a862fe953fa8dab2263eb3cbf2207bdaa7e37d63bfa1c50faa0",
+        "src/engine/catalog/mod.rs":
+            "a430a9c6fdb5a1369ef2131ff1d62f65bb558b62a69e78ea6f77f414bac85130",
+        "src/engine/resolution/tests.rs":
+            "efd66e08332c544ab10f164b5e8cfc133739b9b485b057766d8ddc9b79fb4643",
+        "tests/fixtures/full_game_v2_baseline.txt":
+            "bbf514c1bdec6330a209643c23dad3654eea6779fd6ff78a70a8f06f725e35fa",
+    }
+)
 
 
 def require_corrected_contract(contract: CardInstanceContract) -> None:
@@ -60,7 +78,9 @@ def require_corrected_contract(contract: CardInstanceContract) -> None:
 
 def approved_binary_sha256(contract: CardInstanceContract) -> str:
     require_corrected_contract(contract)
-    if contract.requires_powder_weapon:
+    if contract.profile_id == DREAM_COMPAT_PROFILE:
+        return DREAM_COMPAT_BINARY_SHA256
+    if contract.profile_id == STRENGTH_POWDER_PROFILE:
         return STRENGTH_POWDER_BINARY_SHA256
     if is_shared_contract(contract):
         return SHARED_APPROVED_BINARY_SHA256
@@ -69,11 +89,12 @@ def approved_binary_sha256(contract: CardInstanceContract) -> str:
 
 def approved_runtime_build(contract: CardInstanceContract) -> Json:
     binary_sha256 = approved_binary_sha256(contract)
-    change_hash, change_files = (
-        (STRENGTH_POWDER_CHANGE_SHA256, STRENGTH_POWDER_CHANGE_FILES)
-        if contract.requires_powder_weapon
-        else (APPROVED_CHANGE_SHA256, APPROVED_CHANGE_FILES)
-    )
+    if contract.profile_id == DREAM_COMPAT_PROFILE:
+        change_hash, change_files = DREAM_COMPAT_CHANGE_SHA256, DREAM_COMPAT_CHANGE_FILES
+    elif contract.profile_id == STRENGTH_POWDER_PROFILE:
+        change_hash, change_files = STRENGTH_POWDER_CHANGE_SHA256, STRENGTH_POWDER_CHANGE_FILES
+    else:
+        change_hash, change_files = APPROVED_CHANGE_SHA256, APPROVED_CHANGE_FILES
     return {
         "binary_sha256": binary_sha256,
         "spec_inventory_sha256": contract.spec_inventory_sha256,

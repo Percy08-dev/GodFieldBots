@@ -1,4 +1,4 @@
-"""Diagnostic replay of the recorded HPO6 p11 Dream discard rejection."""
+"""Diagnostic replay of recorded HPO6 Dream rejections under their original releases."""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ from random import Random
 
 import pytest
 
-from gf_common.card_instance import ActionConfigV3, shared_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    CardInstanceContract,
+    shared_card_instance_contract,
+    strength_powder_card_instance_contract,
+)
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_validation import decision_input
 from gf_common.diverse_actions import NumericCosts
@@ -26,19 +31,23 @@ from gf_simulator_client.http import ApiError, AttestedClient, seed_fingerprint
 from gf_simulator_client.process import ManagedServer
 
 _ROOT = Path(__file__).parents[1]
-_CASE = _ROOT / "tests/fixtures/hpo_dream_discard_p11.json"
 
 
-def _assert_native_search_admits_discard(
-    value: DecisionInput, submitted: Json, search: Callable[[bytes], bytes]
+def _assert_native_search_admits_action(
+    value: DecisionInput,
+    submitted: Json,
+    search: Callable[[bytes], bytes],
+    *,
+    contract: CardInstanceContract,
+    clock_calls: int,
 ) -> None:
     """Check public-only candidate generation with a deterministic diagnostic clock."""
     actor = value.observation["viewer_player_id"]
-    bank = EventBank(actor, "b000001-p11-diagnostic", layout=LAYOUT)
+    bank = EventBank(actor, "historical-dream-diagnostic", layout=LAYOUT)
     bank.append(event_delta(actor, bank.episode, 0, bank.boundary.prefix_hash,
                             value.events, layout=LAYOUT))
     frame = DecisionFrame.from_input(value, bank, 0, layout=LAYOUT)
-    actions = ActionConfigV3(action_contract=shared_card_instance_contract())
+    actions = ActionConfigV3(action_contract=contract)
     rules = card_instance_rules()
     request = {
         "frame": frame_dict(frame, layout=LAYOUT),
@@ -47,7 +56,7 @@ def _assert_native_search_admits_discard(
         "rules": asdict(rules),
         "numeric_costs": asdict(NumericCosts()),
         "rng_state": Random(17).getstate(),
-        "clock": [0.0] * 1024,
+        "clock": [0.0] * clock_calls,
     }
     result = json.loads(search(json.dumps(request).encode()))
     generated = parse_game_generated_v3(
@@ -59,18 +68,40 @@ def _assert_native_search_admits_discard(
 
 
 @pytest.mark.integration
-def test_hpo_dream_discard_matches_recorded_rejection(tmp_path: Path) -> None:
-    binary = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_SERVER")
+@pytest.mark.parametrize(
+    "fixture,release,env,visible_id,actual_id,clock_calls",
+    [
+        pytest.param(
+            "hpo_dream_discard_p11.json", shared_card_instance_contract(),
+            "GFB_HTTP_DIAGNOSTICS_TEST", "strength-powder", "wand-of-mystic-water", 1024,
+            id="p11-discard",
+        ),
+        pytest.param(
+            "hpo_dream_costcut_p41.json", strength_powder_card_instance_contract(),
+            "GFB_P41_TEST", "spiritual-staff", "saw-boom-boom", 1_000_000,
+            id="p41-costcut",
+        ),
+    ],
+)
+def test_hpo_dream_matches_recorded_rejection(
+    tmp_path: Path,
+    fixture: str,
+    release: CardInstanceContract,
+    env: str,
+    visible_id: str,
+    actual_id: str,
+    clock_calls: int,
+) -> None:
+    binary = os.environ.get(f"{env}_SERVER")
     config = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_CONFIG")
-    source = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_SOURCE")
+    source = os.environ.get(f"{env}_SOURCE")
     if not binary or not config or not source:
         pytest.skip("explicit managed Simulator binary/config/approved source required")
     native = pytest.importorskip("gf_native")
 
-    case = json.loads(_CASE.read_text())
-    contract = shared_card_instance_contract()
-    assert contract.simulator_revision == case["simulator_revision"]
-    evidence = CardInstanceRuntimeEvidence(Path(binary), Path(source), contract=contract)
+    case = json.loads((_ROOT / "tests" / "fixtures" / fixture).read_text())
+    assert release.simulator_revision == case["simulator_revision"]
+    evidence = CardInstanceRuntimeEvidence(Path(binary), Path(source), contract=release)
     evidence.preflight()
     server = ManagedServer(binary, config, case["seed"], 1, tmp_path / "server")
 
@@ -84,7 +115,7 @@ def test_hpo_dream_discard_matches_recorded_rejection(tmp_path: Path) -> None:
                 fixed_seed_experiment=True,
                 expected_effective=startup["test_server_config"],
                 startup_info=startup["test_server_info"],
-                contract=contract,
+                contract=release,
                 retries=0,
             )
             try:
@@ -124,7 +155,11 @@ def test_hpo_dream_discard_matches_recorded_rejection(tmp_path: Path) -> None:
                 value = decision_input(
                     observation, events, history_end, await client.public_catalog(), options
                 )
-                _assert_native_search_admits_discard(value, case["submitted"], native.player_search_v5)
+                submitted = case["submitted"]
+                _assert_native_search_admits_action(
+                    value, submitted, native.player_search_v5,
+                    contract=release, clock_calls=clock_calls,
+                )
 
                 # The private dump supplies diagnostic evidence only.
                 response = await client.http.get(f"/debug/v1/games/{game}/dump")
@@ -133,12 +168,16 @@ def test_hpo_dream_discard_matches_recorded_rejection(tmp_path: Path) -> None:
                 assert diagnostic["state_revision"] == revision
                 cards = diagnostic["full_state"]["players"][actor - 1]["cards"]["cards"]
                 visible = observation["own"]["cards"]
-                assert [row["card"]["perceived_definition_id"] for row in cards] == [
+                descriptors = [row["card"].get("instance", row["card"]) for row in cards]
+                assert [row["perceived_definition_id"] for row in descriptors] == [
                     row["definition_id"] for row in visible
                 ]
-                selected = case["submitted"]["card_refs"][0]
-                slot = next(index for index, row in enumerate(visible) if row["card_ref"] == selected)
-                assert cards[slot]["card"]["actual_definition_id"] == "wand-of-mystic-water"
+                selected = submitted.get("card_refs") or submitted["ordered_card_refs"]
+                slot, = (
+                    index for index, row in enumerate(visible)
+                    if row["card_ref"] in selected and row["definition_id"] == visible_id
+                )
+                assert descriptors[slot]["actual_definition_id"] == actual_id
 
                 with pytest.raises(ApiError) as caught:
                     await client.act(
@@ -147,7 +186,7 @@ def test_hpo_dream_discard_matches_recorded_rejection(tmp_path: Path) -> None:
                         {
                             "command_id": str(uuid.uuid4()),
                             "expected_revision": revision,
-                            "action": case["submitted"],
+                            "action": submitted,
                         },
                     )
                 error = caught.value.body["error"]
