@@ -1,4 +1,4 @@
-"""Diagnostic replay of recorded HPO6 Dream rejections under their original releases."""
+"""Diagnostic replay of recorded HPO6 actions against pinned Simulator releases."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from gf_common.card_instance import (
     ActionConfigV3,
     CardInstanceContract,
     dream_compat_card_instance_contract,
+    moon_dream_card_instance_contract,
     shared_card_instance_contract,
     strength_powder_card_instance_contract,
 )
@@ -340,6 +341,104 @@ def test_hpo_dream_concealed_draws_keep_journal_replay_and_next_action(tmp_path:
             finally:
                 for journal in journals.values():
                     journal.output.close()
+                await client.close()
+        finally:
+            health = await server.stop()
+        assert health["exit_code"] == 0
+        assert health["log_error"] is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.integration
+def test_hpo_moon_god_mirage_reaches_weapon_defense(tmp_path: Path) -> None:
+    binary = os.environ.get("GFB_MOON_DREAM_TEST_SERVER")
+    source = os.environ.get("GFB_MOON_DREAM_TEST_SOURCE")
+    config = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_CONFIG")
+    if not binary or not source or not config:
+        pytest.skip("explicit managed Simulator binary/config/approved source required")
+    native = pytest.importorskip("gf_native")
+    release = moon_dream_card_instance_contract()
+    path = _ROOT / "docs/issues/cases/0016-moon-god-standalone-mirage.json"
+    case = json.loads(path.read_text())
+    expected = case["expected_repaired"]
+    original = case["rejected"]
+    evidence = CardInstanceRuntimeEvidence(Path(binary), Path(source), contract=release)
+    evidence.preflight()
+    server = ManagedServer(binary, config, case["game_seed"], 1, tmp_path / "server")
+
+    async def run() -> None:
+        startup = await server.start()
+        try:
+            evidence.verify_executed(server.process)
+            client = AttestedClient(
+                startup["base_url"],
+                expected_fingerprint=seed_fingerprint(case["game_seed"]),
+                fixed_seed_experiment=True,
+                expected_effective=startup["test_server_config"],
+                startup_info=startup["test_server_info"],
+                contract=release,
+                retries=0,
+            )
+            ack = None
+
+            async def capture_act(response):
+                nonlocal ack
+                if response.request.method == "POST" and response.request.url.path.endswith("/actions"):
+                    await response.aread()
+                    ack = response.status_code, response.json()
+
+            client.http.event_hooks["response"].append(capture_act)
+            try:
+                game = (await client.create())["game_id"]
+                for actor in (1, 2):
+                    assert (await client.join(game, str(uuid.uuid4())))["player_id"] == actor
+                assert len(case["accepted"]) == original["revision"] == 70
+                for revision, step in enumerate([*case["accepted"], original]):
+                    assert step["revision"] == revision
+                    receipt = await client.act(game, step["actor"], {
+                        "command_id": str(uuid.uuid4()),
+                        "expected_revision": revision,
+                        "action": step["action"],
+                    })
+                    assert receipt["state_revision"] == revision + 1
+                    assert receipt["status"] == "active"
+                assert ack is not None
+                status, raw = ack
+                assert status == expected["ack_http_status"]
+                assert raw["state_revision"] == expected["state_revision"]
+                assert raw["events"].count(expected["guardian_acted"]) == 1
+                assert raw["events"].count(expected["attack_declared"]) == 1
+
+                defender = expected["defender"]
+                observation = await client.observe(game, defender)
+                assert observation["state_revision"] == expected["state_revision"]
+                assert observation["current_player"] == defender and observation["actionable"] is True
+                assert observation["required_choice"] == "defense"
+                hints = await client.actor_options(game, defender, observation)
+                events, cursor = await client.events(game, defender, None)
+                assert expected["guardian_acted"] in events
+                assert expected["attack_declared"] in events
+                replay = await client.replay(game, defender)
+                replay_events, = (
+                    decision["visible_events"]
+                    for turn in replay["turns"] for decision in turn["decisions"]
+                    if decision["observation"]["state_revision"] == original["revision"]
+                )
+                assert replay_events == raw["events"]
+                value = decision_input(observation, events, cursor, await client.public_catalog(), hints)
+                _assert_native_search_admits_action(
+                    value, expected["response"], native.player_search_v5,
+                    contract=release, clock_calls=1_000_000,
+                )
+                receipt = await client.act(game, defender, {
+                    "command_id": str(uuid.uuid4()),
+                    "expected_revision": expected["state_revision"],
+                    "action": expected["response"],
+                })
+                assert receipt["state_revision"] == expected["response_revision"]
+                assert receipt["status"] == "active"
+            finally:
                 await client.close()
         finally:
             health = await server.stop()

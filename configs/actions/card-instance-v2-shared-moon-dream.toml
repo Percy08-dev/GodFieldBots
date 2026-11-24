@@ -1,0 +1,29 @@
+schema_version = 1
+kind = "actions"
+
+[actions]
+version = "3"
+generator = "public-card-instance-diverse-v5"
+use_action_options = true
+targets = ["opponent", "self"]
+max_sequence_length = 18
+max_candidates = 32768
+max_expansions = 262144
+max_temporary_candidates = 262144
+count_states = 16384
+count_milliseconds = 50
+search_milliseconds = 1000
+channel_weights = [1, 1, 1, 1, 1, 1, 1]
+
+[actions.action_contract]
+card_ref_scheme = "aes256-card-ref-v1"
+catalog_schema_version = 2
+catalog_sha256 = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
+catalog_version = "public-ja-v3"
+gameplay_api = "v2"
+input_recipe = "participant-structured-v2"
+policy_input_version = "player-card-refs-v2"
+profile_id = "card-instance-simulator-v2-shared-20261125"
+rule_set_version = "true-match-1v1-v2"
+simulator_revision = "f394a7b57b0ffb12c6b5782ff52fdb8842ec7534"
+spec_inventory_sha256 = "c2a0e37607bff98e342b618c5057887cdf6adca981b81731245adf5853cdfc78"

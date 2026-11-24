@@ -9,6 +9,8 @@ from typing import Any
 from gf_common.card_instance import (
     CORRECTED_REVIEWED_SPEC_HASHES,
     DREAM_COMPAT_PROFILE,
+    MOON_DREAM_PROFILE,
+    MOON_DREAM_REVIEWED_SPEC_CHANGES,
     STRENGTH_POWDER_PROFILE,
     CardInstanceContract,
     is_corrected_contract,
@@ -69,6 +71,27 @@ DREAM_COMPAT_CHANGE_FILES = MappingProxyType(
             "bbf514c1bdec6330a209643c23dad3654eea6779fd6ff78a70a8f06f725e35fa",
     }
 )
+MOON_DREAM_BINARY_SHA256 = "15137c72e670a90a64fd474030ee9024c91b97b1282c8d103db895f54a2bfa37"
+MOON_DREAM_CHANGE_SHA256 = "2ac3dd61dd077420b404decede74aaee17d16ec5d5185b5fac0068725d3f663e"
+MOON_DREAM_CHANGE_FILES = MappingProxyType(
+    {
+        **MOON_DREAM_REVIEWED_SPEC_CHANGES,
+        "src/engine/catalog/mod.rs":
+            "a430a9c6fdb5a1369ef2131ff1d62f65bb558b62a69e78ea6f77f414bac85130",
+        "src/engine/resolution/choice.rs":
+            "4636ba93454bb54d115a39239d59198b9ece27c671f92339e76b64fb3831ddc7",
+        "src/engine/resolution/status.rs":
+            "85fe7567dc6877e012f903c77ed0acf7de27fff16815799644b2f4a8ed772d45",
+        "src/engine/resolution/tests.rs":
+            "35034432e5d59bc8519d7d46b7900eb9049b6055bd2710b444293d03b9969cb7",
+        "tests/fixtures/full_game_policy_rng_baseline.txt":
+            "270d4f8495c8869f38f48fadb5bf61636d04ba275aa90d011a475810ddb6c4e6",
+        "tests/fixtures/full_game_v2_baseline.txt":
+            "bbf514c1bdec6330a209643c23dad3654eea6779fd6ff78a70a8f06f725e35fa",
+        "tests/full_game_validation.rs":
+            "852629fb5cc9f3629cfd5b9c73ed219f83b3a868b09712965e77241c2402be30",
+    }
+)
 
 
 def require_corrected_contract(contract: CardInstanceContract) -> None:
@@ -78,6 +101,8 @@ def require_corrected_contract(contract: CardInstanceContract) -> None:
 
 def approved_binary_sha256(contract: CardInstanceContract) -> str:
     require_corrected_contract(contract)
+    if contract.profile_id == MOON_DREAM_PROFILE:
+        return MOON_DREAM_BINARY_SHA256
     if contract.profile_id == DREAM_COMPAT_PROFILE:
         return DREAM_COMPAT_BINARY_SHA256
     if contract.profile_id == STRENGTH_POWDER_PROFILE:
@@ -89,7 +114,9 @@ def approved_binary_sha256(contract: CardInstanceContract) -> str:
 
 def approved_runtime_build(contract: CardInstanceContract) -> Json:
     binary_sha256 = approved_binary_sha256(contract)
-    if contract.profile_id == DREAM_COMPAT_PROFILE:
+    if contract.profile_id == MOON_DREAM_PROFILE:
+        change_hash, change_files = MOON_DREAM_CHANGE_SHA256, MOON_DREAM_CHANGE_FILES
+    elif contract.profile_id == DREAM_COMPAT_PROFILE:
         change_hash, change_files = DREAM_COMPAT_CHANGE_SHA256, DREAM_COMPAT_CHANGE_FILES
     elif contract.profile_id == STRENGTH_POWDER_PROFILE:
         change_hash, change_files = STRENGTH_POWDER_CHANGE_SHA256, STRENGTH_POWDER_CHANGE_FILES

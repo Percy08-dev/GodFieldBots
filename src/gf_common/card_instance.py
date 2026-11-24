@@ -20,6 +20,16 @@ STRENGTH_POWDER_SPEC_INVENTORY_HASH = "6403eef771b64c34e78eb653c2baefe65ceca5308
 DREAM_COMPAT_PROFILE = "card-instance-simulator-v2-shared-20261124"
 DREAM_COMPAT_SIMULATOR_REVISION = "9e47d4c5f8cd3f60437f9aeabc95076c1dc04321"
 DREAM_COMPAT_SPEC_INVENTORY_HASH = "afefd6f3b9113b813c90aaae7bb7b18f1e6299e52bf814ef34ec22112362ab5e"
+MOON_DREAM_PROFILE = "card-instance-simulator-v2-shared-20261125"
+MOON_DREAM_SIMULATOR_REVISION = "f394a7b57b0ffb12c6b5782ff52fdb8842ec7534"
+MOON_DREAM_SPEC_INVENTORY_HASH = "c2a0e37607bff98e342b618c5057887cdf6adca981b81731245adf5853cdfc78"
+MOON_DREAM_REVIEWED_SPEC_CHANGES = MappingProxyType({
+    "docs/spec/03-game-engine.md": "5623712d584f7c9865cb294922a2904c58801398d0478f69427509aa08c92833",
+    "docs/spec/06-persistence-history.md": "65c169afe9e1d6e4473b6017c0ef91ad9721e4a7657d14a9a4ae1b7323c8f9fe",
+    "docs/spec/09-gameplay-rules.md": "b3b6d69e475fc02ef052815be4244fd394cdf9f6ba6de872af620ab09faea063",
+    "docs/spec/godfield_rule_verification_register.md":
+        "ddf7e9d94239176794fb5a8b84921d1fee02e8eced9aaaae7c1dda73db0b07da",
+})
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -59,7 +69,7 @@ class CardInstanceContract:
 
     @property
     def requires_powder_weapon(self) -> bool:
-        return self.profile_id in (STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE)
+        return self.profile_id in (STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE)
 
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
@@ -96,6 +106,14 @@ _DREAM_COMPAT_PIN: tuple[Any, ...] = tuple(
     }.get(name, default)
     for name, default in zip(_CONTRACT_FIELD_NAMES, _STRENGTH_POWDER_PIN, strict=True)
 )
+_MOON_DREAM_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": MOON_DREAM_PROFILE,
+        "simulator_revision": MOON_DREAM_SIMULATOR_REVISION,
+        "spec_inventory_sha256": MOON_DREAM_SPEC_INVENTORY_HASH,
+    }.get(name, default)
+    for name, default in zip(_CONTRACT_FIELD_NAMES, _DREAM_COMPAT_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
@@ -103,6 +121,7 @@ _CONTRACT_PINS = MappingProxyType(
         "card-instance-simulator-v2-shared-20261118": _SHARED_PIN,
         STRENGTH_POWDER_PROFILE: _STRENGTH_POWDER_PIN,
         DREAM_COMPAT_PROFILE: _DREAM_COMPAT_PIN,
+        MOON_DREAM_PROFILE: _MOON_DREAM_PIN,
     }
 )
 
@@ -127,11 +146,16 @@ def dream_compat_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _DREAM_COMPAT_PIN, strict=True)))
 
 
+def moon_dream_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _MOON_DREAM_PIN, strict=True)))
+
+
 def is_shared_contract(contract: object) -> bool:
     return type(contract) is CardInstanceContract and contract.profile_id in (
         "card-instance-simulator-v2-shared-20261118",
         STRENGTH_POWDER_PROFILE,
         DREAM_COMPAT_PROFILE,
+        MOON_DREAM_PROFILE,
     )
 
 
@@ -161,6 +185,8 @@ def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
             specs["docs/spec/godfield_rule_verification_register.md"] = (
                 "b00c6823bf2b0a862fe953fa8dab2263eb3cbf2207bdaa7e37d63bfa1c50faa0"
             )
+        elif contract.profile_id == MOON_DREAM_PROFILE:
+            specs.update(MOON_DREAM_REVIEWED_SPEC_CHANGES)
         return specs
     return dict(CORRECTED_REVIEWED_SPEC_HASHES if is_corrected_contract(contract) else REVIEWED_SPEC_HASHES)
 

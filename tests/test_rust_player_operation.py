@@ -369,22 +369,38 @@ def test_hpo_factory_refuses_missing_companion_before_anchor_and_namespace(tmp_p
 
 
 @pytest.mark.parametrize('entry_point', ['operation', 'campaign'])
-def test_dream_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(tmp_path, monkeypatch, entry_point):
+@pytest.mark.parametrize('release,declared_moon,has_concealed,error', [
+    ('dream_compat', None, False, 'concealed draw'),
+    ('moon_dream', 'card-instance-simulator-v2-shared-20261125', False, 'concealed draw'),
+    ('moon_dream', None, True, 'Moon God'),
+    ('moon_dream', 'card-instance-simulator-v2-shared-20261124', True, 'Moon God'),
+])
+def test_dream_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(
+        tmp_path, monkeypatch, entry_point, release, declared_moon, has_concealed, error):
     from gf_cli import hpo
+    from gf_cli.config import load_config
     from gf_cli.rust_player_campaign import prepare_campaign
+    from gf_common import card_instance
     from gf_simulator_client import rust_player_companion
     from gf_training import native_backend
 
-    raw = campaign_raw() | {
-        'base_experiment': str(ROOT / 'configs/experiments/hpo-rust-mlp-dream-base.toml'),
-    }
+    base = ROOT / 'configs/experiments/hpo-rust-mlp-dream-base.toml'
+    contract = getattr(card_instance, f'{release}_card_instance_contract')()
+    pinned = load_config(base, {'actions': {'action_contract': asdict(contract)},
+                                'server': {'simulator_revision': contract.simulator_revision}})
+    raw = campaign_raw() | {'base_experiment': str(base)}
     raw['operating'].update(post_host_seconds=30., collector_budget_bytes=8 * 1024**3)
     raw['storage'].update(parent_root=str(tmp_path / 'runs'), numeric_root=str(tmp_path / 'runs'))
-    loaded = campaign_config(raw, origin=ROOT)
+    loaded = campaign_config(raw, origin=ROOT, _pinned_base=pinned)
     monkeypatch.setattr(entry, 'check_native_collection_storage', lambda *_a, **_kw: None)
     monkeypatch.setattr(hpo, 'check_storage', lambda *_a, **_kw: {})
     monkeypatch.setattr(hpo, '_conditions', lambda *_a: {})
-    monkeypatch.setattr(native_backend, 'binary_identity', lambda: {'build': {}})
+    build = {}
+    if has_concealed:
+        build['card_instance_concealed_draw'] = native_backend.CARD_INSTANCE_CONCEALED_DRAW
+    if declared_moon is not None:
+        build['card_instance_moon_dream'] = declared_moon
+    monkeypatch.setattr(native_backend, 'binary_identity', lambda: {'build': build})
     monkeypatch.setattr(rust_player_companion, 'discover_companion', lambda *_a: pytest.fail('companion reached'))
     dest = tmp_path / 'control'
     if entry_point == 'campaign':
@@ -393,7 +409,7 @@ def test_dream_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(tmp_
         selected = effective_settings(loaded.config.model, loaded.config.training, {}, layout=layout)
         run = materialize_hpo_run(loaded, selected, learning_seed=17, run_id=RUN_ID)
         launch = entry.prepare_hpo_operation(run, context(), dest, mode='fresh')
-    with pytest.raises(ContractError, match='concealed draw'), launch:
+    with pytest.raises(ContractError, match=error), launch:
         pytest.fail('pre-marker Native build entered ownership')
     assert not dest.exists()
 

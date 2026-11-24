@@ -383,13 +383,13 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     from gf_cli.rust_player_entry import (
         _capture_clock,
         check_native_collection_storage,
+        require_native_hpo_action_profile,
         require_native_hpo_storage,
     )
-    from gf_common.card_instance import DREAM_COMPAT_PROFILE, ActionConfigV3
     from gf_common.rust_player import BUILD_KEYS, runtime_binding, validate_campaign_bootstrap
     from gf_models.rust_player import sampling_runtime_identity
     from gf_simulator_client.rust_player_companion import discover_companion
-    from gf_training.native_backend import binary_identity, require_native_concealed_draw
+    from gf_training.native_backend import binary_identity
     from gf_training.rust_player_supervision import runtime_producer
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths or progress not in ('auto', 'plain', 'off'):
         raise ContractError('explicit campaign mode/progress; seed settings are fresh-only')
@@ -407,9 +407,7 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     conditions = hpo._conditions(loaded)
     _settings, sources = hpo._settings_inputs(seed_paths, loaded) if mode == 'fresh' else ((), [])
     native = binary_identity()
-    actions = loaded.base.config.actions
-    if isinstance(actions, ActionConfigV3) and actions.action_contract.profile_id == DREAM_COMPAT_PROFILE:
-        require_native_concealed_draw(native['build'])
+    require_native_hpo_action_profile(loaded.base.config.actions, native['build'])
     require_native_hpo_storage(config.storage, native)
     if (config.checkpoint_evaluation is not None
             and native['build'].get('card_instance_hpo_checkpoint_evaluation') != 'hpo-checkpoint-evaluation-v1'):

@@ -1,4 +1,4 @@
-# 修正版SimulatorとNativeホイールでPPO学習診断を1,000更新まで記録する。
+# 月神と〈夢〉の修正版Simulatorと対応するNativeホイールでPPO学習診断を1,000更新まで記録する。
 # 修正版Nativeホイールをプロジェクトの .venv にインストールしてから実行する。
 #
 # run_id=$(uuidgen)
@@ -14,9 +14,9 @@ schema_version = 6
 kind = "ppo-hpo"
 origin = "producer-owned-v1"
 encoder = "canonical-rust"
-base_experiment = "../experiments/hpo-rust-mlp-dream-base.toml"
+base_experiment = "../experiments/hpo-rust-mlp-moon-dream-base.toml"
 model_id = "mlp"
-stage = "mlp-256-convergence-1000-dream"
+stage = "mlp-256-convergence-1000-moon-dream"
 trial_count = 1
 # The update cap ends this diagnostic run. D exceeds 1,000 × 256 × 1,024.
 decision_budget = 262_144_001
@@ -192,19 +192,19 @@ updates = [0, 1, 10, 50, 100, 200, 350, 500, 750, 1000]
 
 [storage]
 # 収集作業は基礎実験のtmpfsを使い、確定した原本と学習データを専用ext4に保存します。
-parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents"
-numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents"
-campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/parents/campaign"
-originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/originals"
-optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/study.sqlite3"
+parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/parents"
+numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/parents"
+campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/parents/campaign"
+originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/originals"
+optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/study.sqlite3"
 # About 105 GiB for 1,000 batches at the measured numeric + original size.
 # Capacity also covers checkpoint artifacts, evaluation data, and larger batches.
 destination_capacity_bytes = 171798691840
 admission_reservation_bytes = 1073741824
 
 [storage.hpo_diagnostics]
-http_log_ram_root = "/dev/shm/godfieldbots/http-logs/mlp-256-convergence-1000-dream"
-http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-dream/http-logs"
+http_log_ram_root = "/dev/shm/godfieldbots/http-logs/mlp-256-convergence-1000-moon-dream"
+http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-convergence-1000-moon-dream/http-logs"
 http_log_retention = "errors"
 http_log_compression = "zstd"
 update_compression = "zstd"

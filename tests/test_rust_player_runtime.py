@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,37 @@ def assert_source_match():
 
 def test_loaded_native_matches_actual_sources():
     assert_source_match()
+
+
+def test_native_rejects_foreign_executed_binary_for_each_dream_release():
+    from gf_common.card_instance import (
+        dream_compat_card_instance_contract,
+        moon_dream_card_instance_contract,
+    )
+    from gf_common.card_instance_runtime import approved_binary_sha256
+    from tests.test_card_instance_baseline_runtime import shared_runtime_receipt
+
+    startup = {
+        "base_url": "http://127.0.0.1:1",
+        "test_server_info": {"seed_fingerprint": "unused"},
+        "test_server_config": {},
+    }
+    previous = dream_compat_card_instance_contract()
+    current = moon_dream_card_instance_contract()
+    owner = RustPlayerRuntime(runtime_config())
+    try:
+        for own, foreign in ((previous, current), (current, previous)):
+            receipt = shared_runtime_receipt(own)
+            foreign_sha = approved_binary_sha256(foreign)
+            receipt["binary"]["sha256"] = receipt["executed"]["sha256"] = foreign_sha
+            spec = game_spec(startup, receipt)
+            spec["actions"]["action_contract"] = asdict(own)
+            # Exercise Native admission independently of the Python receipt check.
+            with pytest.raises(ValueError, match="actual executed shared Simulator receipt required"):
+                owner._native.start(json.dumps([spec]).encode())
+    finally:
+        owner.cancel("receipt pin test complete")
+        assert owner.join()["games"] == []
 
 
 def game_spec(startup, receipt, *, episode="planned", deadline=None, kind="heuristic"):

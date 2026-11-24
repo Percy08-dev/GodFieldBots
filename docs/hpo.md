@@ -439,17 +439,20 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 ### 保存先の設定
 
-新規の[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000.toml)と
-[256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)は、
-〈夢〉の互換性を訂正したSimulator `9e47d4c` を使います。収束診断のTOML先頭に
-新しいIDの生成と `tools/rust_player_operation.py` の起動例を記載しています。
+新規の[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000.toml)は、
+月神・〈夢〉・ちからの粉の修正を含むSimulator `f394a7b` を使います。
+収束診断のTOML先頭に新しいIDの生成と `tools/rust_player_operation.py` の起動例を
+記載しています。確定済み成果物は `ppo-hpo/mlp-256-convergence-1000-moon-dream`
+配下に保存します。
 `uv sync --locked --inexact --extra torch-cuda --extra hpo --extra shared-inference`
-で `.venv` に依存関係を揃え、非公開ドローに対応したNativeホイールを同じ環境に
+で `.venv` に依存関係を揃え、統合版に対応したNativeホイールを同じ環境に
 インストールします。起動時は `uv run --no-sync` でその環境を使います。
-検証済みwheelは `runs/concealed-dream-draw.2yyZLu/wheels-final` にあります。
-[実行版の検証記録](verification/concealed-dream-draw.md)
+検証済みwheelは `runs/moon-dream-compat/wheels` にあります。
+[実行版の検証記録](verification/moon-dream-simulator.md)
 
-別の実験では[プローブのテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)
+[版固定の256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)と
+[プローブのテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)は
+Simulator `9e47d4c` を指定します。別の実験ではテンプレート
 を `configs/hpo/` 内にコピーし、`stage` と保存先を揃えて変えます。
 相対パスの基準はHPO TOMLのあるディレクトリです。過去の収集を再現する場合は
 runに記録されたTOML、Simulator、Nativeビルドを使います。

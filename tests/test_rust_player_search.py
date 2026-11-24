@@ -12,7 +12,6 @@ from gf_common import card_instance
 from gf_common.card_instance import (
     ActionConfigV3,
     shared_card_instance_contract,
-    strength_powder_card_instance_contract,
 )
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV3
@@ -743,14 +742,11 @@ def test_baseline_capacity_is18_while_generator_capacity_remains128(maximum, kin
         ([("strength-powder", None), ("wand-of-mystic-water", None)], {(0, 1), (1, 0)}),
     ],
 )
-@pytest.mark.parametrize("use_new", [False, True], ids=["powder-release", "dream-release"])
-def test_strength_powder_public_candidates(spec, powder_attacks, use_new):
+@pytest.mark.parametrize("release", ["strength_powder", "dream_compat", "moon_dream"])
+def test_strength_powder_public_candidates(spec, powder_attacks, release):
     value = inputs(spec, can_pray=True)
     value.observation["own"]["status"]["dream"] = True
-    contract = (
-        card_instance.dream_compat_card_instance_contract() if use_new
-        else strength_powder_card_instance_contract()
-    )
+    contract = getattr(card_instance, f"{release}_card_instance_contract")()
     native = differential(value, contract=contract)
     assert native is not None
     table = native["generated"]["table"]
@@ -792,3 +788,23 @@ def test_historical_shared_strength_powder_remains_a_completed_singleton():
     native = differential(inputs([("strength-powder", None)], can_pray=True))
     assert native is not None
     assert "play_sequence" in native["generated"]["table"]["kinds"]
+
+
+def test_native_binds_both_dream_release_profiles_to_their_exact_pins():
+    value = inputs([("bronze-club", None)], can_pray=True)
+    frame, _ = own_frame(value)
+    previous = card_instance.dream_compat_card_instance_contract()
+    current = card_instance.moon_dream_card_instance_contract()
+    assert dict(gf_native.build_info())["card_instance_moon_dream"] == current.profile_id
+    for own, foreign in ((previous, current), (current, previous)):
+        request = {
+            "frame": frame_dict(frame, layout=LAYOUT), "events": value.events,
+            "actions": asdict(ActionConfigV3(action_contract=own)), "rules": asdict(RULES),
+            "numeric_costs": asdict(NumericCosts()), "rng_state": random.Random(17).getstate(),
+            "clock": [0.0] * 1024,
+        }
+        assert invoke("player_search_v5", request)["generated"]["report"]["action_contract"] == asdict(own)
+        for field in ("profile_id", "simulator_revision", "spec_inventory_sha256"):
+            mixed = request["actions"] | {"action_contract": asdict(own) | {field: getattr(foreign, field)}}
+            with pytest.raises(ValueError, match="approved shared action contract"):
+                invoke("player_search_v5", request | {"actions": mixed})

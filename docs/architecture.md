@@ -2,6 +2,11 @@
 
 ## Status and scope
 
+[ADR0069](adr/0069-moon-dream-simulator.md) binds the combined Moon God,
+Dream, and Strength Powder release for the default HPO6 convergence run.
+The Simulator owns the automatic Full Moon Blade attack. Existing
+actor-visible event and candidate interfaces carry its projection.
+
 [ADR0068](adr/0068-concealed-dream-draw.md) defines how CardInstance accepts
 concealed Dream draws. Journal and Replay retain the actor's original event
 positions and hashes. Python and Native omit these draws from model features

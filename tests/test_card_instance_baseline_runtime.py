@@ -284,10 +284,15 @@ def test_journal6_rejects_valid_receipt_from_different_action_contract(tmp_path,
         journals._Context(ACTIONS, RULES).validate_header(header)
 
 
-def test_dream_compat_release_and_powder_behavior_are_pinned_independently():
-    old = strength_powder_card_instance_contract()
-    new = card_instance.dream_compat_card_instance_contract()
-    assert new.profile_id == "card-instance-simulator-v2-shared-20261124"
+@pytest.mark.parametrize("previous, current, profile_id", [
+    ("strength_powder", "dream_compat", "card-instance-simulator-v2-shared-20261124"),
+    ("dream_compat", "moon_dream", "card-instance-simulator-v2-shared-20261125"),
+])
+def test_dream_compat_release_and_powder_behavior_are_pinned_independently(previous, current, profile_id):
+    old = getattr(card_instance, f"{previous}_card_instance_contract")()
+    new = getattr(card_instance, f"{current}_card_instance_contract")()
+    assert new.profile_id == profile_id
+    assert card_instance.parse_card_instance_contract(asdict(new)) == new
     assert old.requires_powder_weapon and new.requires_powder_weapon
     assert old.simulator_revision != new.simulator_revision
     assert old.spec_inventory_sha256 != new.spec_inventory_sha256
@@ -302,6 +307,11 @@ def test_dream_compat_release_and_powder_behavior_are_pinned_independently():
             with pytest.raises(ContractError):
                 validate_runtime_receipt(
                     original | {field: foreign[field]}, require_executed=True, expected_contract=profile
+                )
+        for field in ("profile_id", "simulator_revision", "spec_inventory_sha256"):
+            with pytest.raises(ContractError):
+                card_instance.parse_card_instance_contract(
+                    asdict(profile) | {field: foreign["action_contract"][field]}
                 )
 
 

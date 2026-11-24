@@ -75,10 +75,25 @@ fn dream_compat_card_instance_contract() -> &'static Value {
     &CONTRACT
 }
 
+pub(crate) const MOON_DREAM_PROFILE: &str = "card-instance-simulator-v2-shared-20261125";
+
+fn moon_dream_card_instance_contract() -> &'static Value {
+    static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
+        let mut contract = dream_compat_card_instance_contract().clone();
+        contract["profile_id"] = json!(MOON_DREAM_PROFILE);
+        contract["simulator_revision"] = json!("f394a7b57b0ffb12c6b5782ff52fdb8842ec7534");
+        contract["spec_inventory_sha256"] =
+            json!("c2a0e37607bff98e342b618c5057887cdf6adca981b81731245adf5853cdfc78");
+        contract
+    });
+    &CONTRACT
+}
+
 fn is_shared_card_instance_contract(contract: &Value) -> bool {
     contract == shared_card_instance_contract()
         || contract == strength_powder_card_instance_contract()
         || contract == dream_compat_card_instance_contract()
+        || contract == moon_dream_card_instance_contract()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -145,11 +160,14 @@ impl Config {
             "invalid channel weight",
         )?;
         c.requires_powder_weapon = c.action_contract == *strength_powder_card_instance_contract()
-            || c.action_contract == *dream_compat_card_instance_contract();
+            || c.action_contract == *dream_compat_card_instance_contract()
+            || c.action_contract == *moon_dream_card_instance_contract();
         Ok(c)
     }
     fn simulator_binary_sha256(&self) -> &'static str {
-        if self.action_contract == *dream_compat_card_instance_contract() {
+        if self.action_contract == *moon_dream_card_instance_contract() {
+            "15137c72e670a90a64fd474030ee9024c91b97b1282c8d103db895f54a2bfa37"
+        } else if self.action_contract == *dream_compat_card_instance_contract() {
             "f95fadbc8eaad23fbe63e17ac9bdb0ebeca4b237956dedeab09d86f30cfd94bc"
         } else if self.action_contract == *strength_powder_card_instance_contract() {
             "45ac711b2f172dfd89c23edf30ba0045ab0704c0215a6995d4e8626af1cfb923"
