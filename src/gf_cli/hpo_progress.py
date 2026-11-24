@@ -414,7 +414,8 @@ def _terminal_screen(output: TextIO) -> tuple[str, str, str] | None:
 
 
 async def watch(root: Path, *, interval: float = 1., once: bool = False,
-                as_json: bool = False, output: TextIO | None = None) -> int:
+                as_json: bool = False, output: TextIO | None = None,
+                tensorboard: bool = True) -> int:
     if not finite_number(interval) or interval <= 0:
         raise ValueError('watch interval must be finite and positive')
     output = sys.stdout if output is None else output
@@ -423,6 +424,9 @@ async def watch(root: Path, *, interval: float = 1., once: bool = False,
     records = StandaloneProgressRecords(root)
     screen = None if once or as_json else _terminal_screen(output)
     enter, leave, prefix = screen or ('', '', '')
+    launch_dashboard = tensorboard and not (once or as_json) and output.isatty()
+    dashboard: TensorBoardWatch | None = None
+    previous_line: str | None = None
     try:
         if enter:
             print(enter, end='', file=output, flush=True)
@@ -441,12 +445,26 @@ async def watch(root: Path, *, interval: float = 1., once: bool = False,
                         and not _standalone_running(live, durable, value['availability'])):
                     live['eta_seconds'] = None
             frame = json.dumps(value, allow_nan=False) if as_json else render(value)
+            if launch_dashboard and dashboard is None and value.get('durable') is not None:
+                from gf_cli.hpo_tensorboard import TensorBoardWatch
+
+                dashboard = TensorBoardWatch(root, interval=interval)
+            if dashboard is not None:
+                line = dashboard.line()
+                if screen is not None or line != previous_line:
+                    frame = f'{frame}\n{line}'
+                previous_line = line
             print(prefix + frame, file=output, flush=True)
             if once:
                 return 0
             await asyncio.sleep(interval)
     finally:
-        if leave:
-            # Attempt restoration even after a partial write or failed frame.
-            with contextlib.suppress(OSError, ValueError):
-                print(leave, end='', file=output, flush=True)
+        try:
+            if leave:
+                # Attempt restoration even after a partial write or failed frame.
+                with contextlib.suppress(OSError, ValueError):
+                    print(leave, end='', file=output, flush=True)
+        finally:
+            if dashboard is not None:
+                with contextlib.suppress(OSError):
+                    dashboard.close()

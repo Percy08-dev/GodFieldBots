@@ -398,6 +398,29 @@ device全体ピークは別に扱います。進捗保存・表示の失敗は�
 以前の単独ランでは、watch が記録済みの世代と更新を照合し、確定済みの値を表示します。
 進捗の取得や表示は読み取り専用で、`Ctrl+C` は監視だけを終了します。
 
+#### TensorBoard で学習曲線を表示する
+
+単独 HPO6 ランを対話端末から監視すると、TensorBoard が利用できる環境では
+進捗の下に `TensorBoard: http://127.0.0.1:<port>/` が表示されます。
+監視用の環境で可視化の依存を入れ、従来どおり親ディレクトリを指定します。
+
+```sh
+uv sync --locked --inexact --extra tensorboard
+uv run --no-sync gf-bots hpo watch --path /path/to/hpo/parents/RUN_ID
+```
+
+URL を開き、Time Series で total loss、policy loss、value MSE、entropy、近似 KL、
+追加の学習診断を確認できます。横軸には `Step`（確定済み PPO 更新番号）を選びます。
+イベントの時刻には監視側が記録を読んだ時刻を使います。
+ブラウザに新しい点を自動で表示するには、TensorBoard の **Settings → Reload data** を
+有効にします。watch は起動時に保存済みの履歴を読み、その後は `--interval`（既定1秒）で
+新しく確定した更新だけを取り込みます。点は更新の確定時に増えます。
+
+学習ランは読み取り専用で開き、描画用のイベントは監視終了時に片付ける一時領域に
+出力します。TensorBoard が使えない場合も通常の監視は続きます。
+`--no-tensorboard` で表示を省けます。`--once`、`--json`、リダイレクト時は従来の出力です。
+長いランは TensorBoard の標準サンプリングで表示点が間引かれる場合があります。
+
 ## 資源と保存先
 
 `[operating]`でRAM・CUDA・Source・数値配列・保存・収集の各予算、対戦並列数、

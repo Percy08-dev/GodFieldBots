@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0071](0071-hpo-tensorboard-watch.md) — 単独 HPO6 の対話監視に、確定済み PPO 更新を
+表示する任意の TensorBoard を追加する。
+
 [0066](0066-strength-powder-simulator-contract.md) — ちからの粉の夢と
 武器併用条件を訂正したSimulatorを新しい共有Action契約で採用。
 

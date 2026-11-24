@@ -1137,6 +1137,12 @@ observation and can inspect hash-checked committed metrics from older runs.
 Progress carries aggregate phase and count data and grants no policy, Source
 or completion authority.
 
+[ADR0071](adr/0071-hpo-tensorboard-watch.md) adds an optional TensorBoard
+companion for interactive monitoring of standalone HPO6 parents. The companion
+reads a hash-verified prefix of the committed generation chain and appends only
+new scalar points. Its temporary event log and loopback HTTP server share the
+watcher's lifetime. Training keeps ownership of the run directory and its records.
+
 Use TOML/dataclasses with closed schemas and explicit type/domain checks.
 Reject unknown keys, bool-as-int, nonfinite numbers, unknown versions, bad
 references/cycles, unsupported models and model/training mismatches before I/O.
