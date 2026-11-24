@@ -43,6 +43,7 @@ from gf_training.structured_rollout import (
     _array,
     _blob,
     _hpo_semantics,
+    _interval_rows,
     _plan_rollout_arrays,
     _RolloutContext,
 )
@@ -435,7 +436,11 @@ def _validate_owned_layout(metadata: Json, banks: ReadonlyRamBankSet, *, model: 
                 'card_present': (18,len(LAYOUT.card_numeric_fields)),
                 'card_categories': (18,len(LAYOUT.card_categories)),
                 'card_mask': (18,), 'opponent_learned': (18,), 'history': (LAYOUT.history_width,)}
-            interval = integer(item['boundary']['end']-item['interval_start'],0,model.event.max_interval)
+            raw_count = integer(item['boundary']['end']-item['interval_start'],0,model.event.max_interval)
+            first_interval = descriptors.get(event + '.interval_numerics')
+            if first_interval is None:
+                raise ContractError('owned numeric interval token array missing')
+            interval = _interval_rows(first_interval.shape, raw_count, corrected=True)
             shape: tuple[int,...]
             for field in FRAME_ARRAY_FIELDS:
                 if field.startswith('interval_'):

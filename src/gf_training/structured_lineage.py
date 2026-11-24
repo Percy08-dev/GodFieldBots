@@ -181,8 +181,11 @@ class _ChainScan(SealedScan):
             storage = state['effective_config']['storage']
             settings = preparation_config(state['effective_config']['preprocessing'])
             if settings.backend == 'rust':
-                from gf_training.native_backend import group_pack_reader_settings
-                group_pack_reader_settings(settings)
+                from gf_training.native_backend import (
+                    group_pack_reader_settings,
+                    recorded_reader_build,
+                )
+                group_pack_reader_settings(settings, recorded_build=recorded_reader_build(state))
             limit = min(self.limit, storage['budget_mib'] * 1024**2)
             self.ensure_packed_pool()
             expected = Path(storage['db_root']) / state['run_id'] / 'collections' / root.name

@@ -134,7 +134,7 @@ def test_ordinary_fresh_native_parent_validates_actual_gen0_before_first_collect
     # Private component gate only. No marker is published and no collector,
     # Simulator or PPO optimizer update is executed by this fresh-control test.
     monkeypatch.setattr(native_backend, 'load_native', lambda: native)
-    monkeypatch.setattr(native_backend, 'group_pack_reader_settings', lambda config, native=None: asdict(config))
+    monkeypatch.setattr(native_backend, 'group_pack_reader_settings', lambda config, native=None, **_: asdict(config))
     construct = _NativeGameInputs._construct_session
     providers = []
     def capture(actual, session_class, plan, settings, cancel):
@@ -189,7 +189,7 @@ def test_ordinary_paused_nonempty_factory_retains_actual_scan_pool_and_original_
     # Historical diagnostic selection only; actual run/identity/backend bytes
     # stay unchanged. All scan/chain/proof/numeric/native checks remain real.
     monkeypatch.setattr(source, 'preparation_config', lambda value: replace(prepare(value), backend='rust'))
-    monkeypatch.setattr(native_backend, 'group_pack_reader_settings', lambda config, native=None: {})
+    monkeypatch.setattr(native_backend, 'group_pack_reader_settings', lambda config, native=None, **_: {})
     def diagnostic(actual, *args, **kwargs):
         kwargs['native'] = native
         initialize(actual, *args, **kwargs)

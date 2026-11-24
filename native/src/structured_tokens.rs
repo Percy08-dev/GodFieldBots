@@ -5,6 +5,7 @@ use crate::{
     error::{Error, Result},
     json::{self, Document, Value, ValueExt},
     structured_controls::{digest, token_signature},
+    structured_journal::card_instance::is_concealed_draw,
 };
 use std::sync::Arc;
 
@@ -238,7 +239,8 @@ fn frame_tokens_context(
     if end - start > 65536 {
         return Err(Error::contract("structured interval token capacity"));
     }
-    if recipe.is_corrected() && !owned {
+    let corrected = recipe.is_corrected();
+    if corrected && !owned {
         // Validate only this participant's original prefix. A later tail is
         // never read to construct an earlier frame's tokens.
         for value in &events[..end] {
@@ -500,6 +502,9 @@ fn frame_tokens_context(
     let mut interval_cats = Vec::new();
     for value in &events[start..end] {
         control.check()?;
+        if corrected && is_concealed_draw(value) {
+            continue;
+        }
         let (n, p, c) = event(value, actor, recipe)?;
         interval_numbers.push(ints(n));
         interval_present.push(flags(p));
@@ -512,9 +517,25 @@ fn frame_tokens_context(
     let window_index = definition_start + definition_vocab.array()?.len();
     let actor_start = window_index + 2;
     let mut history = vec![0i64; actor_start + 16];
-    let window_start = end.saturating_sub(recipe.window);
-    for value in &events[window_start..end] {
+    let window_start = if corrected {
+        0
+    } else {
+        end.saturating_sub(recipe.window)
+    };
+    let mut count = 0;
+    let mut truncated = window_start != 0;
+    // The statistics use bounded integer sums. Accumulate from the end so
+    // concealed draws use no slots and the first extra visible row proves truncation.
+    for value in events[window_start..end].iter().rev() {
         control.check()?;
+        if corrected && is_concealed_draw(value) {
+            continue;
+        }
+        if count == recipe.window {
+            truncated = true;
+            break;
+        }
+        count += 1;
         let (n, p, c) = event(value, actor, recipe)?;
         add(&mut history[(c[0] - 2) as usize], 1)?;
         for (role, &category) in c[4..].iter().enumerate() {
@@ -562,8 +583,8 @@ fn frame_tokens_context(
             }
         }
     }
-    history[window_index] = (end - window_start) as i64;
-    history[window_index + 1] = i64::from(end > recipe.window);
+    history[window_index] = count as i64;
+    history[window_index + 1] = i64::from(truncated);
     let value = json::object([
         (
             "frame_hash",

@@ -3787,6 +3787,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ),
         ("card_instance_models", "mlp,gru,transformer"),
         ("card_instance_guardian_acted", "card-or-guardian-v1"),
+        ("card_instance_concealed_draw", "raw-preserved;feature-omitted-v1"),
         ("card_instance_defense_priority", "owner-defense-priority-v2"),
         ("card_instance_refresh", "baseline1;options1;identity1"),
         ("card_instance_refresh_opponents", "mixed16-v1;ordinary1;hpo2"),

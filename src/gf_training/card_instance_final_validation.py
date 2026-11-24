@@ -119,6 +119,7 @@ class _Final64OriginalContract:
     actions: ActionConfigV3
     settings: Any
     expected_facts_bytes: bytes
+    recorded_build: Json | None = None
 
 
 def _admit_source(parent: FormalGameParent, loan: FinalSourceBudgetLoan | None, amount: int) -> None:
@@ -133,6 +134,7 @@ def _original_contract(parent: FormalGameParent, *, state: Json | None = None,
                        budget_loan: FinalSourceBudgetLoan | None = None) -> _Final64OriginalContract:
     from gf_common.card_instance import action_config_v3
     from gf_common.preprocessing import PreparationConfig, preparation_config
+    from gf_training.native_backend import recorded_reader_build
     parent.require_active()
     sizes = parent.canonical_control_sizes
     if budget_loan is not None:
@@ -160,7 +162,7 @@ def _original_contract(parent: FormalGameParent, *, state: Json | None = None,
         'code':original['identity']['code'], 'integration':original['identity']['integration']}
     contract = _Final64OriginalContract(parent, canonical(effective).encode(),
         canonical(original['config_inputs']).encode(), canonical(projected).encode(), actions,
-        settings, canonical(facts).encode())
+        settings, canonical(facts).encode(), recorded_reader_build(original) if settings.backend == 'rust' else None)
     if budget_loan is not None:
         budget_loan._keep_opening(contract)
     return contract
@@ -187,7 +189,7 @@ def _plan_original_contract(contract: _Final64OriginalContract, directory: Path,
         invocation['wall_deadline_monotonic'], invocation['started_monotonic'])
 
 
-def require_actor_backend(loaded: Any) -> None:
+def require_actor_backend(loaded: Any, *, recorded_build: Json | None = None) -> None:
     """No Rust64 activity before its separate reviewed retained-source adoption."""
     config = loaded.config
     if config.preprocessing.reader != 'participant-structured-v2':
@@ -197,7 +199,8 @@ def require_actor_backend(loaded: Any) -> None:
     if config.preprocessing.backend != 'rust':
         raise ContractError('explicit final validation Python/Rust backend required')
     from gf_training.native_card_instance import _require_final_validation_native
-    _require_final_validation_native(config.preprocessing, packed=hasattr(config, 'storage'))
+    _require_final_validation_native(config.preprocessing, packed=hasattr(config, 'storage'),
+        recorded_build=recorded_build)
 
 
 def _caller_contract(loaded: Any) -> None:
@@ -208,10 +211,10 @@ def _caller_contract(loaded: Any) -> None:
         raise ContractError('original corrected formal NN3 training Config required')
 
 
-def _loaded(loaded: Any) -> None:
+def _loaded(loaded: Any, *, recorded_build: Json | None = None) -> None:
     _caller_contract(loaded)
     formal_preflight(loaded)
-    require_actor_backend(loaded)
+    require_actor_backend(loaded, recorded_build=recorded_build)
 
 _CONTROL_SCRATCH = 65536
 
@@ -730,12 +733,13 @@ class GameFinalValidationSource:
 def _open_original(loaded: Any, parent: FormalGameParent, directory: Path, *, deadline: float,
                    max_owned_bytes: int, expected_plan: GameFinalValidationPlan | None = None,
                    returned: Json | None = None, extra_owned_bytes: int = 0,
-                   pending: _IssuedFinalValidationCollection | None = None) -> GameFinalValidationSource:
+                   pending: _IssuedFinalValidationCollection | None = None,
+                   recorded_build: Json | None = None) -> GameFinalValidationSource:
     _caller_contract(loaded)
-    require_actor_backend(loaded)
+    require_actor_backend(loaded, recorded_build=recorded_build)
     control_bytes = _reserve_controls(loaded, parent, directory, extra_owned_bytes=extra_owned_bytes,
         max_owned_bytes=max_owned_bytes)
-    _loaded(loaded)
+    _loaded(loaded, recorded_build=recorded_build)
     state, label, binding = _facts(parent, loaded)
     assert binding.policy_options is not None
     directory, ancestors = _output(directory, parent, fresh=False)
@@ -1035,7 +1039,7 @@ def open_parent_game_final_validation(parent: FormalGameParent, directory: Path,
         contract = _original_contract(parent, budget_loan=budget_loan)
         if contract.settings.backend == 'rust':
             from gf_training.native_backend import original_history_reader_settings
-            original_history_reader_settings(contract.settings)
+            original_history_reader_settings(contract.settings, recorded_build=contract.recorded_build)
         directory, ancestors = _output(directory, parent, fresh=False)
         budget_loan.admit_local(budget_loan.source_bytes + 65536*(len(ancestors)+1))
         source = _inspect_final64_originals(contract, parent, directory,
@@ -1085,12 +1089,14 @@ def open_game_final_validation(loaded: Any, parent: FormalGameParent, directory:
                                deadline: float, max_owned_bytes: int) -> Iterator[GameFinalValidationSource]:
     """Readonly original opener; the SAME validator also accepts live collection."""
     _caller_contract(loaded)
-    require_actor_backend(loaded)
+    recorded_build = getattr(parent._native_inputs, '_recorded_build', None)
+    require_actor_backend(loaded, recorded_build=recorded_build)
     token = _acquire_borrow(parent)
     source = None
     primary: BaseException | None = None
     try:
-        source = _open_original(loaded, parent, directory, deadline=deadline, max_owned_bytes=max_owned_bytes)
+        source = _open_original(loaded, parent, directory, deadline=deadline, max_owned_bytes=max_owned_bytes,
+            recorded_build=recorded_build)
         source._borrow_token = token
         yield source
     except BaseException as error:

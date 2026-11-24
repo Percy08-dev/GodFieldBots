@@ -80,15 +80,17 @@ def test_inspect_routing_delay_cannot_restart_original_preprocessing_deadline(tm
     settings = PreparationConfig(reader='participant-structured-v2', memory_budget_mib=8192,
         wall_seconds=100, cleanup_seconds=5)
     seen = []
-    def select(path, expected, actual_settings, *, max_owned_bytes, deadline):
+    def select(path, expected, actual_settings, *, max_owned_bytes, deadline, _inspect_recorded):
         seen.append(deadline)
         assert actual_settings is settings
+        assert _inspect_recorded is True
         clock[0] += 20
         return VerifiedGameTreeDataset3
     class StopBeforeSources(RuntimeError):
         pass
     def entering(dataset):
         seen.append(dataset.deadline)
+        assert dataset._inspect_recorded is True
         raise StopBeforeSources()
     monkeypatch.setattr(module, 'verified_game_dataset_type', select)
     monkeypatch.setattr(VerifiedGameTreeDataset3, '__enter__', entering)

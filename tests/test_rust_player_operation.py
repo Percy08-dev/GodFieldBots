@@ -368,6 +368,36 @@ def test_hpo_factory_refuses_missing_companion_before_anchor_and_namespace(tmp_p
     assert not (tmp_path / 'control').exists()
 
 
+@pytest.mark.parametrize('entry_point', ['operation', 'campaign'])
+def test_dream_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(tmp_path, monkeypatch, entry_point):
+    from gf_cli import hpo
+    from gf_cli.rust_player_campaign import prepare_campaign
+    from gf_simulator_client import rust_player_companion
+    from gf_training import native_backend
+
+    raw = campaign_raw() | {
+        'base_experiment': str(ROOT / 'configs/experiments/hpo-rust-mlp-dream-base.toml'),
+    }
+    raw['operating'].update(post_host_seconds=30., collector_budget_bytes=8 * 1024**3)
+    raw['storage'].update(parent_root=str(tmp_path / 'runs'), numeric_root=str(tmp_path / 'runs'))
+    loaded = campaign_config(raw, origin=ROOT)
+    monkeypatch.setattr(entry, 'check_native_collection_storage', lambda *_a, **_kw: None)
+    monkeypatch.setattr(hpo, 'check_storage', lambda *_a, **_kw: {})
+    monkeypatch.setattr(hpo, '_conditions', lambda *_a: {})
+    monkeypatch.setattr(native_backend, 'binary_identity', lambda: {'build': {}})
+    monkeypatch.setattr(rust_player_companion, 'discover_companion', lambda *_a: pytest.fail('companion reached'))
+    dest = tmp_path / 'control'
+    if entry_point == 'campaign':
+        launch = prepare_campaign(loaded, dest, mode='fresh')
+    else:
+        selected = effective_settings(loaded.config.model, loaded.config.training, {}, layout=layout)
+        run = materialize_hpo_run(loaded, selected, learning_seed=17, run_id=RUN_ID)
+        launch = entry.prepare_hpo_operation(run, context(), dest, mode='fresh')
+    with pytest.raises(ContractError, match='concealed draw'), launch:
+        pytest.fail('pre-marker Native build entered ownership')
+    assert not dest.exists()
+
+
 @pytest.mark.parametrize('failure', ['none', 'complete', 'train', 'completion'])
 def test_legacy_operation_uses_real_routine_boundary_and_exact_job_ledger(tmp_path, monkeypatch, failure):
     """Only admission/training/collection are unit doubles; Store remains actual."""

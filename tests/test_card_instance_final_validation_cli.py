@@ -33,7 +33,7 @@ def test_separate_native64_adoption_refuses_before_runtime_output_model_actor(tm
     native = SimpleNamespace(build_info=lambda: {'card_instance_formal_controls': 'run3-formal-parent-v1;declaration1;stop1',
         'card_instance_final_validation': marker})
     monkeypatch.setattr(native_backend, 'load_native', lambda: native)
-    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda *args: {})
+    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda *args, **_: {})
     monkeypatch.setattr(cli, 'CardInstanceRuntimeEvidence', lambda *args, **kwargs: pytest.fail('runtime before native64 refusal'))
     with pytest.raises(ContractError, match='no fallback'):
         module.require_actor_backend(value)

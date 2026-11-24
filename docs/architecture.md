@@ -2,6 +2,11 @@
 
 ## Status and scope
 
+[ADR0068](adr/0068-concealed-dream-draw.md) defines how CardInstance accepts
+concealed Dream draws. Journal and Replay retain the actor's original event
+positions and hashes. Python and Native omit these draws from model features
+and measure the history window over the remaining events.
+
 [ADR0067](adr/0067-dream-simulator-contract.md) pins the Simulator's Dream
 exclusions and separate CostCut armor compatibility for the shared HPO6
 path. Python and Rust validate the named release independently of the

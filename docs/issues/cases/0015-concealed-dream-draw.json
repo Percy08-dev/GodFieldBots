@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "purpose": "diagnostic replay of published Action and event DTOs",
+  "simulator_revision": "9e47d4c5f8cd3f60437f9aeabc95076c1dc04321",
+  "catalog_version": "public-ja-v3",
+  "profile_id": "card-instance-simulator-v2-shared-20261124",
+  "game_seed": "2c3b618c-9551-5e99-8166-373b6a15caf5",
+  "original_game_id": "01M85M5F0FXP2A3G5PNJ4S93NT",
+  "http_archive_sha256": "4add80850394c81b6c1c7e43360e37be28b0d44e2c5943d9fb39c83b4436634c",
+  "original_ack_request_id": "5d5f7f78-30ec-4a23-b39b-33fc4a378b84",
+  "steps": [
+    {
+      "actor": 2,
+      "expected_revision": 0,
+      "action": {
+        "card_refs": [
+          "c1_6f60b2cff695e89fd5e76e31b1faf72c",
+          "c1_25eb7433647a9cc56a99b33f171dd742",
+          "c1_f347a1af81f4178bdc752ab57750803b"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "actor": 1,
+      "expected_revision": 1,
+      "action": {
+        "card_ref": "c1_ba1066cc8aefde37a2e2064f83624cd8",
+        "hp": 16,
+        "money": 44,
+        "mp": 10,
+        "type": "exchange"
+      }
+    },
+    {
+      "actor": 2,
+      "expected_revision": 2,
+      "action": {
+        "card_refs": [
+          "c1_ff113cdb0d5f6b4a9027d3e2fe3cf022"
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "actor": 1,
+      "expected_revision": 3,
+      "action": {
+        "ordered_card_refs": [
+          "c1_cb4e03277b14ad437e8c5e8c2486dbde",
+          "c1_f3b62cf3ff34da4dbcc4ef91fdbc5b53"
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 2,
+      "expected_revision": 4,
+      "action": {
+        "ordered_card_refs": [
+          "c1_1124518b14068d3be119777316b68c6d"
+        ],
+        "type": "respond"
+      }
+    },
+    {
+      "actor": 2,
+      "expected_revision": 5,
+      "action": {
+        "ordered_card_refs": [
+          "c1_5875be3dccc68bfa4da30843ac02d645"
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "actor": 1,
+      "expected_revision": 6,
+      "action": {
+        "ordered_card_refs": [
+          "c1_22ddc63d51c1913210c940766d28f4d1",
+          "c1_466abe0402b79e81613634ece2aa1bfc"
+        ],
+        "type": "respond"
+      }
+    }
+  ],
+  "next_step": {
+    "actor": 1,
+    "expected_revision": 7,
+    "action": {
+      "type": "exchange",
+      "card_ref": "c1_b574bba3b950be52ddf8e2fcd21c26e4",
+      "hp": 17,
+      "mp": 3,
+      "money": 43
+    }
+  },
+  "expected": {
+    "revision_before": 6,
+    "revision_after": 7,
+    "viewer": 1,
+    "ack_http_status": 200,
+    "event": {
+      "type": "artifact_drawn",
+      "player": 1,
+      "definition_id": "concealed"
+    },
+    "own_draws": 18,
+    "own_concealed_draws": 8,
+    "opponent_concealed_draws": 0,
+    "redacted_in": [
+      "act",
+      "events",
+      "replay"
+    ]
+  }
+}

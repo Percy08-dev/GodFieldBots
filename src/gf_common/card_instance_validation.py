@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from gf_common.card_instance import CATALOG_META, RULE_SET
+from gf_common.card_instance_vocab import DEFINITION_SHA256
 from gf_common.domain import (
     ContractError,
     Json,
@@ -21,6 +22,7 @@ from gf_common.domain import (
     digest,
     integer,
 )
+from gf_common.structured_vocab import GUARDIANS
 from gf_common.validation import boolean, player, result, status, text_value, validate_definition
 from gf_common.validation import validate_events as _legacy_events
 
@@ -446,7 +448,12 @@ def public_info(value: Any) -> Json:
     return clone(value)
 
 
-def validate_events(value: Any) -> None:
+def is_concealed_draw(event: Json) -> bool:
+    return event["type"] == "artifact_drawn" and event["definition_id"] == "concealed"
+
+
+def validate_events(value: Any, *, corrected: bool | None = None) -> None:
+    """Validate the shared wire DTO or the narrower selected Bank layout."""
     if not isinstance(value, list):
         raise ContractError("event array required")
     for event in value:
@@ -455,13 +462,22 @@ def validate_events(value: Any) -> None:
             player(event["player"])
         else:
             _legacy_events([event])
+        tag = event["type"]
         if (
-            isinstance(event, dict)
-            and event.get("type") == "status_changed"
-            and event["status"]
+            tag == "status_changed" and event["status"]
             not in ("cold", "fever", "hell", "heaven", "fog", "flash", "dream", "dark_cloud")
         ):
             raise ContractError("unknown public status")
+        if "definition_id" in event:
+            definition = event["definition_id"]
+            if corrected is not False and is_concealed_draw(event):
+                continue
+            if (corrected is not False and tag in ("guardian_set", "guardian_left", "guardian_acted")
+                    and definition in GUARDIANS):
+                continue
+            if ((corrected is True and tag in ("guardian_set", "guardian_left"))
+                    or definition not in DEFINITION_SHA256):
+                raise ContractError("unknown public event-time definition namespace")
 
 
 def event_feed(value: Any) -> Json:

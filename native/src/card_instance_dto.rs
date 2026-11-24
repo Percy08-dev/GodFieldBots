@@ -838,6 +838,10 @@ pub(crate) fn component_binding(budget: &Arc<Budget>, control: &Control) -> Resu
     ]))
 }
 
+pub(crate) fn is_concealed_draw(value: &Value) -> bool {
+    value["type"] == "artifact_drawn" && value["definition_id"] == "concealed"
+}
+
 /// Public schema2 event diagnostic with exact Guardian/definition namespaces.
 pub(crate) fn event(
     value: &Value,
@@ -851,6 +855,10 @@ pub(crate) fn event(
         "corrected event requires explicit recipe",
     )?;
     let tag = value.require("type")?.string()?;
+    if is_concealed_draw(value) {
+        value.closed(&["type", "player", "definition_id"], &[])?;
+        return validation::player(value.require("player")?).map(|_| ());
+    }
     if tag == "safe" {
         value.closed(&["type", "player"], &[])?;
         validation::player(value.require("player")?)?;
@@ -1505,6 +1513,65 @@ mod tests {
             assert!(event(&raw, &recipe, &b, &c).is_err());
         }
     }
+    #[test]
+    fn concealed_draws_are_validated_but_occupy_no_token_or_history_rows() {
+        let (b, c) = owners();
+        let recipe = Recipe::corrected(2, &b, &c).unwrap();
+        let draw = parse(
+            br#"{"type":"artifact_drawn","player":1,"definition_id":"bronze-club"}"#,
+            &b,
+            &c,
+        );
+        let marker = parse(
+            br#"{"type":"artifact_drawn","player":1,"definition_id":"concealed"}"#,
+            &b,
+            &c,
+        );
+        let safe = parse(br#"{"type":"safe","player":2}"#, &b, &c);
+        let mut events = vec![draw.clone(), marker.clone(), safe.clone(), marker.clone()];
+        for (source, filtered, count, truncated) in [
+            (vec![marker.clone(); 8], vec![], 0, 0),
+            (events.clone(), vec![draw.clone(), safe.clone()], 2, 0),
+            (
+                {
+                    events.insert(0, draw.clone());
+                    events
+                },
+                vec![draw.clone(), draw, safe],
+                2,
+                1,
+            ),
+        ] {
+            let frame = fixture(&[], source.len(), &b, &c);
+            let tokens = frame_tokens(&frame, &source, &recipe, &b, &c).unwrap();
+            let visible_frame = fixture(&[], filtered.len(), &b, &c);
+            let visible = frame_tokens(&visible_frame, &filtered, &recipe, &b, &c).unwrap();
+            for key in [
+                "interval_numerics",
+                "interval_present",
+                "interval_categories",
+            ] {
+                assert_eq!(tokens.value[key], visible.value[key]);
+            }
+            assert_eq!(
+                tokens.value["event_end"],
+                json::integer(source.len() as i128)
+            );
+            assert_eq!(tokens.value["history"][369], json::integer(count));
+            assert_eq!(tokens.value["history"][370], json::integer(truncated));
+            assert_eq!(
+                tokens.value["history"][371],
+                json::integer(if count == 0 { 0 } else { 1 })
+            );
+        }
+        let mut wrong = marker.clone();
+        wrong["type"] = json::text("artifact_used");
+        assert!(event(&wrong, &recipe, &b, &c).is_err());
+        let mut unknown = marker;
+        unknown["definition_id"] = json::text("unknown-public-id");
+        assert!(event(&unknown, &recipe, &b, &c).is_err());
+    }
+
     #[test]
     fn guardian_namespaces_safe_history_offsets_and_future_tail_are_exact() {
         let (b, c) = owners();

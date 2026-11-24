@@ -5,12 +5,14 @@ Unknown categories reject. PAD0 and MISSING1 are distinct from observed values.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from gf_common import structured_layout as layouts
 from gf_common import structured_vocab as vocab
-from gf_common.domain import ContractError, digest, integer
+from gf_common.card_instance_validation import is_concealed_draw
+from gf_common.domain import ContractError, Json, digest, integer
 from gf_common.structured import (
     CandidateTable,
     DecisionFrame,
@@ -255,9 +257,27 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
         card_cats.append((PAD,) * len(layout.card_categories))
     opponent = tuple(category(name, vocab.DEFINITIONS) for name in obs["opponent"]["learned_miracles"])
     opponent += (PAD,) * (18 - len(opponent))
-    interval = [_event(event, frame.actor, layout) for event in view.events(frame.interval_start)]
+    corrected = layout is layouts.CORRECTED_CARD_INSTANCE_LAYOUT
+    interval = [_event(event, frame.actor, layout) for event in view.events(frame.interval_start)
+                if not (corrected and is_concealed_draw(event))]
     history = [0] * (len(layout.event_types) + 2 * len(EVENT_ACTORS) + 2 * len(EVENT_NUMERIC_FIELDS))
-    events = view.events(max(0, view.boundary.end - aggregate_window))
+    if corrected:
+        newest: list[Json] = []
+        truncated = False
+        for raw_event in reversed(view._events):
+            event = json.loads(raw_event)
+            if is_concealed_draw(event):
+                continue
+            if len(newest) == aggregate_window:
+                truncated = True
+                break
+            newest.append(event)
+        events = tuple(reversed(newest))
+        # exact_history_tail only needs the bounded count and whether one more exists.
+        prefix_count = len(events) + truncated
+    else:
+        events = view.events(max(0, view.boundary.end - aggregate_window))
+        prefix_count = view.boundary.end
     for event in events:
         event_numbers, event_presence, categories = _event(event, frame.actor, layout)
         history[categories[0] - 2] += 1
@@ -269,7 +289,7 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
             history[offset + index * 2] += number
             history[offset + index * 2 + 1] += event_exists
     if aggregate_recipe == layout.aggregate_recipe:
-        history.extend(exact_history_tail(events, frame.actor, prefix_count=view.boundary.end,
+        history.extend(exact_history_tail(events, frame.actor, prefix_count=prefix_count,
             window=aggregate_window, definition_ids=layout.event_categories[1]))
     elif aggregate_recipe != HISTORICAL_AGGREGATE:
         raise ContractError('unsupported structured aggregate recipe')
@@ -319,9 +339,11 @@ def validate_frame_tokens(tokens: FrameTokens, *, layout: StructuredLayout = LEG
     integer(tokens.actor, 1, 2)
     integer(tokens.revision)
     integer(tokens.event_start, 0, tokens.event_end)
-    integer(tokens.event_end, tokens.event_start, 2**31 - 1)
-    if (not isinstance(tokens.episode, str) or not tokens.episode
-            or tokens.event_end - tokens.event_start != len(tokens.interval_numerics)):
+    integer(tokens.event_end, tokens.event_start, min(2**31 - 1, tokens.event_start + 65536))
+    interval = tokens.event_end - tokens.event_start
+    rows = len(tokens.interval_numerics)
+    if (not isinstance(tokens.episode, str) or not tokens.episode or rows > interval
+            or (layout is not layouts.CORRECTED_CARD_INSTANCE_LAYOUT and rows != interval)):
         raise ContractError("frame token owner/interval mismatch")
 
     def numeric(row: tuple[int, ...], present: tuple[bool, ...], width: int) -> None:

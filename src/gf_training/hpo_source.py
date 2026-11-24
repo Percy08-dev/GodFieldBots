@@ -187,9 +187,10 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
             from gf_training.native_backend import require_native_refresh_opponents
             require_native_refresh_opponents()
         if settings.backend == 'rust':
-            from gf_training.native_backend import hpo_reader_settings
+            from gf_training.native_backend import hpo_reader_settings, recorded_reader_build
             hpo_reader_settings(settings, packed='storage_binding' in state, resident=state.get('run_variant') == 'hpo-ppo-resident-v1',
-                require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(hpo_spec(state)['storage']))
+                require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(hpo_spec(state)['storage']),
+                recorded_build=recorded_reader_build(state))
         inventories = []
         for generation in range(state['updates']):
             plan, _, after = recorded_hpo_plan(directory, state, records, generation, deadline)

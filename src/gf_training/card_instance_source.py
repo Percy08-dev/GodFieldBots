@@ -1164,18 +1164,21 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
             from gf_training.native_backend import require_native_refresh_opponents
             require_native_refresh_opponents()
         if settings.backend == 'rust':
+            from gf_training.native_backend import recorded_reader_build
+            recorded_build = recorded_reader_build(state) if online is None else None
             if any(binding.model_id == 'heuristic_refresh' for binding in plan.bindings.values()):
                 from gf_training.native_backend import require_native_refresh_baseline
                 require_native_refresh_baseline()
             if hpo:
                 from gf_training.native_backend import hpo_reader_settings
-                hpo_reader_settings(settings, packed=_packed(state), resident=state.get('run_variant') == 'hpo-ppo-resident-v1')
+                hpo_reader_settings(settings, packed=_packed(state),
+                    resident=state.get('run_variant') == 'hpo-ppo-resident-v1', recorded_build=recorded_build)
             from gf_training.native_card_instance import _NativeGameInputs
             provider = None
             if _packed(state):
                 from gf_training.native_backend import group_pack_reader_settings
                 from gf_training.native_group_pack import OriginalArtifactProvider
-                group_pack_reader_settings(settings)
+                group_pack_reader_settings(settings, recorded_build=recorded_build)
                 # Register actual current custody first so historical owners join
                 # its SAME pool; no second original Source/pool is constructed.
                 if online is not None:
@@ -1204,7 +1207,8 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 - owned_bytes(controls.root, deadline, external_roots=external))
             native_inputs = scope.enter_context(_NativeGameInputs(native_plan, settings, actions=actions,
                 max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=controls.retained + extra_owned_bytes,
-                max_scratch_bytes=remaining_storage, artifact_provider=provider, shared_controls=controls if provider is not None else None))
+                max_scratch_bytes=remaining_storage, artifact_provider=provider, shared_controls=controls if provider is not None else None,
+                recorded_build=recorded_build))
             assert native_inputs.summary is not None
             native_inputs.collection_index = next((index for index, row in enumerate(native_inputs.summary['collections'])
                 if row['generation'] == generation), -1)
@@ -1320,6 +1324,8 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
     settings = preparation_config(state['effective_config']['preprocessing'])
     if settings.backend == 'rust':
         from gf_common.training_opponents import training_opponents
+        from gf_training.native_backend import recorded_reader_build
+        recorded_build = recorded_reader_build(state)
         if training_opponents(state['effective_config']) is not None:
             from gf_training.native_backend import require_native_refresh_opponents
             require_native_refresh_opponents()
@@ -1335,7 +1341,7 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
             if state['schema_version'] == 4:
                 from gf_training.native_backend import group_pack_reader_settings
                 from gf_training.native_group_pack import OriginalArtifactProvider
-                group_pack_reader_settings(settings)
+                group_pack_reader_settings(settings, recorded_build=recorded_build)
                 for generation in range(state['updates']):
                     scan.packed_owner(directory / 'collections' / f'batch-{generation:06}')
                 if state['updates'] == 0:
@@ -1353,7 +1359,7 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
             inputs = native_scope.enter_context(_NativeGameInputs(native_plan, settings,
                 actions=_state(state, _game=True)[0], max_owned_bytes=max_owned_bytes, deadline=deadline,
                 extra_owned_bytes=scan.retained + extra_owned_bytes, artifact_provider=provider,
-                shared_controls=scan if provider is not None else None))
+                shared_controls=scan if provider is not None else None, recorded_build=recorded_build))
             assert inputs.summary is not None
             parent = inputs.summary['parent']
             if (parent['identity_sha256'] != digest(state['identity'])

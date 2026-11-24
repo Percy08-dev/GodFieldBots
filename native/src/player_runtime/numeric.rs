@@ -199,7 +199,11 @@ impl ServingRow {
         let layout: Value =
             serde_json::from_slice(crate::structured_controls::CARD_INSTANCE_RECIPE).unwrap();
         let mut fields = BTreeMap::new();
-        let count = input.boundary - input.interval_start;
+        let count = t.require("interval_numerics")?.array()?.len();
+        ensure(
+            count <= input.boundary - input.interval_start,
+            "interval token count exceeds raw interval",
+        )?;
         for name in [
             "state_numerics",
             "state_present",
@@ -220,6 +224,10 @@ impl ServingRow {
                 "state_categories" | "opponent_learned" | "card_categories" | "interval_categories"
             );
             let dims = if name.starts_with("interval_") {
+                ensure(
+                    t.require(name)?.array()?.len() == count,
+                    "interval token row mismatch",
+                )?;
                 Some(vec![
                     count,
                     layout[if name == "interval_categories" {

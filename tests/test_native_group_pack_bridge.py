@@ -217,7 +217,7 @@ def test_group_pack_marker_is_separate_from_existing_native_capability(monkeypat
     from gf_common.preprocessing import PreparationConfig
     from gf_training import native_backend
     settings = PreparationConfig(backend='rust', reader='participant-structured-v2')
-    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda config, module: {'checked': True})
+    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda config, module, **_: {'checked': True})
     module = SimpleNamespace(build_info=list, CardInstanceNativeSession=SimpleNamespace(from_artifacts=lambda: None),
         StructuredJournalTokens=SimpleNamespace(card_instance_artifacts=lambda: None))
     with pytest.raises(ContractError, match='capability'):

@@ -490,6 +490,7 @@ def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *
     from gf_cli.hpo_config import sealed_storage
     from gf_cli.hpo_storage import check_storage
     from gf_cli.rust_player_campaign import _store_mapping
+    from gf_common.card_instance import DREAM_COMPAT_PROFILE
     from gf_common.domain import integer
     from gf_common.rust_player import (
         BUILD_KEYS,
@@ -501,7 +502,7 @@ def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *
     from gf_models.rust_player import sampling_runtime_identity
     from gf_simulator_client.rust_player_companion import discover_companion
     from gf_training.lineage import run_lock
-    from gf_training.native_backend import binary_identity
+    from gf_training.native_backend import binary_identity, require_native_concealed_draw
     from gf_training.rust_player_supervision import runtime_producer, write_control_record
     cfg, hpo, p = _config(loaded)
     if not hpo or cfg.model.model_id != 'mlp' or mode not in ('fresh', 'resume'):
@@ -517,6 +518,8 @@ def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *
     check_storage(storage, operation_dir=namespace, originals_root=Path(cfg.storage.db_root),
                   run_directory=parent, deadline=time.monotonic() + cfg.run.wall_seconds)
     native = binary_identity()
+    if cfg.actions.action_contract.profile_id == DREAM_COMPAT_PROFILE:
+        require_native_concealed_draw(native['build'])
     require_native_hpo_storage(storage, native)
     companion = discover_companion(native)
     producer = runtime_producer(companion, sampling_runtime_sha256=sampling_runtime_identity())

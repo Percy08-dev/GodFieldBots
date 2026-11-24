@@ -22,6 +22,8 @@ CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
 CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
 CARD_INSTANCE_GUARDIAN_ACTED = 'card-or-guardian-v1'
+CARD_INSTANCE_CONCEALED_DRAW = 'raw-preserved;feature-omitted-v1'
+_CONCEALED_DRAW_KEY = 'card_instance_concealed_draw'
 CARD_INSTANCE_DEFENSE_PRIORITY = 'owner-defense-priority-v2'
 CARD_INSTANCE_REFRESH_BASELINE = 'baseline1;options1;identity1'
 CARD_INSTANCE_REFRESH_OPPONENTS = 'mixed16-v1;ordinary1;hpo2'
@@ -39,6 +41,17 @@ def require_native_guardian_acted(native: Any) -> None:
     if dict(native.build_info()).get('card_instance_guardian_acted') != CARD_INSTANCE_GUARDIAN_ACTED:
         raise ContractError('native GuardianActed union capability unavailable; no fallback')
     require_native_defense_priority(native)
+
+
+def require_native_concealed_draw(information: Json) -> None:
+    if information.get(_CONCEALED_DRAW_KEY) != CARD_INSTANCE_CONCEALED_DRAW:
+        raise ContractError('native concealed draw capability unavailable; no fallback')
+
+
+def recorded_reader_build(state: Json) -> Json | None:
+    """The state must already have passed its recorded preprocessing identity check."""
+    preprocessing = state['identity']['preprocessing']
+    return preprocessing['binary']['build'] if preprocessing['backend'] == 'rust' else None
 
 
 def require_native_refresh_baseline(native: Any = None) -> None:
@@ -59,7 +72,7 @@ def require_native_refresh_opponents(native: Any = None) -> None:
 
 def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False,
                         resident: bool = False, require_update_diagnostics: bool = False,
-                        require_update_storage: bool = False) -> Json:
+                        require_update_storage: bool = False, recorded_build: Json | None = None) -> Json:
     """Additive HPO preflight before Source, arrays, collection or process work."""
     from gf_common.hpo import NATIVE_CAPABILITY, UPDATE_DIAGNOSTICS_CAPABILITY
     module = load_native() if native is None else native
@@ -76,9 +89,9 @@ def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed
         from gf_common.hpo_resident import RESIDENT_CAPABILITY
         if information.get('card_instance_hpo_resident') != RESIDENT_CAPABILITY:
             raise ContractError('native resident HPO original/retirement/cache support unavailable; no fallback')
-    result = card_instance_reader_settings(config, module)
+    result = card_instance_reader_settings(config, module, recorded_build=recorded_build)
     if packed:
-        group_pack_reader_settings(config, module)
+        group_pack_reader_settings(config, module, recorded_build=recorded_build)
         require_pack_checksum(module)
     cls = getattr(module, 'CardInstanceNativeSession', None)
     methods = ('control_summary', 'authorize', 'authorize_hpo', 'numeric_used_bytes', 'export_cohort', 'export_recorded_cohort',
@@ -93,14 +106,15 @@ def require_pack_checksum(native: Any) -> None:
 
 
 
-def group_pack_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
+def group_pack_reader_settings(config: PreparationConfig, native: Any = None, *,
+                               recorded_build: Json | None = None) -> Json:
     """Require the separately accepted byte-provider ABI before packed native I/O."""
     import unicodedata
     if unicodedata.unidata_version != '16.0.0':
         raise ContractError('packed native names require Unicode16.0.0')
     module = native or load_native()
     require_pack_checksum(module)
-    result = card_instance_reader_settings(config, module)
+    result = card_instance_reader_settings(config, module, recorded_build=recorded_build)
     if dict(module.build_info()).get('card_instance_group_pack') != CARD_INSTANCE_GROUP_PACK:
         raise ContractError('native group Pack capability unavailable; no fallback')
     if (not callable(getattr(module.CardInstanceNativeSession, 'from_artifacts', None))
@@ -131,10 +145,13 @@ def tree_raw_reader_settings(config: PreparationConfig, native: Any = None) -> J
         raise ContractError('native Tree3 RAW source/binary/ABI differs')
     return result
 
-def original_history_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
+def original_history_reader_settings(config: PreparationConfig, native: Any = None, *,
+                                     recorded_build: Json | None = None,
+                                     _defer_draw_capability: bool = False) -> Json:
     """Closed original-history capability; class/summary alone grants no Source."""
     module = native or load_native()
-    result = card_instance_reader_settings(config, module)
+    result = card_instance_reader_settings(config, module, recorded_build=recorded_build,
+        _defer_draw_capability=_defer_draw_capability)
     info = dict(module.build_info())
     if info.get('card_instance_original_history') != CARD_INSTANCE_ORIGINAL_HISTORY:
         raise ContractError('native original-history capability unavailable; no fallback')
@@ -241,21 +258,27 @@ def require_ppo_model(model_id: str, native: ModuleType) -> None:
         raise ContractError(f'native binary does not support PPO model {model_id}')
 
 
-def card_instance_reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:
+def card_instance_reader_settings(config: PreparationConfig, native: ModuleType | None = None, *,
+                                  recorded_build: Json | None = None,
+                                  _defer_draw_capability: bool = False) -> Json:
     """Public corrected preflight; an additive class alone is never capability."""
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
     from gf_common.structured_tokens import signature
     from gf_models.structured_sealed import checksum
     if config.backend != 'rust' or config.reader != 'participant-structured-v2':
         raise ContractError('explicit corrected native reader required')
-    information = dict((native or load_native()).build_info())
+    module = native or load_native()
+    information = dict(module.build_info())
     if (information.get('card_instance_contract') != CARD_INSTANCE_CONTRACT
             or information.get('card_instance_signature') != signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
             or information.get('card_instance_models') != 'mlp,gru,transformer'):
         raise ContractError('native binary lacks accepted card-instance capability/signature/models')
-    require_native_guardian_acted(native or load_native())
+    require_native_guardian_acted(module)
+    if ((recorded_build is None and not _defer_draw_capability)
+            or (recorded_build is not None and _CONCEALED_DRAW_KEY in recorded_build)
+            or _CONCEALED_DRAW_KEY in information):
+        require_native_concealed_draw(information)
     checksum(information.get('native_source_sha256'))
-    module = native or load_native()
     session = getattr(module, 'CardInstanceNativeSession', None)
     required = ('control_summary', 'original_config_inputs', 'authorize', 'export_cohort', 'retire_payload',
         'bind_numeric', 'begin_update', 'prepare_commit', 'finalize_read', 'recheck', 'close', 'used_bytes', 'peak_bytes', 'cancel_handle', 'control_reserved_bytes')
@@ -290,3 +313,5 @@ def recorded_card_instance_preprocessing(value: Json, *, binding: Json) -> None:
             or info.get('card_instance_models') != 'mlp,gru,transformer' or info.get('abi') != 'cp314-gil'):
         raise ContractError('recorded native lacks corrected capability/signature/models')
     checksum(info.get('native_source_sha256'))
+    if _CONCEALED_DRAW_KEY in info:
+        require_native_concealed_draw(info)

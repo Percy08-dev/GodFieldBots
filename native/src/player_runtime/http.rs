@@ -487,6 +487,11 @@ impl Http {
                 true,
             )
             .await?;
+        Self::validate_act_ack(&v, viewer, pending)?;
+        // Validation only: ACK events/options/next_observation never enter history.
+        Ok(v)
+    }
+    fn validate_act_ack(v: &Value, viewer: u8, pending: &Value) -> Result<()> {
         v.closed(
             &[
                 "public_event_schema_version",
@@ -559,8 +564,7 @@ impl Http {
                 &control,
             )?;
         }
-        // Validation only: ACK events/options/next_observation never enter history.
-        Ok(v)
+        Ok(())
     }
     pub async fn replay(&mut self, game: &str, viewer: u8) -> Result<Value> {
         self.request(
@@ -575,5 +579,34 @@ impl Http {
         self.request(Method::DELETE, &format!("/v2/games/{game}"), None, false)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn act_ack_accepts_only_the_draw_form_of_the_concealed_marker() {
+        let pending = json!({"command_id":"5d5f7f78-30ec-4a23-b39b-33fc4a378b84",
+                             "expected_revision":6});
+        let marker = json!({"type":"artifact_drawn","player":1,"definition_id":"concealed"});
+        let mut ack = json!({
+            "public_event_schema_version":"2",
+            "rule_set_version":"true-match-1v1-v2",
+            "card_ref_scheme":"aes256-card-ref-v1",
+            "command_id":pending["command_id"],
+            "previous_revision":6,
+            "state_revision":7,
+            "status":"active",
+            "events":vec![marker; 8],
+            "result":null,
+            "next_observation":null,
+            "action_options":null
+        });
+        Http::validate_act_ack(&ack, 1, &pending).unwrap();
+        assert_eq!(ack["events"].array().unwrap().len(), 8);
+        ack["events"][0]["type"] = json!("artifact_used");
+        assert!(Http::validate_act_ack(&ack, 1, &pending).is_err());
     }
 }

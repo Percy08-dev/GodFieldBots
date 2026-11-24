@@ -161,12 +161,16 @@ def _settings(value: PreparationConfig, total: int, deadline: float) -> Preparat
     return result
 
 
-def _reader_preflight(settings: PreparationConfig) -> None:
+def _reader_preflight(settings: PreparationConfig, *, inspect_recorded: bool = False) -> None:
     """Structural runtime gate only, never a Source from a capability marker."""
     if settings.backend == 'python':
         return
     from gf_training.native_backend import original_history_reader_settings
-    original_history_reader_settings(settings)
+    if inspect_recorded:
+        # Each protected original parent will negotiate against its recorded build.
+        original_history_reader_settings(settings, _defer_draw_capability=True)
+    else:
+        original_history_reader_settings(settings)
 
 
 def _tree_tokens(decision: OriginalGameDecision, encoder: TreeEncoderConfigV3) -> tuple[FrameTokens,CandidateTokens]:
@@ -281,10 +285,11 @@ class _GameTreeOriginals:
     def __init__(self, parents: tuple[Path, ...], validations: tuple[Path, ...], settings: PreparationConfig, *,
                  encoder: TreeEncoderConfigV3, max_owned_bytes: int, deadline: float,
                  extra_owned_bytes: int = 0, child_limit_bytes: int = 0,
-                 ownership: GameSourceCustody | None = None, packed: bool = False) -> None:
+                 ownership: GameSourceCustody | None = None, packed: bool = False,
+                 _inspect_recorded: bool = False) -> None:
         self._packed = packed
         self.settings = _settings(settings, max_owned_bytes, deadline)
-        _reader_preflight(self.settings)
+        _reader_preflight(self.settings, inspect_recorded=_inspect_recorded)
         self.encoder = _encoder(encoder)
         self.limit, self.deadline = max_owned_bytes, deadline
         self._custody = GameSourceCustody(parents, validations, deadline=deadline, ownership=ownership, packed=packed)
@@ -891,11 +896,13 @@ class VerifiedGameTreeDataset3:
 
     def __init__(self, path: Path, expected_digest: str, settings: PreparationConfig, *,
                  max_owned_bytes: int = MAX_OWNED_BYTES, deadline: float,
-                 child_limit_bytes: int = 0, ownership: GameSourceCustody | None = None) -> None:
+                 child_limit_bytes: int = 0, ownership: GameSourceCustody | None = None,
+                 _inspect_recorded: bool = False) -> None:
         self._packed = type(self) is VerifiedGameTreeDataset4
         self.path = Path(path).absolute(); self.expected_digest = game.sha256(expected_digest)
         self.settings = _settings(settings,max_owned_bytes,deadline)
-        _reader_preflight(self.settings)
+        _reader_preflight(self.settings, inspect_recorded=_inspect_recorded)
+        self._inspect_recorded = _inspect_recorded
         self.limit = max_owned_bytes
         self.deadline = min(deadline,time.monotonic()+self.settings.wall_seconds-self.settings.cleanup_seconds)
         self._child = integer(child_limit_bytes,0,max_owned_bytes)
@@ -961,7 +968,8 @@ class VerifiedGameTreeDataset3:
             validations = tuple(Path(row['directory']) for row in self._metadata['collections'] if row['split']=='validation')
             self._source = _GameTreeOriginals(parents,validations,self.settings,encoder=encoder,
                 max_owned_bytes=self.limit,deadline=self.deadline,extra_owned_bytes=self._index.retained,
-                child_limit_bytes=self._child,ownership=self._ownership,packed=self._packed)
+                child_limit_bytes=self._child,ownership=self._ownership,packed=self._packed,
+                _inspect_recorded=self._inspect_recorded)
             self._source.__enter__()
             self._active = True
             if canonical(self._source._parent_rows)!=canonical(self._metadata['parents']):
@@ -1084,12 +1092,13 @@ class VerifiedGameTreeDataset4(VerifiedGameTreeDataset3):
     """Exact Dataset4 subtype retaining complete packed formal/public originals."""
 
 
-def verified_game_dataset_type(path: Path, expected_digest: str, settings: PreparationConfig, *, max_owned_bytes: int, deadline: float) -> type[VerifiedGameTreeDataset3]:
+def verified_game_dataset_type(path: Path, expected_digest: str, settings: PreparationConfig, *, max_owned_bytes: int,
+                               deadline: float, _inspect_recorded: bool = False) -> type[VerifiedGameTreeDataset3]:
     """Select a closed schema only. The returned class grants no Source rights."""
     entry = time.monotonic()
     _settings(settings,max_owned_bytes,deadline)
     deadline = min(deadline,entry+settings.wall_seconds-settings.cleanup_seconds)
-    _reader_preflight(settings)
+    _reader_preflight(settings, inspect_recorded=_inspect_recorded)
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= min(64,settings.max_source_file_mib)*1024**2:
         raise ContractError('game Dataset schema metadata requires the original bounded regular source file')
@@ -1164,9 +1173,10 @@ def inspect_game_tree_dataset(path: Path, *, expected_digest: str, settings: Pre
     entry = time.monotonic()
     _settings(settings,max_owned_bytes,deadline)
     deadline = min(deadline,entry+settings.wall_seconds-settings.cleanup_seconds)
-    dataset_type = verified_game_dataset_type(path,expected_digest,settings,max_owned_bytes=max_owned_bytes,deadline=deadline)
+    dataset_type = verified_game_dataset_type(path, expected_digest, settings,
+        max_owned_bytes=max_owned_bytes, deadline=deadline, _inspect_recorded=True)
     with dataset_type(path,expected_digest,settings,max_owned_bytes=max_owned_bytes,
-                                 deadline=deadline,ownership=ownership) as dataset:
+                                 deadline=deadline,ownership=ownership,_inspect_recorded=True) as dataset:
         for _,sample in dataset.selected_inputs():
             del sample
         return dataset.manifest

@@ -75,6 +75,16 @@ EVENT_FIELDS = ("interval_numerics", "interval_present", "interval_categories")
 CANDIDATE_FIELDS = ("kinds", "targets", "numerics", "present", "offsets", "slots")
 
 
+def _interval_rows(shape: tuple[int, ...], raw_count: int, *, corrected: bool) -> int:
+    if shape == (0,):
+        rows = 0
+    elif len(shape) == 2 and shape[0] > 0:
+        rows = shape[0]
+    else:
+        raise ContractError('interval token array rank/empty shape mismatch')
+    return integer(rows, 0 if corrected else raw_count, raw_count)
+
+
 def _owned_bytes(value: Any, seen: set[int] | None = None) -> int:
     """Pinned CPython owned-object estimate, with shared immutable refs once."""
     seen = set() if seen is None else seen
@@ -746,7 +756,12 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
             take(fp + '.payload', np.uint8, None)
             for name in FRAME_FIELDS:
                 take(fp + '.' + name, _token_dtype(name), frame_shapes[name])
-            interval = b.end - previous_end
+            raw_count = b.end - previous_end
+            first_interval = arrays.get(ep + '.interval_numerics')
+            if type(first_interval) is not np.ndarray:
+                raise ContractError('prepared interval token array missing')
+            interval = _interval_rows(first_interval.shape, raw_count,
+                                      corrected=layout is CORRECTED_CARD_INSTANCE_LAYOUT)
             for name, width in (('interval_numerics', 11), ('interval_present', 11), ('interval_categories', 12)):
                 take(ep + '.' + name, _token_dtype(name), (interval, width) if interval else (0,))
             kinds = take(fp + '.candidate.kinds', np.int64, None)

@@ -1089,7 +1089,8 @@ class FormalGameParent:
                 or owner.plan.get('mode') != 'historical_parent'
                 or getattr(self, '_native_final_inputs', None) is not None):
             raise ContractError('one SAME actual retained native parent/collection loan required')
-        module = _require_final_validation_native(owner.settings, owner.native, packed=owner._artifact_provider is not None)
+        module = _require_final_validation_native(owner.settings, owner.native,
+            packed=owner._artifact_provider is not None, recorded_build=owner._recorded_build)
         self.recheck()
         # Existing Actor control admission covers these protected state/identity
         # copies; the caller never supplies a native module, session or flag.
@@ -1127,7 +1128,7 @@ class FormalGameParent:
         owner=self._native_inputs
         if type(owner) is not _NativeGameInputs or owner._explicit_candidate or owner.plan.get('mode')!='historical_parent':
             raise ContractError('SAME actual retained native parent required for original history')
-        original_history_reader_settings(owner.settings,owner.native)
+        original_history_reader_settings(owner.settings, owner.native, recorded_build=owner._recorded_build)
         assert self._state_bytes is not None
         state=json.loads(self._state_bytes)
         actual=binary_identity(owner.native)

@@ -48,6 +48,7 @@ def identity_for(path):
             'card_instance_signature': signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
             'card_instance_guardian_acted': native_backend.CARD_INSTANCE_GUARDIAN_ACTED,
             'card_instance_defense_priority': native_backend.CARD_INSTANCE_DEFENSE_PRIORITY,
+            'card_instance_concealed_draw': native_backend.CARD_INSTANCE_CONCEALED_DRAW,
             'card_instance_models': 'mlp,gru,transformer', 'native_source_sha256': 'a' * 64}}
 
 
@@ -91,7 +92,7 @@ def test_live_exact_recorded_binary_mismatch_precedes_allocation(tmp_path, monke
     monkeypatch.setattr(native_backend, 'load_native', lambda: SimpleNamespace())
     # Pure preflight already has separate method/cancel tests; bypass only that
     # check here to isolate exact-parent binary refusal, never reach native core.
-    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda *a: None)
+    monkeypatch.setattr(native_backend, 'card_instance_reader_settings', lambda *a, **_: None)
     monkeypatch.setattr(native_backend, 'binary_identity', lambda *a: current)
     monkeypatch.setattr(NativeStructuredSource, '__enter__', lambda self: pytest.fail('allocated'))
     with pytest.raises(ContractError):

@@ -161,6 +161,79 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concealed_draws_count_as_raw_events_but_never_serving_or_learner_rows() {
+        use super::super::{game::storage::Mailbox, numeric::ServingRow, rng::PythonRng, search};
+
+        let originals: Value = serde_json::from_slice(include_bytes!(
+            "../../../tests/fixtures/rust_player_v5/originals.json"
+        ))
+        .unwrap();
+        let episode = &originals["episodes"][3];
+        let first = &episode["decisions"][0]["frame"];
+        let payload = &first["payload"];
+        let actor = first["actor"].as_u64().unwrap() as u8;
+        let config = Config::parse(&episode["actions"], &episode["rules"]).unwrap();
+        let costs = search::Costs::parse(&episode["numeric_costs"]).unwrap();
+        let control = Control::new(f64::MAX).unwrap();
+        let owner = Mailbox::new(64 * 1024 * 1024, 1).unwrap();
+        let marker =
+            json!({"type": "artifact_drawn", "player": actor, "definition_id": "concealed"});
+        for count in [0, 1] {
+            let mut history = History::new(actor, "concealed-draw".into()).unwrap();
+            let mut source = vec![marker.clone(); 8];
+            if count == 1 {
+                source.insert(
+                    4,
+                    json!({"type":"artifact_drawn", "player":actor, "definition_id":"bronze-club"}),
+                );
+            }
+            assert!(history.append(source.clone(), None, 16, 7).is_err());
+            history.append(source.clone(), None, 16, 16).unwrap();
+            let mut options = payload["action_options"].clone();
+            options.as_object_mut().unwrap().remove("viewer_player_id");
+            let (frame, delta) = history
+                .frame(payload["observation"].clone(), options, &payload["catalog"])
+                .unwrap();
+            assert_eq!(delta["events"], json!(source));
+            let input = history.input(&frame, &config).unwrap();
+            assert_eq!(input.boundary, count + 8);
+            let mut rng = PythonRng::seed(17);
+            let mut clock = search::Clock::parse(&json!(vec![0.; 1024])).unwrap();
+            let generated = search::generate_typed(
+                &input,
+                &config,
+                &episode["rules"],
+                &costs,
+                &mut rng,
+                &mut clock,
+            )
+            .unwrap();
+            let (serving, _row) = ServingRow::build_training(
+                &frame,
+                &history.events,
+                &input,
+                &config,
+                &generated.table,
+                128,
+                18,
+                &history.budget,
+                &control,
+                &owner.account().account,
+            )
+            .unwrap();
+            assert_eq!(serving.events, count);
+            for (name, width) in [
+                ("interval_numerics", 11),
+                ("interval_present", 11),
+                ("interval_categories", 12),
+            ] {
+                assert_eq!(serving.fields[name].shape(), [count, width]);
+            }
+        }
+    }
+
     #[test]
     fn saved_original_event_banks_frames_and_deltas_remain_exact() {
         let saved: Value = serde_json::from_slice(include_bytes!(

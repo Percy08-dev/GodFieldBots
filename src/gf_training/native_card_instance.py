@@ -30,7 +30,8 @@ COLLECTION_FIELDS = {'collection_index', 'directory', 'generation', 'manifest_sh
     'learner_decisions', 'correspondence', 'numeric'}
 
 
-def _require_final_validation_native(settings: Any, native: Any = None, *, packed: bool = False) -> Any:
+def _require_final_validation_native(settings: Any, native: Any = None, *, packed: bool = False,
+                                     recorded_build: Json | None = None) -> Any:
     """Full closed capability/API/binary preflight; no parent or Source allocation."""
     from gf_common.card_instance_collection import NATIVE_FINAL_VALIDATION_MARKER
     from gf_common.card_instance_formal import NATIVE_FORMAL_MARKER
@@ -45,7 +46,7 @@ def _require_final_validation_native(settings: Any, native: Any = None, *, packe
     if packed:
         from gf_training.native_backend import require_pack_checksum
         require_pack_checksum(module)
-    card_instance_reader_settings(settings, module)
+    card_instance_reader_settings(settings, module, recorded_build=recorded_build)
     info = dict(module.build_info())
     if (info.get('card_instance_final_validation') != NATIVE_FINAL_VALIDATION_MARKER
             or info.get('card_instance_formal_controls') != NATIVE_FORMAL_MARKER):
@@ -411,10 +412,12 @@ def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3
 class _NativeGameInputs(NativeStructuredSource):
     """Concrete inputs representation only; SAME _GameBatchSource issues authority."""
     _explicit_candidate: bool
+    _recorded_build: Json | None
 
     def __init__(self, plan: Json, settings: Any, *, actions: ActionConfigV3, max_owned_bytes: int,
                  deadline: float, extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None,
-                 native: Any = None, collection_index: int = 0, artifact_provider: Any = None, shared_controls: Any = None) -> None:
+                 native: Any = None, collection_index: int = 0, artifact_provider: Any = None,
+                 shared_controls: Any = None, recorded_build: Json | None = None) -> None:
         self.actions = actions
         self._hpo = type(plan.get('schema_version')) is int and plan['schema_version'] in (5, 6)
         self._resident = type(plan.get('schema_version')) is int and plan['schema_version'] == 6
@@ -459,6 +462,7 @@ class _NativeGameInputs(NativeStructuredSource):
         elif shared_controls is not None:
             raise ContractError('shared packed ControlScan requires an actual artifact provider')
         self._explicit_candidate = native is not None
+        self._recorded_build = recorded_build
         self._binary_scan: SealedScan | None = None
         self._binary_identity: bytes | None = None
         self._live_run_sha256: str | None = None
@@ -540,6 +544,8 @@ class _NativeGameInputs(NativeStructuredSource):
             raise ContractError('corrected native plan mode differs')
         if mode == 'live_cohort' and self._explicit_candidate:
             raise ContractError('explicit native candidate is historical diagnostic only')
+        if mode == 'live_cohort' and self._recorded_build is not None:
+            raise ContractError('recorded native reader context is historical only')
         module = self.native if self._explicit_candidate else load_native()
         if self._artifact_provider is not None:
             from gf_training.native_backend import require_pack_checksum
@@ -547,12 +553,13 @@ class _NativeGameInputs(NativeStructuredSource):
         if not self._explicit_candidate:
             if self._hpo:
                 from gf_training.native_backend import hpo_reader_settings
-                hpo_reader_settings(self.settings, module, packed=self._artifact_provider is not None, resident=self._resident)
+                hpo_reader_settings(self.settings, module, packed=self._artifact_provider is not None,
+                    resident=self._resident, recorded_build=self._recorded_build)
             else:
-                card_instance_reader_settings(self.settings, module)
+                card_instance_reader_settings(self.settings, module, recorded_build=self._recorded_build)
             if self._artifact_provider is not None:
                 from gf_training.native_backend import group_pack_reader_settings
-                group_pack_reader_settings(self.settings, module)
+                group_pack_reader_settings(self.settings, module, recorded_build=self._recorded_build)
         current = binary_identity(module)
         evidence = SealedScan(max_owned_bytes=self.budget, deadline=self.deadline)
         binary_path = Path(current['extension_path'])
