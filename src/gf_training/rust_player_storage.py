@@ -47,6 +47,7 @@ from gf_common.group_pack import (
     member_index,
     safe_name,
 )
+from gf_common.rust_player import LEARNED_POLICY_KINDS
 from gf_common.structured import (
     DecisionFrame,
     EventBoundary,
@@ -633,7 +634,7 @@ class CanonicalEpisodeEncoder:
             ):
                 raise ContractError("native revision/search RNG chronology mismatch")
             scores = data["scores"]
-            if policy.native["kind"] == "mlp":
+            if policy.native["kind"] in LEARNED_POLICY_KINDS:
                 closed(scores, {"identity", "logprob", "sample", "value"})
                 expected = {
                     "run": c.run_id,
@@ -653,7 +654,7 @@ class CanonicalEpisodeEncoder:
                     data["policy_state_before"] is not None
                     or data["policy_state_after"] is not None
                 ):
-                    raise ContractError("MLP capture has baseline state")
+                    raise ContractError("learned capture has baseline state")
             else:
                 if scores is not None:
                     raise ContractError("baseline capture has neural scores")

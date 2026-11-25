@@ -8,7 +8,7 @@ from typing import Any
 
 from gf_common import hpo_update_bytes
 from gf_common.domain import ContractError, Json, canonical, digest, integer
-from gf_common.rust_player import deadline_seconds
+from gf_common.rust_player import LEARNED_POLICY_KINDS, deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_models.config import PPOUpdateConfig, ordinary_ppo_update
 from gf_models.structured_sealed import checksum as sealed_checksum
@@ -632,6 +632,7 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
     generation = current['generation']
     expected = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation - 1:06}' / 'collection.pending.json'
     if (proof['storage']['descriptor_path'] != str(expected) or update['generation'] != generation
+            or update['model_id'] != state['model_id']
             or update['parent_sha256'] != current['parent_sha256']
             or update['parent_snapshot_identity'] != previous['snapshot_identity']
             or update['result_snapshot_identity'] != current['snapshot_identity']
@@ -874,7 +875,7 @@ def _audit_empty_schedule(manifest: Json, *, state: Json, current: Json, loaded:
     from gf_training.hpo_collection import training_groups_hpo, training_groups_hpo_refresh
     labels = {}
     for label, binding in manifest['policy_bindings'].items():
-        if binding['model_id'] != 'mlp':
+        if binding['model_id'] not in LEARNED_POLICY_KINDS:
             continue
         options = binding['policy_options']
         path = Path(options['checkpoint'])

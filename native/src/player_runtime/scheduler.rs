@@ -60,6 +60,8 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub training_numeric_bytes: Option<usize>,
     pub runtime_identity: String,
+    #[serde(default)]
+    pub sequence_inference: bool,
 }
 struct Completion {
     reports: Vec<GameReport>,
@@ -156,6 +158,11 @@ impl PlayerRuntime {
         let mut incoming = HashSet::new();
         for game in &games {
             game.validate()?;
+            ensure(
+                !game.has_sequence()
+                    || (self.config.sequence_inference && game.learner_viewer.is_none()),
+                "sequence policies require sequence dispatcher and canonical Python Source",
+            )?;
             ensure(
                 incoming.insert((game.run.clone(), game.trial.clone(), game.episode.clone())),
                 "duplicate planned episode",
@@ -300,7 +307,11 @@ impl PlayerRuntime {
             "invalid native scheduler geometry",
         )
         .map_err(crate::python_error)?;
-        let dispatcher = Dispatcher::new(
+        let dispatcher = if config.sequence_inference {
+            Dispatcher::new_sequence
+        } else {
+            Dispatcher::new
+        }(
             config.game_concurrency,
             config.max_batch_size,
             config.formation_wait_ms,
@@ -427,6 +438,16 @@ impl PlayerRuntime {
         self.dispatcher.metrics.increment("pyo3_other", 1);
         self.cancel.cancel();
         self.storage.close(error(reason)); /* Retire actual games; keep exported service leases until original submit/close. */
+    }
+    fn cancel_inference(&self, reason: String) -> PyResult<()> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
+        ensure(self.config.sequence_inference, "sequence inference cancellation required")
+            .map_err(crate::python_error)?;
+        self.cancel.cancel();
+        self.dispatcher.close(error(reason));
+        // A failed sequence release still owns the original terminal handoff.
+        // Scheduler cancellation prevents a waiting or future replacement game.
+        Ok(())
     }
     fn join<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
         self.dispatcher.metrics.increment("pyo3_other", 1);

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, digest
-from gf_common.rust_player import validate_runtime_binding
+from gf_common.rust_player import validate_player_model, validate_runtime_binding
 from gf_common.rust_ppo_source import source_encoder, source_mode, validate_source_mode
 
 _RUN = frozenset(['schema_version', 'algorithm', 'run_id', 'status', 'config_sha256',
@@ -31,7 +31,7 @@ def validate_run(value: Json, *, hpo: bool = False) -> Json:
     raw = closed(value, set(_RUN) | extra, set(_RUN_OBSERVATIONS))
     if (type(raw['schema_version']) is not int or raw['schema_version'] != 5
             or raw['run_variant'] != ('hpo-ppo-owned-rust-player-v1' if hpo else 'ppo-rust-player-v1') or raw['algorithm'] != 'ppo'
-            or raw['model_id'] != 'mlp' or raw['model_version'] != ('4' if hpo else '3')
+            or raw['model_version'] != ('4' if hpo else '3')
             or raw['status'] not in ('running', 'paused', 'complete', 'incomplete', 'failed')
             or raw['host_result'] not in (None, 'awaiting-supervised-finalization')
             or type(raw['invocations']) is not dict):
@@ -41,6 +41,10 @@ def validate_run(value: Json, *, hpo: bool = False) -> Json:
             or digest(raw['effective_config']) != raw['config_sha256']
             or canonical(bound['runtime']) != canonical(raw['effective_config']['hpo_spec']['runtime'] if hpo else raw['effective_config']['run']['player_runtime'])):
         raise ContractError('Run5 actual config/runtime binding differs')
+    effective = raw['effective_config']
+    if raw['model_id'] != effective['model']['model_id']:
+        raise ContractError('Run5 model identity differs from its effective config')
+    validate_player_model(bound['runtime'], raw['model_id'], hpo=hpo, encoder=source_encoder(effective))
     for name in ('updates', 'accepted_decisions', 'optimizer_steps'):
         integer(raw[name], 0)
     if hpo:

@@ -28,7 +28,8 @@ def bank_publication(model: Any, binding: Any, banks: Any, checkpoint: str) -> A
             batch_size=[])},batch_size=[])
 
 
-def make_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,visibility: str | None = None) -> Any:
+def make_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,
+                  visibility: str | None = None, native_sequence: bool = False) -> Any:
     import os
     if device != 'cpu':
         if visibility is None:os.environ.pop('CUDA_VISIBLE_DEVICES',None)
@@ -39,6 +40,7 @@ def make_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,visib
     import torch
     from tensordict import NonTensorData, TensorDict, lazy_stack
 
+    from gf_common.rust_player import SEQUENCE_MODEL_KINDS
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
     from gf_models.hpo_config import model_config_v4
     from gf_models.shared_numeric import score_numeric_row
@@ -70,7 +72,9 @@ def make_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,visib
                 raise ContractError('shared checkpoint is immutable and cannot be republished')
             parser=model_config_v4 if metadata['model']['version']=='4' else model_config_v3
             model=parser(metadata['model'],layout=layout)
-            if model.model_id!='mlp':raise ContractError('shared registry admits MLP only')
+            if model.model_id != 'mlp' and not (native_sequence and model.version == '4'
+                    and model.model_id in SEQUENCE_MODEL_KINDS):
+                raise ContractError('shared registry admits MLP only without the Model4 sequence recipe')
             original=InferenceBindingV2(**metadata['binding'])
             from dataclasses import replace
             binding=replace(original,device=device)

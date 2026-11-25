@@ -41,13 +41,14 @@ def _onehot_peak(rows: int, categories: tuple[tuple[str, ...], ...]) -> int:
     return raw + max(floats + 8 * rows * max(widths), 2 * floats)
 
 
-def _attention_scratch(width: int, heads: int, feedforward: int, queries: int, keys: int) -> int:
+def _attention_scratch(width: int, heads: int, feedforward: int, queries: int, keys: int, *,
+                       scaled_key_bytes: int = 0) -> int:
     """New Q/K/V, MATH attention, then residual/norm/feedforward; input is external."""
     q = 4 * queries * width
     qkv = 3 * q  # step projects one new key/value; full cached KV is external.
     scores = heads * queries * keys
     # MATH scores, softmax, safe-softmax output; bool validity and row masks.
-    attend = qkv + q + 3 * 4 * scores + scores + heads * queries + 2 * q
+    attend = qkv + q + scaled_key_bytes + 3 * 4 * scores + scores + heads * queries + 2 * q
     # Q/K/V and attended survive the finish call. Residual and norm survive
     # linear/activation overlap; the last residual addition has two new outputs.
     finish = qkv + q + 2 * q + max(2 * 4 * queries * feedforward,

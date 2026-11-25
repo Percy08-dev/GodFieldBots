@@ -259,6 +259,10 @@ def score_numeric_batch(network: Any, raw: dict[str, Any]) -> tuple[Any, Any, An
     """All participating rows use the same fixed geometry, including dummies."""
     context, cards = network._encode_frame_operands(None, raw.__getitem__,
                                                    fixed_event_indices=raw["last_event"])
+    return score_batch_heads(network, raw, context, cards)
+
+
+def score_batch_heads(network: Any, raw: dict[str, Any], context: Any, cards: Any) -> tuple[Any, Any, Any]:
     scores = network._batched_logits(raw, context, cards).masked_fill(~raw["mask"], -float("inf"))
     logs = scores.log_softmax(-1)
     return logs, logs.exp(), network.value(context)

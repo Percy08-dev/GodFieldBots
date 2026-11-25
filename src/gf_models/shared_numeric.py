@@ -50,14 +50,23 @@ def score_numeric_row(network: Any,row: Any) -> tuple[Any,Any]:
     """Every operation uses this row's own geometry and original reduction order."""
     if network.config.model_id != 'mlp':
         raise ContractError('shared scoring requires MLP')
-    import torch
+    context, cards = encode_numeric_frame(network, row)
+    return score_numeric_heads(network, row, context, cards)
+
+
+def encode_numeric_frame(network: Any, row: Any) -> tuple[Any, Any]:
     tokens = SimpleNamespace(interval_numerics=range(row['interval_numerics'].shape[0]))
-    context,cards = network._encode_frame_operands(tokens,lambda name:row[name])
+    return network._encode_frame_operands(tokens, lambda name: row[name])
+
+
+def score_numeric_heads(network: Any, row: Any, context: Any, cards: Any) -> tuple[Any, Any]:
+    import torch
+
     candidates = SimpleNamespace(kinds=range(row['kinds'].shape[0]),
         recipe_signature=recorded_token_signature(network.config,layout=network.layout))
     operands = {name:row[name][None] for name in ('kinds','targets','numerics','present','references')}
     scores = network.factorized_logits(context,cards,candidates,checkpoint=False,_operands=operands)
     logs,value = scores.log_softmax(-1),network.value(context)
     if not torch.isfinite(logs).all() or not torch.isfinite(value):
-        raise ContractError('nonfinite shared MLP output')
+        raise ContractError('nonfinite native actor or critic output')
     return logs,value

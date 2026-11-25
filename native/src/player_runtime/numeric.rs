@@ -52,6 +52,8 @@ pub struct ServingRow {
     pub fields: BTreeMap<String, Buffer>,
     pub candidates: usize,
     pub events: usize,
+    pub event_start: usize,
+    pub event_end: usize,
     pub candidate_offsets: Vec<i64>,
     pub assembly_seconds: f64,
 }
@@ -356,6 +358,8 @@ impl ServingRow {
         let mut serving = Self {
             actor: input.actor,
             revision: input.revision,
+            event_start: input.interval_start,
+            event_end: input.boundary,
             fields,
             candidates: n,
             events: count,

@@ -940,7 +940,8 @@ class RustGameOperations:
                 if self.registry.service.collection_graph_active and (
                         not runtime._native_joined or runtime._holds or runtime._active_routes):
                     raise ContractError('actual collection graph actors must retire before device cleanup')
-                self.registry.service.retire_device_failure(dispatcher=runtime.dispatcher)
+                if not self.registry.service.sequence_enabled:
+                    self.registry.service.retire_device_failure(dispatcher=runtime.dispatcher)
             except BaseException as failure:  # noqa: BLE001 -- no hold credit for unconfirmed service cleanup.
                 failed('service-device', failure)
         if failures:
@@ -1339,17 +1340,21 @@ class RustHpoOperations(RustGameOperations):
         from dataclasses import asdict
 
         from gf_common.domain import canonical
+        from gf_common.rust_player import validate_player_model
+        from gf_common.rust_ppo_source import source_encoder
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_models.structured_binding import ConfiguredNeuralModelV4
         from gf_training.hpo_config import hpo_training_config, normalize_training_for_model
         if (config is not self.config or type(config.model) is not ConfiguredNeuralModelV4
-                or config.model.model_id != 'mlp' or config.model.checkpoint is not None
+                or config.model.checkpoint is not None
                 or config.hpo_spec['schema_version'] != 6
                 or config.training.device != 'cuda:0' or config.model.inference.device != 'cuda:0'
                 or config.preprocessing.backend != 'python' or config.run.split != 'train'):
             raise ContractError('actual supported Model4/spec6 CUDA/Python HPO profile required')
+        validate_player_model(config.hpo_spec["runtime"], config.model.model_id, hpo=True,
+                              encoder=source_encoder(self.loaded.effective))
         recipe = hpo_training_config(config.hpo_spec['training_recipe'])
-        if canonical(asdict(normalize_training_for_model('mlp', recipe))) != canonical(config.hpo_spec['training_recipe']):
+        if canonical(asdict(normalize_training_for_model(config.model.model_id, recipe))) != canonical(config.hpo_spec['training_recipe']):
             raise ContractError('actual normalized Model4 recipe required')
         return config.model.architecture(layout=layout)
 
@@ -1358,6 +1363,7 @@ class RustHpoOperations(RustGameOperations):
         from gf_training.rust_player_lineage import resume_identity
         super().initialize_state(state, config)
         state.update(run_variant='hpo-ppo-owned-rust-player-v1', model_version='4',
+            model_id=config.model.model_id,
             hpo_spec_sha256=digest(config.hpo_spec), used_decisions=0, collected_decisions=0, stop_reason=None)
         classification = {name: state[name] for name in ('action_contract', 'purpose',
             'synthetic_capacity', 'rule_signature', 'layout_signature')}
@@ -1412,7 +1418,7 @@ class RustHpoOperations(RustGameOperations):
         super().update_record(update, state, numeric_files)
         source = self.registry.pending
         proof = source.proof
-        update.update(schema_version=8, model_version='4', origin='producer-owned-v1', encoder=proof['encoder'],
+        update.update(schema_version=8, model_id=state['model_id'], model_version='4', origin='producer-owned-v1', encoder=proof['encoder'],
             hpo_spec_sha256=digest(self.config.hpo_spec), collected_decisions=proof['selection']['collected_decisions'],
             used_decisions=proof['selection']['used_decisions'],
             overshoot_decisions=proof['selection']['collected_decisions'] - proof['selection']['used_decisions'],

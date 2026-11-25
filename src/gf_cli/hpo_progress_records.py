@@ -97,15 +97,18 @@ def _standalone_operation(root: Path, scan: SealedScan) -> Json | None:
 
 
 def _standalone_state(root: Path, operation: Json, scan: SealedScan) -> Json:
+    from gf_common.rust_player import validate_player_model
+
     state = scan.object(root / 'run.json')
     effective = state['effective_config']
     config_sha = checksum(state['config_sha256'])
     spec = effective['hpo_spec']
     if (state.get('schema_version') != 5 or state.get('run_variant') != 'hpo-ppo-owned-rust-player-v1'
-            or state.get('model_id') != 'mlp' or spec.get('schema_version') != 6
+            or state.get('model_id') != effective['model']['model_id'] or spec.get('schema_version') != 6
             or operation.get('run_id') != state['run_id'] or operation.get('config_sha256') != config_sha
             or digest(effective) != config_sha):
         raise ContractError('standalone progress Run5/operation identity differs')
+    validate_player_model(spec['runtime'], state['model_id'], hpo=True, encoder=spec['encoder'])
     if state['status'] not in ('running', 'paused', 'complete', 'incomplete', 'failed'):
         raise ContractError('unrecognized standalone run status')
     integer(effective['training']['max_updates'], 1)
@@ -127,7 +130,7 @@ def _read_update(
 ) -> Json:
     update = read_hpo_update(root, number, state, generation['update_sha256'], scan=scan)
     if (update.get('schema_version') != 8 or update.get('status') != 'complete'
-            or update.get('run_id') != state['run_id']
+            or update.get('run_id') != state['run_id'] or update.get('model_id') != state['model_id']
             or type(update.get('generation')) is not int or update['generation'] != number):
         raise ContractError('standalone progress update identity differs')
     return update
@@ -257,7 +260,7 @@ class StandaloneProgressRecords:
         target = effective['training']['max_updates']
         budget = effective['hpo_spec']['decision_budget']
         host_result = state.get('host_result')
-        observed: Json = {'availability': 'available', 'status': status, 'model': 'mlp',
+        observed: Json = {'availability': 'available', 'status': status, 'model': state['model_id'],
             'seed': state['seed'], 'decision_budget': budget, 'target_updates': target,
             'elapsed_seconds': _elapsed(state),
             'host_result': ('awaiting-supervised-finalization'

@@ -52,8 +52,8 @@ def operation_inputs(config_path: Path, *, run_id: str, experiment_id: str,
             raise ContractError('original HPO parent configuration identity required')
         loaded = load_hpo_config(config_path, expected_sha256=effective['hpo_spec']['campaign_config_sha256'])
     cfg = loaded.config
-    if cfg.schema_version not in (5, 6) or cfg.model_id != 'mlp':
-        raise ContractError('fixed operation supports only shared5/native6 MLP')
+    if cfg.schema_version not in (4, 5, 6) or cfg.schema_version == 5 and cfg.model_id != 'mlp':
+        raise ContractError('fixed operation requires owned HPO4, shared HPO5, or Rust player HPO6')
     settings = effective_settings(cfg.model, cfg.training, {}, layout=layout)
     materialized = materialize_hpo_run(loaded, settings, learning_seed=learning_seed, run_id=run_id)
     if state is not None and state['config_sha256'] != materialized.sha256:

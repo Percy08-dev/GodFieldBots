@@ -486,3 +486,27 @@ def test_tokio_graph_runtime_defaults_fresh_and_requires_materialized_worker_cou
     with pytest.raises(ContractError):
         player_runtime(fixed, game_concurrency=2)
     assert player_runtime(fixed | {"player_worker_threads": 3}, game_concurrency=2)["player_worker_threads"] == 3
+
+
+@pytest.mark.parametrize("kind", ["gru", "transformer"])
+def test_hpo6_sequence_recipe_has_matching_base_and_canonical_python_source(tmp_path, kind):
+    base = load_config(BASE, {"model": {"model_id": kind}})
+    raw = campaign_raw() | {"model_id": kind, "runtime": runtime(inference_recipe="batched-torch-sequence-v1")}
+    loaded = campaign_config(raw, origin=tmp_path, _pinned_base=base)
+    settings = effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT)
+    run = materialize_hpo_run(loaded, settings, learning_seed=17, run_id=RUN_ID)
+    assert run.config.model.model_id == kind
+    assert run.config.hpo_spec["encoder"] == "canonical-python"
+    path = tmp_path / "effective.json"
+    path.write_text(canonical(run.effective))
+    restored = load_rust_player_effective(path, expected_sha256=run.sha256)
+    assert restored.effective == run.effective
+    for invalid in (raw | {"runtime": runtime()},
+                    raw | {"encoder": "canonical-rust", "ppo_source": PPO_SOURCE}):
+        with pytest.raises(ContractError):
+            campaign_config(invalid, origin=tmp_path, _pinned_base=base)
+    oversized = raw | {"operating": raw["operating"] | {"numeric_budget_bytes": 1024**3}}
+    with pytest.raises(ContractError, match="canonical-python numeric budget"):
+        campaign_config(oversized, origin=tmp_path, _pinned_base=base)
+    with pytest.raises(ContractError):
+        load_config(NORMAL_BASE, {"run": {"player_runtime": raw["runtime"]}})

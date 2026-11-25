@@ -34,7 +34,7 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
-from gf_common.rust_player import player_runtime, require_legacy_player_entry
+from gf_common.rust_player import player_runtime, require_legacy_player_entry, validate_player_model
 from gf_common.structured import ActionConfigV2, action_config_v2
 from gf_common.structured_layout import layout_for_contract
 from gf_models.config import (
@@ -780,19 +780,22 @@ def _validate_server_controls(server: Json, run: Json, *, revision: str) -> None
 
 def _validate_rust_player_profile(*, run: Json, server: Json, actions: Any,
                                   model: Any, opponent: Any, training: Any,
-                                  preprocessing: Any, hpo: bool = False) -> None:
+                                  preprocessing: Any, hpo: bool = False,
+                                  runtime: Json | None = None) -> None:
     expected_model = ConfiguredNeuralModelV4 if hpo else ConfiguredNeuralModelV3
+    validate_player_model(run.get("player_runtime", {}) if runtime is None else runtime,
+                          model.model_id, hpo=hpo)
     if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == "mlp")
             or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
             or type(opponent) is RefreshHeuristicConfig):
         raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
     if (type(actions) is not ActionConfigV3 or not is_shared_contract(actions.action_contract)
             or server.get("gameplay_api") != "v2" or server["external_url"] is not None
-            or type(model) is not expected_model or model.model_id != "mlp"
+            or type(model) is not expected_model
             or model.checkpoint is not None or type(training) is not PPOTrainingConfig
             or run["split"] != "train" or preprocessing.backend != "python"
             or preprocessing.reader != "participant-structured-v2"):
-        raise ContractError("Rust player requires shared-profile fresh MLP PPO with Python Source reader")
+        raise ContractError("Rust player requires shared-profile fresh configured PPO with Python Source reader")
     for participant in (model, opponent):
         if (isinstance(participant, (ConfiguredNeuralModelV3, ConfiguredNeuralModelV4))
                 and (actions.max_sequence_length > participant.max_positions

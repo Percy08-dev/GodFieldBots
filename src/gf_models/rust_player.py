@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from bisect import bisect_right
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import cache
@@ -17,8 +18,20 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from gf_common.domain import ContractError, digest
-from gf_common.rust_player import BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE
+from gf_common.rust_player import (
+    BATCHED_TORCH_INFERENCE,
+    BATCHED_TORCH_SEQUENCE_INFERENCE,
+    RUST_BATCHED_TORCH_GRAPH_RECIPE,
+)
 from gf_models.rust_player_batch import BatchEstimate, BatchGeometry, BatchInputs, BatchShape
+from gf_models.rust_player_sequence import (
+    GameKey,
+    PendingStep,
+    SequenceState,
+    cache_bytes,
+    grouped_step,
+    temporal_scratch,
+)
 from gf_models.structured_config import MAX_TENSOR_BYTES
 from gf_models.torch_runtime import serialized_torch
 
@@ -135,13 +148,16 @@ class RustPlayerInference:
 
         if device_account is not None and device_account.serving_device != device:
             raise ContractError('actual inference/account serving role differs')
-        if inference_recipe not in (None, BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
+        if inference_recipe not in (None, BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE,
+                                     BATCHED_TORCH_SEQUENCE_INFERENCE):
             raise ContractError("unknown Rust player inference recipe")
         if inference_recipe is not None and device != 'cpu' and device_account is None:
             raise ContractError("batched CUDA inference needs the actual device account")
         self.device, self.device_account = device, device_account
         self.inference_recipe = inference_recipe
+        self._sequence = SequenceState() if self.sequence_enabled else None
         self._collection: dict[str, tuple[BatchGeometry, dict[BatchShape, BatchEstimate | None]]] = {}
+        self._sequence_groups: dict[str, tuple[BatchGeometry, dict[BatchShape, tuple[BatchEstimate, int]]]] = {}
         self._collection_graph: CollectionCudaGraph | None = None
         self._batch_counts: dict[int, int] | None = None
         self._scalar_rows = 0
@@ -153,7 +169,8 @@ class RustPlayerInference:
             try:
                 with _preserve_global_rng():
                     self.registry = make_registry(device=device, cache_entries=cache_entries,
-                        cache_weight_bytes=cache_weight_bytes, visibility=visibility)
+                        cache_weight_bytes=cache_weight_bytes, visibility=visibility,
+                        native_sequence=self.sequence_enabled)
                 if hold is not None:
                     hold.complete()
             except BaseException as error:
@@ -308,10 +325,17 @@ class RustPlayerInference:
         return getattr(self, "_collection_graph", None) is not None
 
     def bind_collection(self, checkpoints: tuple[str, ...], *, game_concurrency: int,
-                        max_batch_size: int, learner_checkpoint: str | None = None) -> None:
+                        max_batch_size: int, learner_checkpoint: str | None = None,
+                        scheduled_sequence_seats: int | None = None) -> None:
         """Freeze every scheduled checkpoint's shape decisions before actor admission."""
         from gf_models.rust_player_batch import estimate_batch
 
+        if self.sequence_enabled:
+            if scheduled_sequence_seats is None or scheduled_sequence_seats < 0:
+                raise ContractError("sequence collection needs its public scheduled seat count")
+            self._bind_sequence_collection(checkpoints, game_concurrency=game_concurrency,
+                max_batch_size=max_batch_size, scheduled_sequence_seats=scheduled_sequence_seats)
+            return
         if self.inference_recipe is None or self.device == "cpu":
             return
         with serialized_torch():
@@ -345,6 +369,79 @@ class RustPlayerInference:
             self._collection = plans
             if graph_recipe and learner_checkpoint is not None and learner_checkpoint in plans:
                 self._prepare_collection_graph(learner_checkpoint, available)
+
+    def _bind_sequence_collection(self, checkpoints: tuple[str, ...], *, game_concurrency: int,
+                                  max_batch_size: int, scheduled_sequence_seats: int) -> None:
+        from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+        from gf_models.rust_player_batch import estimate_batch
+        from gf_models.rust_player_device import CudaCheckpointProfile
+
+        with serialized_torch():
+            assert self._sequence is not None
+            if self._sequence.seats or self._sequence_groups:
+                raise ContractError("previous sequence collection remains live")
+            account = self.device_account if self.device != "cpu" else None
+            profiles = {}
+            for checkpoint in checkpoints:
+                if account is None:
+                    network = self.registry.networks[checkpoint]
+                    profile = CudaCheckpointProfile(network.config, network.binding, layout=layout)
+                else:
+                    profile = account.cached_profile(checkpoint)
+                    if profile is None:
+                        raise ContractError("unpublished native collection checkpoint")
+                profiles[checkpoint] = profile
+            rows = min(game_concurrency, max_batch_size)
+            seats = min(2 * game_concurrency, scheduled_sequence_seats)
+            retained = seats * max((cache_bytes(p.model) for p in profiles.values()), default=0)
+            pending_gru = min(rows, seats) * max(
+                (cache_bytes(p.model) for p in profiles.values() if p.model.model_id == "gru"), default=0)
+            available = (account.serving_tensor_allowance() - retained - pending_gru
+                         if account is not None else 2**63 - 1)
+            if available < 0:
+                raise ContractError("CUDA collection sequence cache exceeds allowance")
+            plans = {}
+            for checkpoint, profile in profiles.items():
+                model, binding = profile.model, profile.binding
+                logical = min(model.resources.max_owned_bytes, binding.managed_budget_bytes)
+                allowance = min(available, logical - profile.fixed_bytes - profile.network_bytes - cache_bytes(model))
+                tensor_limit = model.resources.max_tensor_bytes
+                limit_position = model.temporal.max_decisions - 1 if model.model_id == "transformer" else 0
+                full = BatchShape(1, binding.max_candidates, model.event.max_interval)
+                scalar = BatchInputs.compile(full, positions=model.max_positions, layout=layout)
+                scalar_bytes = sum((f.stop - f.start) * f.dtype.itemsize for f in scalar.fields
+                                   if f.name not in ("mask", "last_event"))
+                frame = profile.row.estimate(interval_events=full.events, candidates=full.candidates,
+                                             input_leaf_bytes=scalar_bytes)
+                temporal, temporal_tensor = temporal_scratch(model, rows=1, position=limit_position, grouped=False)
+                cache_tensor = cache_bytes(model) // (2 if model.model_id == "transformer" else 1)
+                if frame.peak_bytes + temporal > allowance or max(cache_tensor, temporal_tensor) > tensor_limit:
+                    raise ContractError("sequence collection cannot admit its configured scalar serving envelope")
+
+                geometry = BatchGeometry(rows, binding.max_candidates, model.event.max_interval)
+                shapes = {}
+                group_tensor_limit = (_CUDA_BATCH_TEMPORARY_TENSOR_BYTES
+                    if tensor_limit == MAX_TENSOR_BYTES else tensor_limit)
+                # Width one uses scalar serving with the same sealed recipe.
+                for shape in geometry.shapes() if rows > 1 else ():
+                    estimate = estimate_batch(model, binding, layout=layout, shape=shape, row_profile=profile.row)
+                    if estimate.largest_tensor_bytes > group_tensor_limit or estimate.peak_bytes > allowance:
+                        continue
+
+                    def required(position: int, *, model: Any = model, estimate: BatchEstimate = estimate,
+                                 group_tensor_limit: int = group_tensor_limit) -> float:
+                        scratch, largest = temporal_scratch(model, rows=rows, position=position, grouped=True)
+                        if largest > group_tensor_limit:
+                            return float("inf")
+                        return estimate.peak_bytes + scratch
+
+                    allowed = bisect_right(range(limit_position + 1), allowance, key=required) - 1
+                    if allowed >= 0:
+                        shapes[shape] = estimate, allowed
+                plans[checkpoint] = geometry, shapes
+            if account is not None:
+                account.reserve_sequence_collection(cache_bytes=retained, pending_bytes=pending_gru)
+            self._sequence_groups = plans
 
     def _prepare_collection_graph(self, checkpoint: str, available: int) -> None:
         import torch
@@ -414,6 +511,12 @@ class RustPlayerInference:
 
     def end_collection(self) -> None:
         with serialized_torch():
+            if self.sequence_enabled:
+                assert self._sequence is not None
+                if self._sequence.seats:
+                    raise ContractError("actual sequence consumers must retire before collection end")
+                self._settle_sequence_storage()
+                return
             if self.device != "cpu":
                 import torch
 
@@ -440,6 +543,22 @@ class RustPlayerInference:
                     raise
             self._collection.clear()
 
+    def settle_joined_sequence_service(self, *, dispatcher: Any) -> None:
+        """Called only after original native actors and service thread joined."""
+        self.retire_device_failure(dispatcher=dispatcher)
+        self._settle_sequence_storage()
+
+    def _settle_sequence_storage(self) -> None:
+        assert self._sequence is not None
+        with serialized_torch():
+            if self.device != "cpu":
+                import torch
+                torch.cuda.synchronize(self.device)
+            self._sequence.seats.clear()
+            self._sequence_groups.clear()
+            if self.device != "cpu":
+                self.device_account.clear_sequence_collection()
+
     def begin_collection_metrics(self) -> None:
         with serialized_torch():
             if self.device != "cpu":
@@ -447,7 +566,8 @@ class RustPlayerInference:
 
                 self._previous_cuda_peaks = self.process_cuda_peaks()
                 torch.cuda.reset_peak_memory_stats(self.device)
-            first = next(iter(self._collection.values()), None)
+            collection = self._sequence_groups if self.sequence_enabled else self._collection
+            first = next(iter(collection.values()), None)
             self._measurement_batch_width = first[0].rows if first is not None else None
             self._scalar_rows = 0
             self._graph_replays = 0
@@ -521,16 +641,88 @@ class RustPlayerInference:
                         answers[index] = answer
             return answers
 
-    def _evaluate_row(self, row: dict[str, Any], checkpoint: str) -> dict[str, Any]:
+    @property
+    def sequence_enabled(self) -> bool:
+        return getattr(self, "inference_recipe", None) == BATCHED_TORCH_SEQUENCE_INFERENCE
+
+    def evaluate_sequence(self, batch: dict[str, Any]) -> tuple[list[dict[str, Any]], list[PendingStep | None]]:
         import torch
 
-        from gf_models.shared_numeric import score_numeric_row
+        if self._sequence is None or batch["runtime"] != self.runtime:
+            raise ContractError("native sequence mode or batch runtime mismatch")
+        with serialized_torch(), torch.no_grad():
+            answers: list[dict[str, Any]] = []
+            steps: list[PendingStep | None] = []
+            groups: dict[tuple[str, BatchShape, int], list[int]] = {}
+            rows = batch["rows"]
+            for i, row in enumerate(rows):
+                self.timings["assembly"] += row["assembly_seconds"]
+                identity = json.loads(row["identity"])
+                checkpoint = identity["checkpoint"]
+                if checkpoint not in self.registry.networks:
+                    raise ContractError("unpublished native checkpoint")
+                network = self.registry.networks[checkpoint]
+                kind = network.config.model_id
+                step = None if kind == "mlp" else self._sequence.stage(row, identity, network)
+                steps.append(step)
+                position = step.state.position if kind == "transformer" and step is not None else 0
+                if checkpoint in self._sequence_groups:
+                    geometry, shapes = self._sequence_groups[checkpoint]
+                    shape = geometry.shape(row["candidate_count"], row["event_length"])
+                    admission = shapes.get(shape)
+                    if admission is not None and position <= admission[1]:
+                        groups.setdefault((checkpoint, shape, position), []).append(i)
+                        answers.append({})
+                        continue
+                answers.append(self._evaluate_row(row, checkpoint, step))
+            for (checkpoint, shape, position), indices in groups.items():
+                estimate = self._sequence_groups[checkpoint][1][shape][0]
+                temporal, _ = temporal_scratch(self.registry.networks[checkpoint].config,
+                    rows=shape.rows, position=position, grouped=True)
+                group_steps = [step for i in indices if (step := steps[i]) is not None]
+                scored = self._evaluate_group([rows[i] for i in indices], checkpoint, estimate,
+                    steps=group_steps or None, temporal_bytes=temporal)
+                for i, answer in zip(indices, scored, strict=True):
+                    answers[i] = answer
+            return answers, steps
+
+    def accept_sequence(self, pending: list[PendingStep | None], accepted: list[bool]) -> None:
+        assert self._sequence is not None
+        self._sequence.accept(pending, accepted)
+
+    def retire_sequence_game(self, key: GameKey) -> None:
+        assert self._sequence is not None
+        with serialized_torch():
+            if self.device != "cpu":
+                import torch
+                torch.cuda.synchronize(self.device)
+            self._sequence.retire_game(key)
+
+    def _evaluate_row(self, row: dict[str, Any], checkpoint: str,
+                      step: PendingStep | None = None) -> dict[str, Any]:
+        import torch
+
+        from gf_models.shared_numeric import (
+            encode_numeric_frame,
+            score_numeric_heads,
+            score_numeric_row,
+        )
+
+        network = self.registry.networks[checkpoint]
+
+        def score() -> tuple[Any, Any]:
+            if step is None:
+                return score_numeric_row(network, inputs)
+            encoded, cards = encode_numeric_frame(network, inputs)
+            return score_numeric_heads(network, inputs, step.scalar(network, encoded), cards)
 
         account = getattr(self, 'device_account', None) if self.device != 'cpu' else None
         hold = (account.begin_row(checkpoint,
             interval_events=row['inputs']['interval_numerics'].shape[0],
             candidates=row['inputs']['kinds'].shape[0],
-            input_leaf_bytes=sum(value.nbytes for value in row['inputs'].values()), owner=self)
+            input_leaf_bytes=sum(value.nbytes for value in row['inputs'].values()), owner=self,
+            temporal_scratch=0 if step is None else temporal_scratch(network.config,
+                rows=1, position=step.state.position, grouped=False)[0])
             if account is not None else None)
         inputs: dict[str, Any] = {}
         if hold is not None:
@@ -550,10 +742,10 @@ class RustPlayerInference:
             at = time.perf_counter()
             try:
                 if self.performance_callback is None:
-                    logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                    logs, value = score()
                 else:
                     with torch.profiler.record_function("gf-native-row-forward"):
-                        logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                        logs, value = score()
                 if self.device != "cpu":
                     torch.cuda.synchronize(self.device)
             finally:
@@ -601,10 +793,24 @@ class RustPlayerInference:
         return answer
 
     def _evaluate_group(self, rows: list[dict[str, Any]], checkpoint: str,
-                        estimate: BatchEstimate) -> list[dict[str, Any]]:
+                        estimate: BatchEstimate, *, steps: list[PendingStep] | None = None,
+                        temporal_bytes: int = 0) -> list[dict[str, Any]]:
         import torch
 
-        from gf_models.rust_player_batch import pack_native_rows, score_numeric_batch
+        from gf_models.rust_player_batch import (
+            pack_native_rows,
+            score_batch_heads,
+            score_numeric_batch,
+        )
+
+        network = self.registry.networks[checkpoint]
+
+        def score(inputs: dict[str, Any]) -> tuple[Any, Any, Any]:
+            if steps is None:
+                return score_numeric_batch(network, inputs)
+            encoded, cards = network._encode_frame_operands(None, inputs.__getitem__,
+                fixed_event_indices=inputs["last_event"])
+            return score_batch_heads(network, inputs, grouped_step(network, encoded, steps), cards)
 
         at = time.perf_counter()
         packed = pack_native_rows(rows, estimate.inputs)
@@ -612,9 +818,12 @@ class RustPlayerInference:
         graph = self._collection_graph
         if graph is not None and (graph.checkpoint != checkpoint or graph.estimate is not estimate):
             graph = None
-        hold = self.device_account.begin_batch(estimate.peak_bytes if graph is None else graph.replay_bytes, owner=self)
+        account = self.device_account if self.device != "cpu" else None
+        hold = (account.begin_batch(estimate.peak_bytes + temporal_bytes if graph is None
+                                    else graph.replay_bytes, owner=self) if account is not None else None)
         roots: dict[np.dtype[Any], Any] = {}
-        hold.references = roots if graph is None else graph
+        if hold is not None:
+            hold.references = roots if graph is None else graph
         try:
             at = time.perf_counter()
             try:
@@ -629,10 +838,10 @@ class RustPlayerInference:
                 if graph is not None:
                     logs, probabilities, values = graph.replay()
                 elif self.performance_callback is None:
-                    logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
+                    logs, probabilities, values = score(inputs)
                 else:
                     with torch.profiler.record_function("gf-native-batch-forward"):
-                        logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
+                        logs, probabilities, values = score(inputs)
                 # One blocking D2H also fences this serialized forward.
                 size = logs.shape[1]
                 combined = torch.cat((logs, probabilities, values[:, None]), dim=1)
@@ -645,10 +854,12 @@ class RustPlayerInference:
             if self.performance_callback is not None:
                 self.performance_callback.after_forward(scored_rows=len(rows), boundary="native-post-row-forward")
             roots.clear()
-            hold.references = None
-            hold.complete()
+            if hold is not None:
+                hold.references = None
+                hold.complete()
         except BaseException as error:
-            hold.fail(error, references=roots if graph is None else graph)
+            if hold is not None:
+                hold.fail(error, references=roots if graph is None else graph)
             raise
 
         answers = []
@@ -657,7 +868,7 @@ class RustPlayerInference:
             n = len(row["inputs"]["kinds"])
             logs_cpu, value = returned[index, :n], float(returned[index, -1])
             if not np.isfinite(logs_cpu).all() or not np.isfinite(value):
-                raise ContractError("nonfinite shared MLP output")
+                raise ContractError("nonfinite native actor or critic output")
             at = time.perf_counter()
             try:
                 sample, next_state = _sample_prepared_cpu(

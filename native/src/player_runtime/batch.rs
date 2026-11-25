@@ -17,6 +17,23 @@ use std::{
 };
 
 type ParticipantKey = (String, String, String, u8);
+type GameKey = (String, String, String);
+pub enum Work {
+    Batch(Batch),
+    Retirement(u64, GameKey),
+}
+#[derive(PartialEq)]
+enum TicketState {
+    Queued,
+    Exported,
+    Acknowledged,
+}
+#[derive(Default)]
+struct Retirements {
+    next: u64,
+    queue: VecDeque<(u64, GameKey)>,
+    tickets: HashMap<u64, (f64, TicketState)>,
+}
 pub struct DispatchRow {
     pub identity: Identity,
     pub inputs: ServingRow,
@@ -47,6 +64,7 @@ struct State {
     next_batch: u64,
     forming: bool,
     formation_deadline: Option<f64>,
+    retirements: Option<Retirements>,
 }
 pub struct Dispatcher {
     capacity: usize,
@@ -54,6 +72,7 @@ pub struct Dispatcher {
     wait: f64,
     pub runtime: String,
     pub metrics: Arc<super::metrics::Metrics>,
+    sequence: bool,
     state: Mutex<State>,
     wake: Condvar,
     async_wake: tokio::sync::Notify,
@@ -85,6 +104,23 @@ impl Dispatcher {
         formation_wait_ms: f64,
         runtime: String,
     ) -> Result<Arc<Self>> {
+        Self::with_sequence(capacity, max_batch, formation_wait_ms, runtime, false)
+    }
+    pub fn new_sequence(
+        capacity: usize,
+        max_batch: usize,
+        formation_wait_ms: f64,
+        runtime: String,
+    ) -> Result<Arc<Self>> {
+        Self::with_sequence(capacity, max_batch, formation_wait_ms, runtime, true)
+    }
+    fn with_sequence(
+        capacity: usize,
+        max_batch: usize,
+        formation_wait_ms: f64,
+        runtime: String,
+        sequence: bool,
+    ) -> Result<Arc<Self>> {
         ensure(
             capacity > 0
                 && max_batch > 0
@@ -100,6 +136,7 @@ impl Dispatcher {
             max_batch,
             wait: formation_wait_ms / 1000.,
             runtime,
+            sequence,
             state: Mutex::new(State {
                 closed: None,
                 queue: VecDeque::new(),
@@ -110,6 +147,7 @@ impl Dispatcher {
                 next_batch: 0,
                 forming: false,
                 formation_deadline: None,
+                retirements: sequence.then(Retirements::default),
             }),
             wake: Condvar::new(),
             async_wake: tokio::sync::Notify::new(),
@@ -117,7 +155,9 @@ impl Dispatcher {
     }
     pub fn measurement_quiet(&self) -> bool {
         let s = self.state.lock().unwrap();
-        s.pending.is_empty() && s.producers.is_empty()
+        s.pending.is_empty()
+            && s.producers.is_empty()
+            && s.retirements.as_ref().is_none_or(|r| r.tickets.is_empty())
     }
     fn notify(&self) {
         self.wake.notify_all();
@@ -290,6 +330,17 @@ impl Dispatcher {
         }
     }
     pub fn next_batch(&self, deadline: f64) -> Result<Batch> {
+        ensure(!self.sequence, "sequence dispatcher requires next_work")?;
+        match self.take_work(deadline)? {
+            Work::Batch(batch) => Ok(batch),
+            Work::Retirement(..) => unreachable!("legacy dispatcher has no retirement queue"),
+        }
+    }
+    pub fn next_work(&self, deadline: f64) -> Result<Work> {
+        ensure(self.sequence, "next_work requires sequence dispatcher")?;
+        self.take_work(deadline)
+    }
+    fn take_work(&self, deadline: f64) -> Result<Work> {
         wait_duration(deadline)?;
         let mut s = self.state.lock().unwrap();
         ensure(!s.forming, "one batch formation owner required")?;
@@ -303,6 +354,12 @@ impl Dispatcher {
             self.notify();
             if now >= deadline {
                 break Err(Error::Deadline);
+            }
+            if let Some(retirements) = s.retirements.as_mut()
+                && let Some((ticket, key)) = retirements.queue.pop_front()
+            {
+                retirements.tickets.get_mut(&ticket).unwrap().1 = TicketState::Exported;
+                break Ok(Work::Retirement(ticket, key));
             }
             let formation = s.formation_deadline;
             if !s.queue.is_empty() && (s.queue.len() >= self.max_batch || now >= formation.unwrap())
@@ -326,11 +383,11 @@ impl Dispatcher {
                 }
                 s.formation_deadline = s.queue.front().map(|k| s.pending[k].received + self.wait);
                 self.metrics.batch(rows.len());
-                break Ok(Batch {
+                break Ok(Work::Batch(Batch {
                     id,
                     rows,
                     runtime: self.runtime.clone(),
-                });
+                }));
             }
             let expiry = s
                 .pending
@@ -351,6 +408,21 @@ impl Dispatcher {
     }
     /// A whole batch is identity/shape validated before any participant commit.
     pub fn submit_results(&self, batch: u64, responses: Vec<Response>) -> Result<usize> {
+        ensure(!self.sequence, "sequence dispatcher requires submit_rows")?;
+        self.commit_results(batch, responses, |_| {})
+    }
+    pub fn submit_rows(&self, batch: u64, responses: Vec<Response>) -> Result<Vec<bool>> {
+        ensure(self.sequence, "submit_rows requires sequence dispatcher")?;
+        let mut results = Vec::with_capacity(responses.len());
+        self.commit_results(batch, responses, |accepted| results.push(accepted))?;
+        Ok(results)
+    }
+    fn commit_results(
+        &self,
+        batch: u64,
+        responses: Vec<Response>,
+        mut report: impl FnMut(bool),
+    ) -> Result<usize> {
         let mut s = self.state.lock().unwrap();
         if let Some(e) = &s.closed {
             return Err(e.clone());
@@ -389,12 +461,18 @@ impl Dispatcher {
         for (k, r) in originals.into_iter().zip(responses) {
             let p = s.pending.remove(&k).unwrap();
             let participant = s.participants.get_mut(&r.identity.participant()).unwrap();
-            if let Some(e) = p.retired {
-                p.handle.complete(Err(e));
+            let rejection = if let Some(e) = p.retired {
+                Some(e)
             } else if monotonic() >= r.identity.deadline {
-                p.handle.complete(Err(Error::Deadline));
+                Some(Error::Deadline)
             } else if participant.epoch != r.identity.epoch {
-                p.handle.complete(Err(error("stale inference epoch")));
+                Some(error("stale inference epoch"))
+            } else {
+                None
+            };
+            report(rejection.is_none());
+            if let Some(error) = rejection {
+                p.handle.complete(Err(error));
             } else {
                 participant.state = Some(r.next_state);
                 p.handle.complete(Ok(Answer {
@@ -454,6 +532,7 @@ impl Dispatcher {
         Ok(())
     }
     pub fn release_game(&self, run: &str, trial: &str, game: &str) -> Result<()> {
+        ensure(!self.sequence, "sequence dispatcher requires retirement acknowledgement")?;
         let mut s = self.state.lock().unwrap();
         ensure(
             !s.pending.values().any(|p| {
@@ -479,7 +558,28 @@ impl Dispatcher {
         game: &str,
         deadline: f64,
     ) -> Result<()> {
+        self.release_settled(run, trial, game, deadline, false).await
+    }
+    pub async fn release_game_sequence(
+        &self,
+        run: &str,
+        trial: &str,
+        game: &str,
+        deadline: f64,
+    ) -> Result<()> {
+        ensure(self.sequence, "sequence retirement requires sequence dispatcher")?;
+        self.release_settled(run, trial, game, deadline, true).await
+    }
+    async fn release_settled(
+        &self,
+        run: &str,
+        trial: &str,
+        game: &str,
+        deadline: f64,
+        retire_cache: bool,
+    ) -> Result<()> {
         wait_duration(deadline)?;
+        let mut ticket = None;
         loop {
             let wake = self.async_wake.notified();
             tokio::pin!(wake);
@@ -489,16 +589,40 @@ impl Dispatcher {
                 if let Some(error) = &state.closed {
                     return Err(error.clone());
                 }
-                let pending = state.pending.values().any(|p| {
-                    p.identity.run == run && p.identity.trial == trial && p.identity.game == game
-                });
-                let producing = state
-                    .producers
-                    .keys()
-                    .any(|(r, t, g, _)| r == run && t == trial && g == game);
-                if !pending && !producing {
-                    state
-                        .participants
+                let settled = match ticket {
+                    Some(id) => {
+                        let retirements = state.retirements.as_mut().unwrap();
+                        if retirements.tickets[&id].1 == TicketState::Acknowledged {
+                            retirements.tickets.remove(&id);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    None => {
+                        let pending = state.pending.values().any(|p| {
+                            p.identity.run == run && p.identity.trial == trial && p.identity.game == game
+                        });
+                        let producing = state.producers.keys()
+                            .any(|(r, t, g, _)| r == run && t == trial && g == game);
+                        if !pending && !producing && retire_cache && monotonic() < deadline {
+                            let key = (run.to_owned(), trial.to_owned(), game.to_owned());
+                            ensure([1, 2].iter().all(|&seat| state.participants
+                                .get(&(key.0.clone(), key.1.clone(), key.2.clone(), seat))
+                                .is_some_and(|p| p.retired)), "sequence game seats must retire first")?;
+                            let retirements = state.retirements.as_mut().unwrap();
+                            let id = retirements.next;
+                            retirements.next += 1;
+                            retirements.tickets.insert(id, (deadline, TicketState::Queued));
+                            retirements.queue.push_back((id, key));
+                            ticket = Some(id);
+                            self.notify();
+                        }
+                        !pending && !producing && !retire_cache
+                    }
+                };
+                if settled {
+                    state.participants
                         .retain(|(r, t, g, _), _| r != run || t != trial || g != game);
                     return Ok(());
                 }
@@ -508,6 +632,22 @@ impl Dispatcher {
             }
             let _ = tokio::time::timeout(wait_duration(deadline)?, wake).await;
         }
+    }
+    pub fn ack_retirement(&self, ticket: u64) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(error) = &state.closed {
+            return Err(error.clone());
+        }
+        let (deadline, status) = state.retirements.as_mut()
+            .and_then(|retirements| retirements.tickets.get_mut(&ticket))
+            .ok_or_else(|| error("unknown sequence retirement ticket"))?;
+        ensure(*status == TicketState::Exported, "sequence retirement is not awaiting acknowledgement")?;
+        if monotonic() >= *deadline {
+            return Err(Error::Deadline);
+        }
+        *status = TicketState::Acknowledged;
+        self.notify();
+        Ok(())
     }
     pub fn checkpoint_references(&self) -> HashMap<String, usize> {
         let s = self.state.lock().unwrap();
@@ -527,6 +667,10 @@ impl Dispatcher {
         }
         s.queue.clear();
         s.participants.clear();
+        if let Some(retirements) = s.retirements.as_mut() {
+            retirements.queue.clear();
+            retirements.tickets.clear();
+        }
         self.notify();
     }
 }
@@ -554,6 +698,80 @@ impl PlayerInferenceDispatcher {
             core,
             handles: Mutex::new(HashMap::new()),
         }
+    }
+    fn export_batch(&self, py: Python<'_>, batch: Batch) -> PyResult<Py<PyDict>> {
+        // Move each allocation exactly once into NumPy's owning capsule. No Rust reuse.
+        let result = (|| {
+            let out = PyDict::new(py);
+            out.set_item("batch_id", batch.id)?;
+            out.set_item("runtime", &batch.runtime)?;
+            let rows = PyList::empty(py);
+            for r in batch.rows {
+                let row = PyDict::new(py);
+                row.set_item(
+                    "identity",
+                    PyBytes::new(py, &serde_json::to_vec(&r.identity).unwrap()),
+                )?;
+                row.set_item("sampling_seed", r.sampling_seed)?;
+                if let Some(state) = r.rng_state {
+                    row.set_item("rng_state", PyBytes::new(py, &state))?;
+                } else {
+                    row.set_item("rng_state", py.None())?;
+                }
+                row.set_item("candidate_count", r.inputs.candidates)?;
+                row.set_item("event_length", r.inputs.events)?;
+                if self.core.sequence {
+                    row.set_item("event_start", r.inputs.event_start)?;
+                    row.set_item("event_end", r.inputs.event_end)?;
+                }
+                row.set_item("assembly_seconds", r.inputs.assembly_seconds)?;
+                row.set_item("buffer_bytes", r.inputs.bytes())?;
+                let (inputs, offsets) = r.inputs.export(py)?;
+                row.set_item("inputs", inputs)?;
+                row.set_item("candidate_offsets", offsets)?;
+                rows.append(row)?;
+            }
+            out.set_item("rows", rows)?;
+            Ok(out.unbind())
+        })();
+        if result.is_err() {
+            self.core
+                .close(error("inference buffer publication failed"));
+        }
+        result
+    }
+    fn parse_responses(&self, rows: &Bound<'_, PyList>) -> PyResult<Vec<Response>> {
+        let parsed = (|| -> PyResult<Vec<Response>> {
+            let mut responses = vec![];
+            for item in rows.iter() {
+                let row = item.cast::<PyDict>()?;
+                let get = |name: &str| -> PyResult<Bound<'_, PyAny>> {
+                    row.get_item(name)?.ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(format!("missing {name}"))
+                    })
+                };
+                let identity: Vec<u8> = get("identity")?.extract()?;
+                let logs = get("logs")?;
+                let logs = logs
+                    .extract::<PyReadonlyArray1<'_, f32>>()?
+                    .as_slice()?
+                    .to_vec();
+                responses.push(Response {
+                    identity: serde_json::from_slice(&identity)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+                    logs,
+                    value: get("value")?.extract()?,
+                    sample: get("sample")?.extract()?,
+                    next_state: get("next_state")?.extract()?,
+                    runtime: get("runtime")?.extract()?,
+                });
+            }
+            Ok(responses)
+        })();
+        if parsed.is_err() {
+            self.core.close(error("inference reply decode failed"));
+        }
+        parsed
     }
 }
 #[derive(serde::Deserialize)]
@@ -644,41 +862,18 @@ impl PlayerInferenceDispatcher {
         let batch = py
             .detach(|| self.core.next_batch(deadline))
             .map_err(crate::python_error)?;
-        // Move each allocation exactly once into NumPy's owning capsule. No Rust reuse.
-        let result = (|| {
-            let out = PyDict::new(py);
-            out.set_item("batch_id", batch.id)?;
-            out.set_item("runtime", &batch.runtime)?;
-            let rows = PyList::empty(py);
-            for r in batch.rows {
-                let row = PyDict::new(py);
-                row.set_item(
-                    "identity",
-                    PyBytes::new(py, &serde_json::to_vec(&r.identity).unwrap()),
-                )?;
-                row.set_item("sampling_seed", r.sampling_seed)?;
-                if let Some(state) = r.rng_state {
-                    row.set_item("rng_state", PyBytes::new(py, &state))?;
-                } else {
-                    row.set_item("rng_state", py.None())?;
-                }
-                row.set_item("candidate_count", r.inputs.candidates)?;
-                row.set_item("event_length", r.inputs.events)?;
-                row.set_item("assembly_seconds", r.inputs.assembly_seconds)?;
-                row.set_item("buffer_bytes", r.inputs.bytes())?;
-                let (inputs, offsets) = r.inputs.export(py)?;
-                row.set_item("inputs", inputs)?;
-                row.set_item("candidate_offsets", offsets)?;
-                rows.append(row)?;
+        self.export_batch(py, batch)
+    }
+    fn next_work(&self, py: Python<'_>, deadline: f64) -> PyResult<Py<PyDict>> {
+        self.core.metrics.increment("pyo3_next_batch", 1);
+        match py.detach(|| self.core.next_work(deadline)).map_err(crate::python_error)? {
+            Work::Batch(batch) => self.export_batch(py, batch),
+            Work::Retirement(ticket, key) => {
+                let out = PyDict::new(py);
+                out.set_item("retirement", (ticket, key))?;
+                Ok(out.unbind())
             }
-            out.set_item("rows", rows)?;
-            Ok(out.unbind())
-        })();
-        if result.is_err() {
-            self.core
-                .close(error("inference buffer publication failed"));
         }
-        result
     }
     fn submit_results(
         &self,
@@ -687,42 +882,22 @@ impl PlayerInferenceDispatcher {
         rows: &Bound<'_, PyList>,
     ) -> PyResult<usize> {
         self.core.metrics.increment("pyo3_submit_results", 1);
-        let parsed = (|| -> PyResult<Vec<Response>> {
-            let mut responses = vec![];
-            for item in rows.iter() {
-                let row = item.cast::<PyDict>()?;
-                let get = |name: &str| -> PyResult<Bound<'_, PyAny>> {
-                    row.get_item(name)?.ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err(format!("missing {name}"))
-                    })
-                };
-                let identity: Vec<u8> = get("identity")?.extract()?;
-                let logs = get("logs")?;
-                let logs = logs
-                    .extract::<PyReadonlyArray1<'_, f32>>()?
-                    .as_slice()?
-                    .to_vec();
-                responses.push(Response {
-                    identity: serde_json::from_slice(&identity)
-                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
-                    logs,
-                    value: get("value")?.extract()?,
-                    sample: get("sample")?.extract()?,
-                    next_state: get("next_state")?.extract()?,
-                    runtime: get("runtime")?.extract()?,
-                });
-            }
-            Ok(responses)
-        })();
-        match parsed {
-            Ok(responses) => py
-                .detach(|| self.core.submit_results(batch_id, responses))
-                .map_err(crate::python_error),
-            Err(e) => {
-                self.core.close(error("inference reply decode failed"));
-                Err(e)
-            }
-        }
+        let responses = self.parse_responses(rows)?;
+        py.detach(|| self.core.submit_results(batch_id, responses)).map_err(crate::python_error)
+    }
+    fn submit_rows(
+        &self,
+        py: Python<'_>,
+        batch_id: u64,
+        rows: &Bound<'_, PyList>,
+    ) -> PyResult<Vec<bool>> {
+        self.core.metrics.increment("pyo3_submit_results", 1);
+        let responses = self.parse_responses(rows)?;
+        py.detach(|| self.core.submit_rows(batch_id, responses)).map_err(crate::python_error)
+    }
+    fn ack_retirement(&self, ticket: u64) -> PyResult<()> {
+        self.core.metrics.increment("pyo3_other", 1);
+        self.core.ack_retirement(ticket).map_err(crate::python_error)
     }
     fn wait_result(&self, py: Python<'_>, token: u64, deadline: f64) -> PyResult<Py<PyDict>> {
         self.core.metrics.increment("pyo3_other", 1);
@@ -838,6 +1013,61 @@ mod tests {
             runtime: "test".into(),
         }
     }
+    #[test]
+    fn sequence_acceptance_settles_rows_in_original_order() {
+        let d = Dispatcher::new_sequence(2, 2, 0., "test".into()).unwrap();
+        let (first, first_inputs) = row("g1", monotonic() + 5.);
+        let (second, second_inputs) = row("g2", monotonic() + 5.);
+        let (_, a) = d.enqueue(first.clone(), first_inputs, 17).unwrap();
+        let (_, b) = d.enqueue(second.clone(), second_inputs, 18).unwrap();
+        let Work::Batch(batch) = d.next_work(monotonic() + 1.).unwrap() else {
+            panic!("expected a batch");
+        };
+        d.retire(&first).unwrap();
+        assert_eq!(d.submit_rows(batch.id, vec![response(first), response(second.clone())]).unwrap(),
+            vec![false, true]);
+        assert_eq!(a.wait(monotonic() + 1.).unwrap_err(), Error::Cancelled);
+        assert_eq!(b.wait(monotonic() + 1.).unwrap().sample, 0);
+        let mut next = second;
+        next.request += 1;
+        let (_, inputs) = row("g2", next.deadline);
+        d.enqueue(next, inputs, 18).unwrap();
+        let Work::Batch(batch) = d.next_work(monotonic() + 1.).unwrap() else {
+            panic!("expected a batch");
+        };
+        assert_eq!(batch.rows[0].rng_state, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn sequence_rejects_legacy_synchronous_release() {
+        let d = Dispatcher::new_sequence(1, 1, 0., "test".into()).unwrap();
+        assert!(d.release_game("r", "t", "g1").is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn idle_sequence_service_retires_only_after_acknowledgement() {
+        let d = Dispatcher::new_sequence(1, 1, 0., "test".into()).unwrap();
+        let (mut id, _) = row("g1", monotonic() + 5.);
+        d.retire(&id).unwrap();
+        id.player = 2;
+        d.retire(&id).unwrap();
+        let core = d.clone();
+        let release = tokio::spawn(async move {
+            core.release_game_sequence("r", "t", "g1", monotonic() + 1.).await
+        });
+        let service = d.clone();
+        let work = tokio::task::spawn_blocking(move || service.next_work(monotonic() + 1.))
+            .await.unwrap().unwrap();
+        let Work::Retirement(ticket, key) = work else { panic!("expected retirement"); };
+        assert_eq!(key, ("r".into(), "t".into(), "g1".into()));
+        assert!(!release.is_finished());
+        assert!(d.ack_retirement(ticket + 1).is_err());
+        d.ack_retirement(ticket).unwrap();
+        assert!(d.ack_retirement(ticket).is_err());
+        release.await.unwrap().unwrap();
+        assert!(d.measurement_quiet());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn async_full_admission_and_result_wait_leave_single_worker_responsive() {
         let d = Dispatcher::new(1, 1, 0., "test".into()).unwrap();

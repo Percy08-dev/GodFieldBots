@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0074](0074-rust-player-sequence-hpo.md) — CUDA HPO6 の Model4 系列推論を
+Rust の試合進行、要求の受理と退役、既存 Numeric6 学習へ接続する。
+
 [0073](0073-rust-live-journal-frame-validation.md) — 共有 CardInstance の
 ライブ Journal で、単一 writer が元のレコードを Rust で検証する。
 

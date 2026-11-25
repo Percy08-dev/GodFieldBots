@@ -160,7 +160,11 @@ def metric_data(row: Json, *, observation_id: str, boot_id: str, run_id: str,
 
 
 def _validate_inference_totals(value: Json) -> None:
-    from gf_common.rust_player import BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE
+    from gf_common.rust_player import (
+        BATCHED_TORCH_INFERENCE,
+        BATCHED_TORCH_SEQUENCE_INFERENCE,
+        RUST_BATCHED_TORCH_GRAPH_RECIPE,
+    )
 
     row = closed(value, {'recipe', 'batch_width', 'batched_groups', 'useful_rows', 'dummy_rows',
         'scalar_rows', 'useful_size_counts', 'cuda_peak_allocated_bytes', 'cuda_peak_reserved_bytes'},
@@ -173,7 +177,8 @@ def _validate_inference_totals(value: Json) -> None:
         integer(allocated, 0)
         integer(reserved, allocated)
     width = row['batch_width']
-    if row['recipe'] in (BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
+    if row['recipe'] in (BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE,
+                         BATCHED_TORCH_SEQUENCE_INFERENCE):
         integer(width, 1)
         if allocated is None or any(size > width for size in counts):
             raise ContractError('batched CUDA inference totals require device peaks and fixed geometry')
@@ -500,9 +505,14 @@ def _configuration(path: Path, lane: str, *, run_id: str | None, learning_seed: 
         loaded = load_config(path)
     cfg = loaded.config
     native = hasattr(cfg.run, 'player_runtime') or getattr(cfg, 'hpo_spec', {}).get('schema_version') == 6
-    if (native != lane.startswith('native-') or cfg.model.model_id != 'mlp'
+    if (native != lane.startswith('native-')
+            or lane != 'native-hpo' and cfg.model.model_id != 'mlp'
             or not lane.endswith('-hpo') and cfg.model.version != '3'):
-        raise ContractError('explicit lane differs from original MLP CONFIG')
+        raise ContractError('explicit lane differs from the original CONFIG')
+    if lane == 'native-hpo':
+        from gf_common.rust_player import validate_player_model
+        spec = cfg.hpo_spec
+        validate_player_model(spec['runtime'], cfg.model.model_id, hpo=True, encoder=spec['encoder'])
     return loaded
 
 

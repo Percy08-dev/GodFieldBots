@@ -1,4 +1,4 @@
-"""Pure tensor-storage estimate for one native, no-grad MLP inference row.
+"""Pure tensor-storage estimate for one native, no-grad actor inference row.
 
 R is the caller's sum of distinct final-dtype CUDA input-leaf allocations. Raw
 operands, reference slices, reshapes and detach views alias R. Equal-valued
@@ -79,8 +79,10 @@ def _compile(model: ModelConfigV3 | ModelConfigV4, binding: InferenceBindingV2,
              layout: StructuredLayout) -> _Geometry:
     # The caller owns full model validation. Check only this integration's closed
     # model/binding support and exact layout pairing (through dimensions).
-    if type(model) not in (ModelConfigV3, ModelConfigV4) or model.model_id != 'mlp':
-        raise ContractError('native row CUDA profile requires Model3/4 MLP')
+    if (type(model) not in (ModelConfigV3, ModelConfigV4)
+            or type(model) is ModelConfigV3 and model.model_id != 'mlp'
+            or model.model_id != model.temporal.kind):
+        raise ContractError('native row CUDA profile requires Model3 MLP or Model4')
     if type(binding) is not InferenceBindingV2:
         raise ContractError('native row CUDA profile requires InferenceBindingV2')
     d = dimensions(model, layout=layout)
@@ -153,7 +155,7 @@ def _compile(model: ModelConfigV3 | ModelConfigV4, binding: InferenceBindingV2,
         event_numeric + event_categories + event_input)
     context = 4 * model.temporal.hidden_size
     temporal_scratch = (_mlp_scratch((model.temporal.hidden_size,) * model.temporal.num_layers)
-                        if model.temporal.num_layers > 1 else 0)
+                        if model.model_id == 'mlp' and model.temporal.num_layers > 1 else 0)
     shared = context + actor_cards
     actor = model.heads.actor_hidden_sizes
     first = actor[0]

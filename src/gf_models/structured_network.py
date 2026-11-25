@@ -403,18 +403,35 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             output, _ = self.encode_temporal(torch.stack([value[0] for value in encoded]), past, prefix)
             return output[-1], encoded[-1][1]
 
+        def _new_temporal_storage(self) -> tuple[Any, Any]:
+            if model.model_id != "transformer":
+                return None, None
+            shape = (model.temporal.num_layers, 1, model.temporal.num_heads,
+                     model.temporal.max_decisions,
+                     model.temporal.hidden_size // model.temporal.num_heads)
+            return (torch.zeros(shape, dtype=torch.float32, device=self.device),
+                    torch.zeros(shape, dtype=torch.float32, device=self.device))
+
         def new_cache(self) -> TemporalCache:
-            # Reserve the full configured capacity, not only the first observed
-            # prefix. Admission happens before allocating either bounded buffer.
+            # Admission precedes allocating either fixed-capacity buffer.
             resource_estimate(model, runtime_binding, **layout_options)
             cache = TemporalCache(id(self), tuple(parameter._version for parameter in self.parameters()))
-            if model.model_id == "transformer":
-                shape = (model.temporal.num_layers, 1, model.temporal.num_heads,
-                         model.temporal.max_decisions,
-                         model.temporal.hidden_size // model.temporal.num_heads)
-                cache.keys = torch.zeros(shape, dtype=torch.float32, device=self.device)
-                cache.values = torch.zeros(shape, dtype=torch.float32, device=self.device)
+            cache.keys, cache.values = self._new_temporal_storage()
             return cache
+
+        def _temporal_step(self, encoded: Any, position: int, past: Any = None,
+                           keys: Any = None, values: Any = None) -> tuple[Any, Any]:
+            # One scalar frame or a fixed-width group, with validated storage.
+            batched = encoded.ndim == 2
+            x = encoded[:, None] if batched else encoded[None, None]
+            if model.model_id == "transformer":
+                x = x + self.positions[position:position + 1][None]
+                for index, layer in enumerate(self.temporal):
+                    x = layer.step(x, keys[index], values[index], position)
+            else:
+                x, past = self.encode_temporal(x, past, position)
+            context = x[:, 0]
+            return (context if batched else context[0]), past
 
         def step(self, frame: FrameTokens, cache: TemporalCache) -> tuple[Any, Any]:
             if frame.recipe_signature != recorded_token_signature(model, layout=layout):
@@ -436,16 +453,11 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                     or cache.keys.device != self.device or cache.values.device != self.device):
                 raise ContractError("missing/foreign Transformer cache storage")
             encoded, cards = self.encode_frame(frame)
-            if model.model_id == "transformer":
-                x = encoded[None, None] + self.positions[cache.position:cache.position + 1][None]
-                for index, layer in enumerate(self.temporal):
-                    x = layer.step(x, cache.keys[index], cache.values[index], cache.position)
-                output = x[0]
-            else:
-                output, cache.past = self.encode_temporal(encoded[None], cache.past, cache.position)
+            context, cache.past = self._temporal_step(
+                encoded, cache.position, cache.past, cache.keys, cache.values)
             cache.position += 1
             cache.owner, cache.revision, cache.event_end = (frame.actor, frame.episode), frame.revision, frame.event_end
-            return output[0], cards
+            return context, cards
 
         def _candidate_features(self, tokens: CandidateTokens) -> Any:
             return self._candidate_feature_operands(lambda name: self._tensor(getattr(tokens, name),

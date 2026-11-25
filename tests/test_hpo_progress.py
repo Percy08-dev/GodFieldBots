@@ -451,13 +451,15 @@ def test_standalone_watcher_reads_durable_generation_not_advanced_run_counters(
     root = tmp_path / '00000000-0000-0000-0000-000000000017'
     (root / 'updates').mkdir(parents=True)
     (root / 'generations').mkdir()
-    effective = {'training': {'max_updates': 100}, 'hpo_spec': {'schema_version': 6,
+    effective = {'training': {'max_updates': 100}, 'model': {'model_id': 'mlp'},
+        'hpo_spec': {'schema_version': 6, 'runtime': {}, 'encoder': 'canonical-python',
         'decision_budget': 500, 'storage': {'hpo_diagnostics': {'update_compression': 'zstd',
         'http_log_ram_root': '/tmp/ram', 'http_log_archive_root': '/tmp/archive',
         'http_log_retention': 'errors', 'http_log_compression': 'zstd'}}}}
     from hashlib import sha256
 
     update = {'run_id': root.name, 'generation': 6, 'schema_version': 8, 'status': 'complete',
+        'model_id': 'mlp',
         'metrics': {'total_loss': .07, 'entropy': .6, 'approx_kl': .005},
         'accepted_decisions': 120, 'actual_games': 8, 'collection_seconds': 10.4,
         'update_seconds': 1.2, **proof_fields}

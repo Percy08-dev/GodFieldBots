@@ -10,6 +10,7 @@ from typing import Any
 import gf_native
 
 from gf_common.domain import ContractError, canonical
+from gf_common.rust_player import LEARNED_POLICY_KINDS, SEQUENCE_MODEL_KINDS
 
 
 class RustPlayerRuntime:
@@ -28,6 +29,20 @@ class RustPlayerRuntime:
         self._performance_wait_started: float | None = None
         self._profile_status: Any = None
         self._profile_reported = False
+        if service is not None:
+            from gf_models.rust_player import RustPlayerInference
+
+            if (
+                type(service) is not RustPlayerInference
+                or service.runtime != config["runtime_identity"]
+            ):
+                raise ContractError("runtime requires same immutable inference service identity")
+
+        self._sequence = service is not None and service.sequence_enabled
+        if self._sequence:
+            config = config | {"sequence_inference": True}
+        elif config.get("sequence_inference"):
+            raise ContractError("sequence dispatcher requires its actual sequence service")
         self._native = gf_native.PlayerRuntime(canonical(config).encode())
         self.dispatcher = self._native.dispatcher
         self.service = service
@@ -46,15 +61,6 @@ class RustPlayerRuntime:
         self._join_error: str | None = None
         self._lock = threading.RLock()
         self._join_done = threading.Condition(self._lock)
-        if service is not None:
-            from gf_models.rust_player import RustPlayerInference
-
-            if (
-                type(service) is not RustPlayerInference
-                or service.runtime != config["runtime_identity"]
-            ):
-                raise ContractError("runtime requires same immutable inference service identity")
-
         if self.diagnostics is not None:
             self.measurement_begin(self.diagnostics.current_scope or self.diagnostics.scope(phase='startup'))
 
@@ -149,7 +155,8 @@ class RustPlayerRuntime:
                         self._performance_wait_started = at
                 try:
                     self.service.calls["next_batch"] += 1
-                    batch = self.dispatcher.next_batch(10_000_000_000.0)
+                    batch = (self.dispatcher.next_work(10_000_000_000.0) if self._sequence
+                             else self.dispatcher.next_batch(10_000_000_000.0))
                 finally:
                     if self.diagnostics is None:
                         self.service.timings["native_wait"] += time.perf_counter() - at
@@ -158,6 +165,12 @@ class RustPlayerRuntime:
                             self.service.timings["native_wait"] += time.perf_counter() - at
                             self._performance_wait_started = None
                 in_batch = True
+                if self._sequence and "retirement" in batch:
+                    ticket, key = batch["retirement"]
+                    self.service.retire_sequence_game(key)
+                    self.dispatcher.ack_retirement(ticket)
+                    in_batch = False
+                    continue
                 routes = []
                 for row in batch["rows"]:
                     identity = json.loads(row["identity"])
@@ -166,13 +179,21 @@ class RustPlayerRuntime:
                 with self._settled:
                     for route in routes:
                         self._active_routes[route] = self._active_routes.get(route, 0) + 1
-                answers = None
+                answers = pending = None
                 try:
-                    answers = self.service.evaluate(batch)
+                    if self._sequence:
+                        answers, pending = self.service.evaluate_sequence(batch)
+                    else:
+                        answers = self.service.evaluate(batch)
                     at = time.perf_counter()
                     try:
                         self.service.calls["submit_results"] += 1
-                        delivered = self.dispatcher.submit_results(batch["batch_id"], answers)
+                        if self._sequence:
+                            accepted = self.dispatcher.submit_rows(batch["batch_id"], answers)
+                            self.service.accept_sequence(pending, accepted)
+                            delivered = sum(accepted)
+                        else:
+                            delivered = self.dispatcher.submit_results(batch["batch_id"], answers)
                         self.service.calls["accepted"] += delivered
                         self.service.calls["expired"] += len(answers) - delivered
                     finally:
@@ -189,7 +210,7 @@ class RustPlayerRuntime:
                     # Success has synchronous CPU/device return and drops all
                     # original local owners here. Failure is already marked and
                     # route retirement never claims physical Tensor settlement.
-                    del batch, answers
+                    del batch, answers, pending
                     with self._settled:
                         for route in routes:
                             count = self._active_routes[route] - 1
@@ -207,8 +228,11 @@ class RustPlayerRuntime:
                     if self._service_error is None:
                         self._service_error = f"{type(exc).__name__}: {exc}"
                 self.service.calls["failures"] += 1
-                self.dispatcher.cancel("native inference service failed")
-                self._native.cancel("inference service failed")
+                if self._sequence:
+                    self._native.cancel_inference("inference service failed")
+                else:
+                    self.dispatcher.cancel("native inference service failed")
+                    self._native.cancel("inference service failed")
 
     def start(self, games: list[dict[str, Any]]) -> None:
         """Admit a precomputed wave under its original absolute deadlines.
@@ -228,25 +252,25 @@ class RustPlayerRuntime:
             ]
             for game in games:
                 for policy in game["policies"]:
-                    if policy["kind"] == "mlp":
+                    if policy["kind"] in LEARNED_POLICY_KINDS:
                         if self.service is None:
                             raise ContractError(
-                                "MLP descriptor requires actual same-service retain"
+                                "learned descriptor requires actual same-service retain"
                             )
-                        # This actual obligation precedes descriptor admission.
-                        # Keep even on uncertain start failure until original join.
-                        checkpoint = policy["checkpoint"]
-                        self.service.retain(checkpoint)
-                        self._holds.setdefault(
-                            (game["run"], game["trial"], game["episode"]), []
-                        ).append(checkpoint)
                         from gf_models.rust_player import serialized_torch
 
+                        checkpoint = policy["checkpoint"]
                         with serialized_torch():
+                            if checkpoint not in self.service.registry.networks:
+                                raise ContractError("unpublished native checkpoint reference")
                             network = self.service.registry.networks[checkpoint]
                             model, binding = network.config, network.binding
-                            if model.model_id != "mlp":
-                                raise ContractError("native player supports configured MLP only")
+                            sequence_model = model.model_id in SEQUENCE_MODEL_KINDS
+                            if model.model_id != policy["kind"] or sequence_model and not self._sequence:
+                                raise ContractError("native descriptor kind differs from published model")
+                            if (sequence_model and self.service.device != "cpu"
+                                    and checkpoint not in self.service._sequence_groups):
+                                raise ContractError("native sequence descriptor lacks a funded collection envelope")
                             limits = {
                                 "max_decisions": model.temporal.max_decisions,
                                 "max_episode_events": model.event.max_episode,
@@ -260,6 +284,11 @@ class RustPlayerRuntime:
                                     "descriptor differs from actual model/binding limits"
                                 )
                             policy["limits"] = limits
+                            # Preserve the obligation through uncertain native admission.
+                            self.service.retain(checkpoint)
+                            self._holds.setdefault(
+                                (game["run"], game["trial"], game["episode"]), []
+                            ).append(checkpoint)
             # Existing live-process owner produces the exact schema2 receipt;
             # representation validation is separate from native policy input.
             from gf_common.card_instance_runtime import validate_runtime_receipt
@@ -356,6 +385,10 @@ class RustPlayerRuntime:
             finally:
                 if self._service_thread is not None:
                     self._service_thread.join()
+            if self._sequence:
+                # Original producers and exported rows have settled. A failed
+                # fence must leave the admission charges and checkpoint holds.
+                self.service.settle_joined_sequence_service(dispatcher=self.dispatcher)
             with self._lock:
                 for checkpoints in self._holds.values():
                     for checkpoint in checkpoints:

@@ -299,6 +299,7 @@ class RustPlayerDeviceAccount:
         self._cache_owners: dict[str, Any] = {}
         self._learner_bytes = self._cache_bytes = 0
         self._collection_graph_bytes = 0
+        self._sequence_cache_bytes = self._sequence_pending_bytes = 0
         self._active: DeviceOperation | None = None
         self._poisoned = False
 
@@ -306,12 +307,15 @@ class RustPlayerDeviceAccount:
         if self._poisoned:
             raise ContractError('device account failed; actual operation remains held')
 
-    def _idle(self, *, allow_collection_graph: bool = False) -> None:
+    def _idle(self, *, allow_collection_graph: bool = False, allow_sequence: bool = False) -> None:
         self._healthy()
         if self._active is not None:
             raise ContractError('another device operation remains live')
         if self._collection_graph_bytes and not allow_collection_graph:
             raise ContractError('collection CUDA Graph must retire before this device phase')
+
+        if self._sequence_cache_bytes and not allow_sequence:
+            raise ContractError('sequence caches must retire before this device phase')
 
     @property
     def learner_tensor_bytes(self) -> int:
@@ -441,15 +445,16 @@ class RustPlayerDeviceAccount:
             self._recount_storage()
 
     def begin_row(self, checkpoint: str, *, interval_events: int, candidates: int,
-                  input_leaf_bytes: int, owner: Any = None) -> DeviceOperation:
+                  input_leaf_bytes: int, owner: Any = None, temporal_scratch: int = 0) -> DeviceOperation:
         with serialized_torch():
             available = self._serving_tensor_allowance()
             estimate = self._profiles[checkpoint].row.estimate(interval_events=interval_events,
                 candidates=candidates, input_leaf_bytes=input_leaf_bytes)
-            if estimate.peak_bytes > available:
-                required = self.global_bytes - available + estimate.peak_bytes
+            peak = estimate.peak_bytes + temporal_scratch
+            if peak > available:
+                required = self.global_bytes - available + peak
                 raise ContractError(f'CUDA actual row exceeds allowance: required={required} limit={self.global_bytes}')
-            self._active = DeviceOperation(self, 'row', owner=owner, storage_bytes=estimate.peak_bytes)
+            self._active = DeviceOperation(self, 'row', owner=owner, storage_bytes=peak)
             return self._active
 
     def serving_tensor_allowance(self) -> int:
@@ -458,9 +463,22 @@ class RustPlayerDeviceAccount:
             return self._serving_tensor_allowance()
 
     def _serving_tensor_allowance(self) -> int:
-        self._idle(allow_collection_graph=True)
+        self._idle(allow_collection_graph=True, allow_sequence=True)
         return (self.global_bytes - self.host_fixed_bytes - self.learner_tensor_bytes
-                - self.retained_cache_tensor_bytes - self._collection_graph_bytes)
+                - self.retained_cache_tensor_bytes - self._collection_graph_bytes
+                - self._sequence_cache_bytes - self._sequence_pending_bytes)
+
+    def reserve_sequence_collection(self, *, cache_bytes: int, pending_bytes: int) -> None:
+        with serialized_torch():
+            self._idle()
+            if cache_bytes + pending_bytes > self._serving_tensor_allowance():
+                raise ContractError("CUDA collection sequence cache exceeds allowance")
+            self._sequence_cache_bytes, self._sequence_pending_bytes = cache_bytes, pending_bytes
+
+    def clear_sequence_collection(self) -> None:
+        # Called only by the service owner after fencing the device and dropping caches.
+        with serialized_torch():
+            self._sequence_cache_bytes = self._sequence_pending_bytes = 0
 
     def begin_batch(self, peak_bytes: int, *, owner: Any) -> DeviceOperation:
         with serialized_torch():

@@ -154,16 +154,24 @@ def _checked_hpo_spec(state: Json) -> Json:
     integer(spec["schema_version"], expected_schema, expected_schema)
     if expected_schema in (5, 6) and (
         not is_shared_contract(action_config_v3(config['actions']).action_contract)
-        or config['model'].get('model_id') != 'mlp'
+        or expected_schema == 5 and config['model'].get('model_id') != 'mlp'
         or config['model'].get('inference', {}).get('device') != 'cuda:0'
         or config['preprocessing'].get('backend') != 'python'
     ):
-        raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
+        raise ContractError('shared HPO requires the adopted-profile Python CUDA contract')
     if rust_player:
-        from gf_common.rust_player import player_runtime
+        from gf_common.rust_player import (
+            player_runtime,
+            validate_player_model,
+            validate_sequence_numeric_budget,
+        )
         normalized = player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
         if normalized != spec["runtime"]:
             raise ContractError("normalized Rust player runtime declaration required")
+        validate_player_model(normalized, config["model"].get("model_id"), hpo=True, encoder=spec["encoder"])
+        validate_sequence_numeric_budget(normalized, spec["operating"].get("numeric_budget_bytes"))
+        if config["training"].get("device") != "cuda:0":
+            raise ContractError("HPO6 requires CUDA learner execution")
     if resident:
         from gf_common.shared_inference import runtime_for_spec
         runtime_for_spec(spec)

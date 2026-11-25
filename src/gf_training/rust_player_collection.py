@@ -19,7 +19,7 @@ from gf_common.hpo_storage import (
     check_collection_destinations,
     check_staged_collection_destinations,
 )
-from gf_common.rust_player import deadline_seconds
+from gf_common.rust_player import LEARNED_POLICY_KINDS, SEQUENCE_MODEL_KINDS, deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_common.schedule import serialize_schedule
 from gf_models.structured_runtime import own_game_worker_settings_v3
@@ -202,7 +202,7 @@ class RustPlayerCollector:
                         "limits": None, "attack_threshold": 12, "numeric_costs": asdict(costs)}
                     journal = {"policy": label, "model_id": binding.model_id, "caps": asdict(caps),
                         "numeric_costs": asdict(costs), "sampling_seed": episode.sampling_seeds[viewer - 1]}
-                    if binding.model_id == "mlp":
+                    if binding.model_id in LEARNED_POLICY_KINDS:
                         generation = int(Path(binding.policy_options["checkpoint"]).name)
                         policy = self.registry.policies[generation]
                         native.update(checkpoint=policy.files["inference.json"], epoch=generation,
@@ -308,13 +308,17 @@ class RustPlayerCollector:
             durable_mount = Path(mount.mount_point), os.makedev(int(major), int(minor))
         checkpoints: dict[str, None] = {}
         for binding in plan.bindings.values():
-            if binding.model_id == "mlp":
+            if binding.model_id in LEARNED_POLICY_KINDS:
                 published = self.registry.publish(int(Path(binding.policy_options["checkpoint"]).name),
                                                   deadline=plan.execution_deadline)
                 checkpoints[published["checkpoint"]] = None
+        sequence_seats = (sum(plan.bindings[label].model_id in SEQUENCE_MODEL_KINDS
+            for group in plan.groups for episode in group.episodes for label in episode.policies)
+            if self.registry.service.sequence_enabled else None)
         self.registry.service.bind_collection(tuple(checkpoints),
             game_concurrency=self.declaration["game_concurrency"], max_batch_size=self.declaration["max_batch_size"],
-            learner_checkpoint=self.registry.current.files["inference.json"])
+            learner_checkpoint=self.registry.current.files["inference.json"],
+            **({} if sequence_seats is None else {"scheduled_sequence_seats": sequence_seats}))
         diagnostics = self.runtime.diagnostics
         if diagnostics is not None:
             scope = diagnostics.scope(run_id=self.registry.state['run_id'],
@@ -442,7 +446,7 @@ class RustPlayerCollector:
                 "batch_id": plan.linkage["batch_id"], "start": start_counters, "end": end_counters,
                 "bindings": {label: {"checkpoint": binding.policy_options["expected_manifest_digest"],
                     "token": self.registry.cache[int(Path(binding.policy_options["checkpoint"]).name)]["binding"]["token"]}
-                    for label, binding in plan.bindings.items() if binding.model_id == "mlp"},
+                    for label, binding in plan.bindings.items() if binding.model_id in LEARNED_POLICY_KINDS},
                 "collection_retirement_sha256": digest(retirement)}
             manifest = {"schema_version": 11 if self.registry.hpo else 10, "kind": "card-instance-collection",
                 "command": "collect", "status": "complete" if healthy else "incomplete",

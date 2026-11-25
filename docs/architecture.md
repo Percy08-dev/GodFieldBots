@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0074](adr/0074-rust-player-sequence-hpo.md) extends the Rust HPO6
+collection and save/resume path to Model4 GRU and Transformer by explicit
+CUDA recipe. The [verification record](verification/rust-player-sequence-hpo.md)
+tracks each model's runtime evidence and the shared GIL and request supply
+measurements.
+
 [ADR0072](adr/0072-sacrifice-eligibility.md) makes Discard and Sacrifice use
 the same item eligibility in new HPO6 convergence runs. The new Action
 profile inherits the existing Simulator release and binds the corrected
@@ -1680,6 +1686,24 @@ Fresh Tokio declarations default to 16 workers. Effective configuration
 stores the worker count, and explicit worker values remain valid.
 The [verification record](verification/rust-player-cuda-batch-inference.md)
 tracks functional and performance acceptance.
+
+HPO6 `batched-torch-sequence-v1` uses the same Rust actor and FIFO for
+Model4 GRU and Transformer. Rust reports ordered row acceptance and retains
+the game slot through the service's retirement acknowledgement. The
+single PyTorch service stages hidden state or the next KV slot and advances
+the committed sequence only after a positive row result. It groups fixed
+geometry by checkpoint and own input lengths. Transformer groups also
+share the rows' committed own history length. The capacity planner funds
+up to the overlapping scheduled sequence seats and admits group scratch
+within the same device account. Failed retirement halts admission while
+the existing scheduler, writer and device owners settle.
+
+Sequence HPO6 uses `canonical-python` Numeric6 from the sealed Journal6 and
+the existing sequence PPO learner. The run saves at update boundaries and
+new collection games start with empty sequence caches. The effective
+configuration and producer fingerprints bind the explicit recipe on resume.
+The MLP and Model3 inference recipes continue to use their existing dispatch
+and Source paths. [Sequence design](design/rust-player-sequence-hpo.md)
 
 ## Verification and acceptance
 

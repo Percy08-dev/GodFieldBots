@@ -527,8 +527,8 @@ def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *
     from gf_training.native_backend import binary_identity
     from gf_training.rust_player_supervision import runtime_producer, write_control_record
     cfg, hpo, p = _config(loaded)
-    if not hpo or cfg.model.model_id != 'mlp' or mode not in ('fresh', 'resume'):
-        raise ContractError('explicit materialized HPO6 MLP fresh/resume factory required')
+    if not hpo or mode not in ('fresh', 'resume'):
+        raise ContractError('explicit materialized HPO6 fresh/resume factory required')
     if pause_after_update is not None:
         integer(pause_after_update, 1)
     namespace = Path(namespace).absolute()

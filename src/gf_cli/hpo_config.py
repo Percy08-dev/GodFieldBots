@@ -47,7 +47,11 @@ from gf_common.hpo_storage import (
     check_storage_extensions,
     hpo_diagnostics,
 )
-from gf_common.rust_player import player_runtime
+from gf_common.rust_player import (
+    player_runtime,
+    validate_player_model,
+    validate_sequence_numeric_budget,
+)
 from gf_common.shared_inference import shared_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
 from gf_common.training_opponents import parse_training_opponents
@@ -392,6 +396,7 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         spec.update(schema_version=5 if isinstance(campaign,SharedHPOCampaignConfig) else 4, origin=campaign.origin, encoder=campaign.encoder)
         preprocessing=preparation_config(asdict(replace(preprocessing,backend='python')))
     if isinstance(campaign, RustPlayerHPOCampaignConfig):
+        validate_player_model(campaign.runtime, model.model_id, hpo=True, encoder=campaign.encoder)
         spec.update(schema_version=6, runtime=player_runtime(campaign.runtime, game_concurrency=operating.game_concurrency),
             origin=campaign.origin, encoder=campaign.encoder)
     config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
@@ -445,8 +450,8 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
             raise ContractError("normalized HPO paths must remain absolute")
     actions = action_config_v3(effective["actions"])
     model = configured_model_v4(effective["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
-    if model.model_id != "mlp" or model.checkpoint is not None:
-        raise ContractError("Rust player requires fresh configured Model4 MLP")
+    if model.checkpoint is not None:
+        raise ContractError("Rust player requires fresh configured Model4")
     training = _runtime_training(effective["training"], spec)
     _run_projection(effective, spec, training)
     for name in ("run", "server", "evaluation", "opponent"):
@@ -474,7 +479,7 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
         revision=actions.action_contract.simulator_revision)
     _validate_rust_player_profile(run=effective["run"], server=effective["server"],
         actions=actions, model=model, opponent=opponent, training=training,
-        preprocessing=preprocessing, hpo=True)
+        preprocessing=preprocessing, hpo=True, runtime=spec["runtime"])
     try:
         if str(uuid.UUID(run["name"])) != run["name"]:
             raise ValueError
@@ -611,13 +616,13 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     if owned and (value["origin"] != "producer-owned-v1" or value["encoder"] != encoder):
         raise ContractError('owned HPO origin/encoder differs from its source recipe')
     shared = value["schema_version"] == 5
-    if rust_player and value['model_id'] != 'mlp':
-        raise ContractError('Rust player HPO6 supports Model4 MLP only')
     declared_operating = value.get('operating', {})
     operating = _operating(declared_operating, rust_player=rust_player)
     runtime: Json | None
     if rust_player:
         runtime = player_runtime(value['runtime'], game_concurrency=operating.game_concurrency)
+        validate_player_model(runtime, value['model_id'], hpo=True, encoder=encoder)
+        validate_sequence_numeric_budget(runtime, operating.numeric_budget_bytes)
     else:
         runtime = (shared_runtime(value["runtime"],game_concurrency=operating.game_concurrency) if shared else resident_runtime(value["runtime"])) if resident else None
     descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
@@ -693,8 +698,10 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
         if not isinstance(base.config.run, RunConfigV2):
             raise ContractError('checkpoint_evaluation requires the original evaluation phase deadlines')
         require_checkpoint_evaluation_room(checkpoint, finalization_seconds=base.config.run.finalization_seconds)
-    if (shared or rust_player) and (not is_shared_contract(base.config.actions.action_contract) or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
-        raise ContractError("shared HPO requires new-profile Python MLP base")
+    if ((shared or rust_player) and (not is_shared_contract(base.config.actions.action_contract)
+                                     or base.config.preprocessing.backend != "python")
+            or shared and model.model_id != "mlp"):
+        raise ContractError("shared HPO requires the adopted profile and a Python base")
     if rust_player:
         opponent = base.config.opponent
         if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == 'mlp')

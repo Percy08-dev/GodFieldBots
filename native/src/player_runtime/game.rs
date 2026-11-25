@@ -52,6 +52,9 @@ pub struct PolicySpec {
     pub numeric_costs: Option<Value>,
 }
 impl PolicySpec {
+    fn learned(&self) -> bool {
+        matches!(self.kind.as_str(), "mlp" | "gru" | "transformer")
+    }
     fn effective_costs<'a>(&'a self, default: &'a Value) -> &'a Value {
         self.numeric_costs.as_ref().unwrap_or(default)
     }
@@ -81,6 +84,9 @@ pub struct GameSpec {
     pub clock: Value,
 }
 impl GameSpec {
+    pub fn has_sequence(&self) -> bool {
+        self.policies.iter().any(|policy| matches!(policy.kind.as_str(), "gru" | "transformer"))
+    }
     pub fn validate(&self) -> Result<()> {
         let config = Config::parse(&self.actions, &self.rules)?;
         ensure(
@@ -106,10 +112,10 @@ impl GameSpec {
                 Costs::parse(costs)?;
             }
             ensure(
-                ["random", "heuristic", "refresh", "mlp"].contains(&p.kind.as_str()),
+                p.learned() || matches!(p.kind.as_str(), "random" | "heuristic" | "refresh"),
                 "unknown native policy",
             )?;
-            if p.kind != "mlp" {
+            if !p.learned() {
                 ensure(
                     config.max_sequence_length <= 18,
                     "corrected baseline kind/game capacity required",
@@ -118,11 +124,11 @@ impl GameSpec {
                 let checkpoint = p
                     .checkpoint
                     .as_deref()
-                    .ok_or_else(|| error("MLP checkpoint required"))?;
+                    .ok_or_else(|| error("learned policy checkpoint required"))?;
                 let l = p
                     .limits
                     .as_ref()
-                    .ok_or_else(|| error("configured MLP model limits required"))?;
+                    .ok_or_else(|| error("configured learned policy limits required"))?;
                 ensure(
                     checkpoint.len() == 64
                         && checkpoint
@@ -194,8 +200,8 @@ impl OwnPolicy for Baseline {
         json!({"rng":self.rng.state(),"refresh":self.refresh})
     }
 }
-struct Mlp;
-impl OwnPolicy for Mlp {
+struct Inference;
+impl OwnPolicy for Inference {
     fn select(&mut self, _: &Input, _: &Config, _: &Table) -> Result<Option<usize>> {
         Ok(None)
     }
@@ -213,8 +219,8 @@ struct Participant {
 }
 impl Participant {
     fn new(actor: u8, episode: String, spec: PolicySpec) -> Result<Self> {
-        let policy: Box<dyn OwnPolicy> = if spec.kind == "mlp" {
-            Box::new(Mlp)
+        let policy: Box<dyn OwnPolicy> = if spec.learned() {
+            Box::new(Inference)
         } else {
             Box::new(Baseline {
                 kind: spec.kind.clone(),
@@ -582,7 +588,11 @@ impl Actor {
         }
         Ok(())
     }
-    async fn cleanup(&mut self, dispatcher: &Arc<Dispatcher>) {
+    async fn cleanup(
+        &mut self,
+        dispatcher: &Arc<Dispatcher>,
+        cancel: &super::scheduler::Cancellation,
+    ) {
         self.http.deadline = self.spec.cleanup_deadline;
         let Some(game) = self.game.clone() else {
             self.report.inference_released = true;
@@ -683,15 +693,25 @@ impl Actor {
         if let Err(e) = self.http.delete(&game).await {
             self.report.cleanup_errors.push(format!("Delete: {e}"));
         }
-        match dispatcher
-            .release_game_async(&self.spec.run, &self.spec.trial, &game, self.http.deadline)
-            .await
-        {
+        let sequence = self.spec.has_sequence();
+        let (run, trial, deadline) = (&self.spec.run, &self.spec.trial, self.http.deadline);
+        let release = if sequence {
+            dispatcher.release_game_sequence(run, trial, &game, deadline).await
+        } else {
+            dispatcher.release_game_async(run, trial, &game, deadline).await
+        };
+        match release {
             Ok(()) => self.report.inference_released = true,
-            Err(e) => self
-                .report
-                .cleanup_errors
-                .push(format!("inference release: {e}")),
+            Err(e) => {
+                if sequence {
+                    // The owning scheduler's permit is still held here.
+                    // Stop queued and future admissions before this failed
+                    // game's temporal bank could be replaced.
+                    cancel.cancel();
+                    dispatcher.close(e.clone());
+                }
+                self.report.cleanup_errors.push(format!("inference release: {e}"));
+            }
         }
     }
 }
@@ -740,7 +760,7 @@ pub async fn run(
         }
         actor.report.error = Some(e.to_string());
     }
-    actor.cleanup(&dispatcher).await;
+    actor.cleanup(&dispatcher, &cancel).await;
     let game = actor.game.as_deref().unwrap_or("");
     let mut training = None;
     if let Some(trajectory) = actor.training.take()

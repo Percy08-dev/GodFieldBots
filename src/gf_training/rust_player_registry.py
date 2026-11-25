@@ -11,6 +11,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, clone, digest
 from gf_common.ram_bank import MAX_BANK_BYTES, ReadonlyRamBankSet
+from gf_common.rust_player import LEARNED_POLICY_KINDS
 from gf_common.rust_ppo_source import source_encoder
 from gf_models.rust_player import serialized_torch
 from gf_training.group_pack_source import OriginalFile
@@ -379,6 +380,8 @@ class RustRunRegistry:
                         or actual_plan != self.local.last_device_plan.record()):
                     raise ContractError('update plan differs from SAME local immutable operation')
                 validate_record_shape(update, "update", hpo=self.hpo)
+                if update["model_id"] != self.state["model_id"]:
+                    raise ContractError("update model identity differs from its original run")
                 compressed = self.hpo and compressed_updates(self.state)
                 row["update_sha256"] = self.writer.write(
                     self.directory / "updates" / update_name(generation, compressed=compressed),
@@ -415,7 +418,7 @@ class RustRunRegistry:
         self.require()
         policies = {}
         for label, binding in bindings.items():
-            if binding.model_id != "mlp":
+            if binding.model_id not in LEARNED_POLICY_KINDS:
                 continue
             generation = int(Path(binding.policy_options["checkpoint"]).name)
             if (label, binding) != self.binding(generation):

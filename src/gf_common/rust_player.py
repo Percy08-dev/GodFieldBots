@@ -41,6 +41,9 @@ BUDGET_KEYS = {
 DEADLINE_KEYS = ("admission_bits", "execution_bits", "term_bits", "kill_bits", "finish_bits")
 PLAYER_RUNTIME_MODE = "rust-player-runtime-v1"
 BATCHED_TORCH_INFERENCE = "batched-torch-v1"
+BATCHED_TORCH_SEQUENCE_INFERENCE = "batched-torch-sequence-v1"
+SEQUENCE_MODEL_KINDS = frozenset(("gru", "transformer"))
+LEARNED_POLICY_KINDS = SEQUENCE_MODEL_KINDS | {"mlp"}
 RUST_BATCHED_TORCH_GRAPH_RECIPE = "batched-torch-graph-v1"
 
 
@@ -60,7 +63,8 @@ def player_runtime(value: Any, *, game_concurrency: int) -> Json:
     if raw["mode"] != PLAYER_RUNTIME_MODE or raw["scheduler"] not in ("tokio", "fixed"):
         raise ContractError("explicit Rust player mode and tokio|fixed scheduler required")
     if "inference_recipe" in raw and raw["inference_recipe"] not in (
-            BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
+            BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE,
+            BATCHED_TORCH_SEQUENCE_INFERENCE):
         raise ContractError("unknown Rust player inference recipe")
     if "player_worker_threads" not in raw:
         if raw["scheduler"] == "fixed":
@@ -79,6 +83,23 @@ def player_runtime(value: Any, *, game_concurrency: int) -> Json:
     except OverflowError as error:
         raise ContractError("finite nonnegative Rust player formation wait required") from error
     return dict(raw, formation_wait_ms=wait)
+
+
+def validate_player_model(runtime: Json, model_id: Any, *, hpo: bool,
+                          encoder: str = "canonical-python") -> None:
+    if runtime.get("inference_recipe") == BATCHED_TORCH_SEQUENCE_INFERENCE:
+        if hpo and type(model_id) is str and model_id in SEQUENCE_MODEL_KINDS and encoder == "canonical-python":
+            return
+        raise ContractError("sequence inference requires HPO6 GRU/Transformer and canonical-python Source")
+    if model_id != "mlp":
+        raise ContractError("Rust player requires MLP unless HPO6 selects sequence inference")
+
+
+def validate_sequence_numeric_budget(runtime: Json, amount: Any) -> None:
+    if runtime.get("inference_recipe") == BATCHED_TORCH_SEQUENCE_INFERENCE:
+        from gf_common.ram_bank import MAX_BANK_BYTES
+        if type(amount) is not int or not 1 <= amount <= MAX_BANK_BYTES:
+            raise ContractError("canonical-python numeric budget exceeds Numeric6 bank capacity")
 
 
 def require_legacy_player_entry(config: Any) -> None:
