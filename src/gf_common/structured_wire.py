@@ -25,6 +25,7 @@ from gf_common.structured import (
     Selection,
     _frame_type,
     _validate_purpose,
+    _VerifiedJournalFrame,
     event_delta,
 )
 from gf_common.structured_layout import (
@@ -36,6 +37,10 @@ from gf_common.structured_layout import (
 
 
 def frame_dict(frame: DecisionFrame, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
+    return _frame_dict(frame, layout=layout)
+
+
+def _frame_dict(frame: DecisionFrame | _VerifiedJournalFrame, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
     if frame.layout is not require_layout(layout):
         raise ContractError("frame wire layout mismatch")
     return {"actor": frame.actor, "episode": frame.episode, "revision": frame.revision,

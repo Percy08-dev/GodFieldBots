@@ -224,6 +224,155 @@ def journal_context(spec):
     )
 
 
+@pytest.fixture
+def sacrifice_release():
+    from pathlib import Path
+
+    from gf_common.card_instance import sacrifice_card_instance_contract
+
+    source = Path("/home/percy/develop/GodFieldBots/runs/pestle-mirage-compat/simulator")
+    binary = source / "target/release/gf-test-server"
+    if not binary.exists():
+        pytest.skip("approved Sacrifice Simulator release unavailable")
+    return {"source": source, "binary": binary, "contract": sacrifice_card_instance_contract()}
+
+
+@pytest.mark.parametrize("scratch_refused", [False, True])
+def test_live_sacrifice_writer_uses_native_frame_and_preserves_original_bytes(
+    tmp_path, monkeypatch, sacrifice_release, scratch_refused
+):
+    import sys
+    from dataclasses import replace
+
+    from gf_common.structured import EventBank
+    from gf_simulator_client.rust_player import RustPlayerRuntime
+    from gf_training import rust_player_storage as storage
+    from gf_training.group_pack_resources import StorageBudget
+    from tests.test_rust_player_runtime import game_spec, managed, runtime_config
+
+    settings = StorageSettings(
+        db_root=tmp_path / "catalog", ram_root=tmp_path / "ram",
+        budget_bytes=512 * MIB, queue_bytes=4 * MIB,
+    )
+    deadline = time.monotonic() + 30
+    workspace = StorageBudget(settings, deadline)
+    runtime = RustPlayerRuntime(runtime_config() | {"storage_bytes": settings.budget_bytes})
+    writer = reference = reference_sink = None
+    try:
+        with managed(tmp_path / "server", **sacrifice_release) as (startup, receipt):
+            spec = game_spec(startup, receipt, deadline=deadline)
+            spec["actions"]["action_contract"] = receipt["action_contract"]
+            context = replace(journal_context(spec), learner_viewer=1)
+            writer = storage.RustPlayerStorage(
+                runtime, tmp_path / "collection", run_id=spec["run"],
+                contexts=(context,), groups=(storage.StorageGroup("g", (context.episode_id,), {}),),
+                settings=settings, workspace=workspace, workspace_bytes=256 * MIB,
+                deadline=deadline, cleanup_deadline=deadline + 5,
+            )
+            workspace_owner = writer._workspace_lease
+            assert workspace_owner._frame_scratch is None
+            if scratch_refused:
+                # Force the native estimate refusal while keeping the original
+                # soft workspace available to the Python fallback and Pack.
+                workspace_owner._frame_scratch_bytes = 64 * 1024
+            reference_sink = storage.RecordingArtifacts(writer.budget)
+            reference = storage.CanonicalEpisodeEncoder(context, reference_sink)
+            reference._native_candidates = False
+            runtime.start([spec])
+
+            def unexpected(*args, **kwargs):
+                pytest.fail("live writer repeated Python frame or EventBank validation")
+
+            original_verify = storage._verified_pending_frame
+            original_parse = storage.parse_frame
+            native_calls = 0
+            fallback_calls = 0
+
+            def verify(actual_bundle, scratch, actual_deadline):
+                nonlocal native_calls
+                assert actual_bundle is bundle
+                assert scratch is workspace_owner._frame_scratch
+                assert actual_deadline == context.deadline
+                if native_calls == 0:
+                    with pytest.raises(TimeoutError, match="deadline"):
+                        actual_bundle._journal_frame(scratch, time.monotonic() - 1)
+                native_calls += 1
+                frame = original_verify(actual_bundle, scratch, actual_deadline)
+                assert frame.payload == reference.journals[frame.actor].last_frame.payload
+                return frame
+
+            def fallback(*args, **kwargs):
+                nonlocal fallback_calls
+                fallback_calls += 1
+                return original_parse(*args, **kwargs)
+
+            def chunks(sink):
+                return {name: b"".join(raw for raw, _ in value) for name, value in sink.chunks.items()}
+
+            original_commit = writer._commit
+            terminal_compared = False
+
+            def compare_and_commit(group):
+                nonlocal terminal_compared
+                if writer.encoders[context.episode_id].terminal is not None:
+                    assert chunks(writer.sinks["g"]) == chunks(reference_sink)
+                    terminal_compared = True
+                original_commit(group)
+
+            monkeypatch.setattr(writer, "_commit", compare_and_commit)
+            monkeypatch.setattr(storage, "_verified_pending_frame", verify)
+            checked_wrong_kind = False
+            observed_pending = 0
+            retained_learner_rows = False
+            while reference.terminal is None:
+                bundle = runtime.next_storage(deadline)
+                reference.consume(bundle)
+                if bundle.kind == "pending":
+                    observed_pending += 1
+                    with monkeypatch.context() as live:
+                        live.setattr(storage, "parse_frame", fallback if scratch_refused else unexpected)
+                        live.setattr(EventBank, "view", unexpected)
+                        writer.accept(bundle)
+                else:
+                    if not checked_wrong_kind:
+                        with pytest.raises(ValueError, match="requires pending"):
+                            bundle._journal_frame(workspace_owner._frame_scratch, deadline)
+                        checked_wrong_kind = True
+                    writer.accept(bundle)
+                if bundle.kind != "terminal":
+                    assert chunks(writer.sinks["g"]) == chunks(reference_sink)
+                    training = writer.encoders[context.episode_id].training
+                    retained_learner_rows |= bool(training.rows)
+                    assert [row.frame.payload for row in training.rows] == [
+                        row.frame.payload for row in reference.training.rows
+                    ]
+                    assert training._lease.lease.size == training._active_bytes
+                    assert training._active_bytes - training._action_bytes >= sum(
+                        sys.getsizeof(row.frame.payload) for row in training.rows
+                    )
+                runtime.storage_ack(bundle)
+                del bundle
+            assert native_calls == observed_pending > 0
+            assert checked_wrong_kind and retained_learner_rows
+            assert fallback_calls == (native_calls if scratch_refused else 0)
+            runtime.wait(deadline)
+            writer.seal()
+            writer.join()
+            assert terminal_compared
+            assert workspace_owner._frame_scratch is None
+            assert workspace.peak == 256 * MIB
+            assert workspace.used == 0
+    finally:
+        runtime.cancel("writer frame test cleanup")
+        runtime.join()
+        if reference is not None:
+            reference.retire()
+        if reference_sink is not None:
+            reference_sink.close()
+        if writer is not None:
+            writer.close()
+
+
 @pytest.mark.parametrize("decisions", [8])
 def test_actual_native_originals_encode_journal6_and_both_replay_views(
     tmp_path, monkeypatch, decisions
@@ -501,15 +650,16 @@ def hashlib_sha(view):
 @pytest.mark.parametrize(
     "failure",
     [
-        "duplicate", "sql", "publication", "command", "interval-prefix", "mixed-profile",
+        "duplicate", "sql", "publication", "command", "interval-prefix", "foreign-frame-proof",
+        "mixed-profile",
         "old-writer-new-table", "new-writer-old-table",
     ],
 )
 def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, request
 ):
     import os
-    from contextlib import suppress
+    from contextlib import ExitStack, suppress
     from dataclasses import replace
     from pathlib import Path
     from types import SimpleNamespace
@@ -525,10 +675,12 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
         RustPlayerStorage,
         StorageGroup,
     )
-    from tests.test_rust_player_runtime import game_spec, managed, runtime_config
+    from tests.test_rust_player_runtime import fault_proxy, game_spec, managed, runtime_config
 
-    release = {}
+    frame_fault = failure in ("interval-prefix", "foreign-frame-proof")
+    release = request.getfixturevalue("sacrifice_release") if frame_fault else {}
     foreign_contract = None
+    proxy = None
     if failure in ("old-writer-new-table", "new-writer-old-table"):
         old_writer = failure == "old-writer-new-table"
         env = "GFB_P41_TEST" if old_writer else "GFB_DREAM_COMPAT_TEST"
@@ -542,7 +694,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     elif failure == "mixed-profile":
         foreign_contract = card_instance.strength_powder_card_instance_contract()
 
-    rejects_pending = failure in ("command", "interval-prefix") or foreign_contract is not None
+    rejects_pending = frame_fault or failure == "command" or foreign_contract is not None
     prefix_rejected = False
     if failure == "interval-prefix":
         begin_native_frame = storage_module._Journal._begin_native_frame
@@ -551,11 +703,18 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             nonlocal prefix_rejected
             start_hash = "0" * 64
             assert start_hash != frame.interval_start_hash
+            assert isinstance(frame, storage_module._VerifiedJournalFrame)
+            raw = storage_module.decode_original(bundle)
+            historical = storage_module.parse_frame(raw["frame"], layout=storage_module.LAYOUT)
             bad_frame = replace(
                 frame, interval_start_hash=start_hash,
-                frame_hash=digest(frame._binding() | {"interval_start_hash": start_hash}),
+                frame_hash=digest(historical._binding() | {"interval_start_hash": start_hash}),
             )
-            table = storage_module.decode_original(bundle)["generated"]["table"]
+            assert storage_module.parse_frame(
+                raw["frame"] | {"interval_start_hash": start_hash, "frame_hash": bad_frame.frame_hash},
+                layout=storage_module.LAYOUT,
+            ).frame_hash == bad_frame.frame_hash
+            table = raw["generated"]["table"]
             table.pop("table_hash")
             table_hash = digest(table | {"frame_hash": bad_frame.frame_hash})
 
@@ -581,6 +740,21 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             raise rejected.value
 
         monkeypatch.setattr(storage_module._Journal, "_begin_native_frame", wrong_prefix)
+    elif failure == "foreign-frame-proof":
+        def wrong_proof(bundle, scratch, deadline):
+            assert other is not None
+            genuine = real_proof(bundle, scratch, deadline)
+            foreign = real_proof(other, scratch, deadline)
+            assert (
+                foreign.actor, foreign.revision, foreign.interval_start, foreign.boundary.end,
+            ) == (genuine.actor, genuine.revision, genuine.interval_start, genuine.boundary.end)
+            assert foreign.episode != genuine.episode and foreign.frame_hash != genuine.frame_hash
+            # Even if placed in this episode's metadata, the foreign proof
+            # must still fail the independent whole-candidate frame hash.
+            return replace(foreign, episode=genuine.episode)
+
+        real_proof = storage_module._verified_pending_frame
+        monkeypatch.setattr(storage_module, "_verified_pending_frame", wrong_proof)
     elif rejects_pending:
         decode = storage_module.decode_original
 
@@ -622,8 +796,13 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     runtime = RustPlayerRuntime(runtime_config() | {"storage_bytes": settings.budget_bytes})
     writer = None
     held = None
+    other = None
     try:
-        with managed(tmp_path / "server", **release) as (startup, receipt):
+        with ExitStack() as stack:
+            count = 2 if failure == "foreign-frame-proof" else 1
+            startup, receipt = stack.enter_context(managed(tmp_path / "server", count=count, **release))
+            if frame_fault:
+                startup, proxy = stack.enter_context(fault_proxy(startup, "passthrough"))
             spec = game_spec(startup, receipt)
             spec["actions"]["action_contract"] = receipt["action_contract"]
             writer = RustPlayerStorage(
@@ -638,14 +817,31 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
                 deadline=time.monotonic() + 20,
                 cleanup_deadline=time.monotonic() + 25,
             )
-            runtime.start([spec])
+            ready = []
+            if failure == "foreign-frame-proof":
+                # The repeated seed gives both actual episodes a frame
+                # at the same seat, revision and interval.
+                foreign_spec = spec | {"episode": "foreign"}
+                runtime.start([spec, foreign_spec])
+                ready = sorted(
+                    (runtime.next_storage(time.monotonic() + 10) for _ in range(2)),
+                    key=lambda bundle: bundle.episode != spec["episode"],
+                )
+                original, other = ready
+                assert original.kind == other.kind == "pending" and original.game != other.game
+                ready.pop()
+                del original
+            else:
+                runtime.start([spec])
             while True:
-                bundle = runtime.next_storage(time.monotonic() + 10)
+                bundle = ready.pop() if ready else runtime.next_storage(time.monotonic() + 10)
                 if rejects_pending and bundle.kind == "pending":
                     held = bundle.view()
                     with pytest.raises(RuntimeError, match="storage failed") as caught:
                         writer.accept(bundle)
                     assert failure != "interval-prefix" or prefix_rejected
+                    if failure == "foreign-frame-proof":
+                        assert "candidate/frame/report mismatch" in str(caught.value)
                     caught.value.__traceback__ = None  # caller's exception retained the original
                     del caught, bundle
                     break
@@ -675,13 +871,15 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             if pending.exists():
                 assert pending.read_bytes().startswith(b"GFB-QUARANTINED")
             runtime.join()
+            if frame_fault:
+                assert not proxy["act_started"].is_set()
             assert runtime.recording_account().native_bytes >= held.nbytes
-            held = None
+            held = other = None
             if failure == "duplicate":
                 del bundle
             assert runtime.recording_account().used == 0
     finally:
-        held = None
+        held = other = None
         runtime.cancel("fault test complete")
         runtime.join()
         if writer is not None:

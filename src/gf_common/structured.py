@@ -276,7 +276,7 @@ class EventBank:
             self._events.append(event)
         return self.boundary
 
-    def _require_frame_prefix(self, frame: DecisionFrame) -> None:
+    def _require_frame_prefix(self, frame: DecisionFrame | _VerifiedJournalFrame) -> None:
         # The live writer has appended the validated delta and matched the end boundary.
         if (self.layout is not frame.layout
                 or (self.actor, self.episode) != (frame.actor, frame.episode)):
@@ -293,6 +293,28 @@ class EventBank:
                      _CardInstanceEventBankView if self.layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventBankView)
         return view_type(self.actor, self.episode, tuple(self._events[:boundary.end]),
                              tuple(self._prefixes[:boundary.end + 1]))
+
+
+@dataclass(frozen=True)
+class _VerifiedJournalFrame:
+    """Writer-only metadata and canonical payload from the original native frame."""
+
+    actor: int
+    episode: str
+    revision: int
+    interval_start: int
+    boundary: EventBoundary
+    interval_start_hash: str
+    payload: bytes = field(repr=False)
+    frame_hash: str
+
+    @property
+    def layout(self) -> StructuredLayout:
+        return CORRECTED_CARD_INSTANCE_LAYOUT
+
+    @property
+    def raw(self) -> Json:
+        return json.loads(self.payload)
 
 
 @dataclass(frozen=True)

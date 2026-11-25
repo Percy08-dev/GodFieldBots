@@ -36,11 +36,18 @@ from gf_common.domain import (
     digest,
     integer,
 )
-from gf_common.structured import DecisionFrame, EventBank, EventBankView, EventDelta, Selection
+from gf_common.structured import (
+    DecisionFrame,
+    EventBank,
+    EventBankView,
+    EventDelta,
+    Selection,
+    _VerifiedJournalFrame,
+)
 from gf_common.structured_tokens import recorded_aggregate_recipe, signature
 from gf_common.structured_wire import (
+    _frame_dict,
     delta_dict,
-    frame_dict,
     parse_delta,
     parse_frame,
     parse_report,
@@ -101,7 +108,7 @@ class StructuredJournal(ParticipantJournal):
         self.commands: dict[int, Json] = {}
         self.lifecycle_ack: Json | None = None
         self.last_accepted: int | None = None
-        self.last_frame: DecisionFrame | None = None
+        self.last_frame: DecisionFrame | _VerifiedJournalFrame | None = None
         self.bank = EventBank(viewer, bank_episode, caps["max_episode_events"])
         self.caps, self.policy = caps, policy
         self.header = {**classification, "kind": "header", "schema_version": 5, "feature_version": STRUCTURED_FEATURE_VERSION,
@@ -146,7 +153,7 @@ class StructuredJournal(ParticipantJournal):
         )
 
     def _begin_frame(
-        self, frame: DecisionFrame, delta: EventDelta, report: SearchReport | SearchReportV3,
+        self, frame: DecisionFrame | _VerifiedJournalFrame, delta: EventDelta, report: SearchReport | SearchReportV3,
         selection: Selection, command: Json, timings: Json, started: float, *,
         candidate_count: int, action: Callable[[], Json], publish: Callable[[], Json],
         offsets: tuple[int, ...] | None = None, owned_bank: bool = False,
@@ -184,8 +191,10 @@ class StructuredJournal(ParticipantJournal):
             raise ContractError("journal5 delta must match exact frame boundary")
         if owned_bank:
             self.bank._require_frame_prefix(frame)
-        else:
+        elif isinstance(frame, DecisionFrame):
             frame.bank_view(self.bank.view())
+        else:
+            raise ContractError("verified writer frame requires its owned event bank")
         if selection.policy_version != self.policy or report.config_hash != self.header["action_config_hash"]:
             raise ContractError("journal5 policy/search configuration mismatch")
         if report.rng_before != self.last_search_state:
@@ -203,7 +212,7 @@ class StructuredJournal(ParticipantJournal):
         active_layout = {} if self._context is None else {"layout": self._context.layout}
         self.write({"kind": "events", "delta": delta_dict(delta, **active_layout), "boundary": {"end": frame.boundary.end,
                     "prefix_hash": frame.boundary.prefix_hash}})
-        self.write({"kind": "decision", "decision": index, "frame": frame_dict(frame, **active_layout),
+        self.write({"kind": "decision", "decision": index, "frame": _frame_dict(frame, **active_layout),
                     "table": descriptor, "search_report": asdict(report), "selection": asdict(selection),
                     "command": command, "timings": timings})
         self.pending.add(index)
@@ -316,7 +325,7 @@ class LogicalSidecarEvidence:
     kind: str = "logical-candidate-bytes-v1"
 
 
-def _command(command: Json, frame: DecisionFrame, action: Json) -> None:
+def _command(command: Json, frame: DecisionFrame | _VerifiedJournalFrame, action: Json) -> None:
     closed(command, {"command_id", "expected_revision", "action"})
     try:
         if str(uuid.UUID(command["command_id"])) != command["command_id"]:

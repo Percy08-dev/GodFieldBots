@@ -1,15 +1,22 @@
 //! Immutable capture transport. Acceptance transfers custody, never proves persistence.
-use super::super::{ensure, error, http::HttpFacts, training::{Episode, PlayerPpoEpisode}};
+use super::super::{
+    ensure, error,
+    http::HttpFacts,
+    training::{Episode, PlayerPpoEpisode},
+};
 use crate::{
-    budget::monotonic,
+    budget::{Budget, BudgetVec, Control, monotonic},
     error::{Error, Result},
+    json::{self, ValueExt},
+    structured_journal::card_instance,
 };
 use ndarray::Array1;
 use numpy::PyArray1;
 use pyo3::{prelude::*, types::PyBytes};
-use serde::Serialize;
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     collections::{HashMap, VecDeque},
     io::Write,
     sync::{Arc, Condvar, Mutex},
@@ -490,6 +497,81 @@ impl Mailbox {
         self.notify();
     }
 }
+// Only the dedicated writer uses this scratch budget, within its existing
+// workspace reservation. It issues no recording reservation of its own.
+#[pyclass(frozen, name = "_JournalFrameScratch", module = "gf_native")]
+pub struct JournalFrameScratch {
+    budget: Arc<Budget>,
+}
+
+type FrameMetadata = (u8, String, u64, usize, (usize, String), String, String);
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct CaptureKey<'a>(#[serde(borrow)] Cow<'a, str>);
+
+fn expect_delimiter(raw: &[u8], delimiter: u8) -> Result<&[u8]> {
+    let mut rest = raw;
+    while matches!(rest.first(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+        rest = &rest[1..];
+    }
+    rest.strip_prefix(&[delimiter])
+        .ok_or_else(|| Error::contract("invalid pending frame member delimiter"))
+}
+
+fn capture_frame<'a>(raw: &'a [u8], control: &Control) -> Result<&'a [u8]> {
+    let mut rest = expect_delimiter(raw, b'{')?;
+    loop {
+        control.check()?;
+        let mut keys = serde_json::Deserializer::from_slice(rest).into_iter::<CaptureKey>();
+        let key = keys
+            .next()
+            .ok_or_else(|| Error::contract("missing pending frame"))?
+            .map_err(|error| Error::contract(error.to_string()))?;
+        let value = expect_delimiter(&rest[keys.byte_offset()..], b':')?;
+        let mut items = serde_json::Deserializer::from_slice(value).into_iter::<IgnoredAny>();
+        items
+            .next()
+            .ok_or_else(|| Error::contract("missing pending member value"))?
+            .map_err(|error| Error::contract(error.to_string()))?;
+        let end = items.byte_offset();
+        if key.0 == "frame" {
+            // The typed candidate parser still owns the whole record,
+            // including duplicate frame fields and malformed suffixes.
+            return Ok(&value[..end]);
+        }
+        rest = expect_delimiter(&value[end..], b',')?;
+    }
+}
+
+fn checked_journal_frame(
+    raw: &[u8],
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<(FrameMetadata, BudgetVec<u8>)> {
+    let document = json::parse(capture_frame(raw, control)?, budget, control)?;
+    let frame = &document.root;
+    // This verifier uses the historical corrected frame layout pin. The
+    // operational Sacrifice (or earlier shared) action contract belongs to
+    // the candidate table, not the unchanged frame hash binding.
+    card_instance::frame(frame, budget, control)?;
+    let boundary = frame.require("boundary")?;
+    let meta = (
+        frame.require("actor")?.integer(1, 2)? as u8,
+        frame.require("episode")?.string()?.to_owned(),
+        frame.require("revision")?.integer(0, u64::MAX as i128)? as u64,
+        frame.require("interval_start")?.integer(0, i32::MAX as i128)? as usize,
+        (
+            boundary.require("end")?.integer(0, i32::MAX as i128)? as usize,
+            boundary.require("prefix_hash")?.string()?.to_owned(),
+        ),
+        frame.require("interval_start_hash")?.string()?.to_owned(),
+        frame.require("frame_hash")?.string()?.to_owned(),
+    );
+    let payload = json::canonical(frame.require("payload")?, budget, control)?;
+    Ok((meta, payload))
+}
+
 #[pyclass(frozen)]
 pub struct StorageBundle {
     pub(crate) record: Arc<Record>,
@@ -544,6 +626,38 @@ impl StorageBundle {
         self.record._reservation.account.metrics.increment("pyo3_other", 1);
         self.record.array.len()
     }
+    #[staticmethod]
+    fn _journal_frame_scratch(workspace_bytes: usize) -> JournalFrameScratch {
+        JournalFrameScratch {
+            budget: Budget::new(workspace_bytes),
+        }
+    }
+    fn _journal_frame<'py>(
+        &self,
+        py: Python<'py>,
+        scratch: &JournalFrameScratch,
+        deadline: f64,
+    ) -> PyResult<(FrameMetadata, Bound<'py, PyBytes>)> {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
+        ensure(self.record.kind == "pending", "writer frame requires pending")
+            .map_err(crate::python_error)?;
+        let original = self.record.array.as_slice().expect("own contiguous capture");
+        let control = Control::new(deadline).map_err(crate::python_error)?;
+        let budget = &scratch.budget;
+        let (meta, payload, copy) = py
+            .detach(|| {
+                let (meta, payload) = checked_journal_frame(original, budget, &control)?;
+                let copy = budget.reserve(payload.len())?;
+                control.check()?;
+                Ok((meta, payload, copy))
+            })
+            .map_err(crate::python_error)?;
+        let owned = PyBytes::new(py, &payload);
+        drop(payload);
+        drop(copy);
+        control.check().map_err(crate::python_error)?;
+        Ok((meta, owned))
+    }
     /// Independently validate and encode the writer's original pending candidate table.
     /// The caller reserves the codec Vec and Python bytes using the same recording account.
     fn _journal_candidates<'py>(
@@ -580,6 +694,95 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    #[test]
+    fn journal_frame_reads_the_first_decoded_key_at_the_top_level() {
+        let control = Control::new(monotonic() + 5.).unwrap();
+        let raw = br#" { "other": {"frame": "inside", "quote": "x\"y"}, "fra\u006de" : {"expected":true}, invalid"#;
+        let frame = capture_frame(raw, &control).unwrap();
+        assert_eq!(frame, br#" {"expected":true}"#);
+        for raw in [
+            br#"{}"#.as_slice(),
+            br#"{"frame" {}}"#,
+            br#"{"other":{}, "frame"}"#,
+            br#"{"other": [1 2], "frame": {}}"#,
+            br#"{"frame": {"bad": }}"#,
+        ] {
+            assert!(capture_frame(raw, &control).is_err(), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn journal_frame_and_whole_candidate_checks_jointly_bind_the_original() {
+        let doc: json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../tests/fixtures/rust_player_v5/originals.json"
+        ))
+        .unwrap();
+        let decision = &doc["episodes"][0]["decisions"][0];
+        let table = &decision["generated"]["table"];
+        let count = table["kinds"].as_array().unwrap().len();
+        let elements = table["slots"].as_array().unwrap().len();
+        let table_bytes = ((2 * count).next_multiple_of(8) + 36 * count).next_multiple_of(8)
+            + 8 * (count + 1) + elements;
+        let frame = &decision["frame"];
+        let record = format!(
+            "{{\"frame\":{frame},\"generated\":{{\"table\":{table}}},\"selected\":0}}"
+        );
+        let budget = Budget::new(32 * 1024 * 1024);
+        let control = Control::new(monotonic() + 5.).unwrap();
+        let (meta, payload) = checked_journal_frame(record.as_bytes(), &budget, &control).unwrap();
+        let candidates = super::super::super::journal_candidates::check(
+            record.as_bytes(), 18, table_bytes,
+        )
+        .unwrap();
+        assert_eq!(meta.6, candidates.frame_hash);
+        assert_eq!(&*payload, serde_json::to_vec(&frame["payload"]).unwrap());
+        drop(payload);
+        assert_eq!(budget.used(), 0);
+
+        for (suffix, expected) in [
+            (format!(r#", "fra\u006de": {frame}}}"#), "duplicate field"),
+            (", broken}".into(), "key must be a string"),
+        ] {
+            let invalid = format!("{}{suffix}", record.strip_suffix('}').unwrap());
+            assert!(checked_journal_frame(invalid.as_bytes(), &budget, &control).is_ok());
+            let error = super::super::super::journal_candidates::check(
+                invalid.as_bytes(), 18, table_bytes,
+            )
+            .err()
+            .unwrap();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(budget.used(), 0);
+        }
+        let expired = Control::new(monotonic() - 1.).unwrap();
+        assert!(matches!(checked_journal_frame(record.as_bytes(), &budget, &expired), Err(Error::Deadline)));
+        let tiny = Budget::new(64 * 1024);
+        assert!(matches!(checked_journal_frame(record.as_bytes(), &tiny, &control), Err(Error::ResourceLimit(_))));
+        assert_eq!(tiny.used(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires pairs of frame captures and independent Python payloads from a sealed sample"]
+    fn journal_frame_sealed_sample_payload_and_fault_parity() {
+        let base = std::path::PathBuf::from(std::env::var_os("GFB_FRAME_PARITY_DIR").unwrap());
+        let budget = Budget::new(32 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        for name in ["early", "late"] {
+            let captures = std::fs::read_to_string(base.join(format!("{name}.captures"))).unwrap();
+            let expected = std::fs::read_to_string(base.join(format!("{name}.payloads"))).unwrap();
+            assert_eq!(captures.lines().count(), expected.lines().count());
+            for (index, (raw, expected)) in captures.lines().zip(expected.lines()).enumerate() {
+                let result = checked_journal_frame(raw.as_bytes(), &budget, &control);
+                if expected == "null" {
+                    assert!(matches!(result, Err(Error::Contract(_))), "{name} {index}");
+                } else {
+                    let (_, bytes) = result.unwrap_or_else(|e| panic!("{name} {index}: {e}"));
+                    assert!(&*bytes == expected.as_bytes(), "{name} {index}");
+                }
+                assert_eq!(budget.used(), 0);
+            }
+        }
+    }
 
     struct Probe {
         calls: AtomicUsize,

@@ -47,7 +47,13 @@ from gf_common.group_pack import (
     member_index,
     safe_name,
 )
-from gf_common.structured import DecisionFrame, EventDelta, Selection
+from gf_common.structured import (
+    DecisionFrame,
+    EventBoundary,
+    EventDelta,
+    Selection,
+    _VerifiedJournalFrame,
+)
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.structured_wire import (
     parse_delta,
@@ -288,7 +294,7 @@ class _Journal(CardInstanceJournal):
         return self.sink.contains(self._name(self.final_path))
 
     def _begin_native_frame(
-        self, bundle: gf_native.StorageBundle, frame: DecisionFrame, delta: EventDelta,
+        self, bundle: gf_native.StorageBundle, frame: DecisionFrame | _VerifiedJournalFrame, delta: EventDelta,
         report: SearchReportV3, selection: Selection, command: Json,
     ) -> int:
         started = time.perf_counter()
@@ -398,7 +404,7 @@ def _verify_training_trajectory(native: Any, context: EpisodeEncodingContext, ga
 
 @dataclass(frozen=True)
 class _AcceptedTrainingRow:
-    frame: Any
+    frame: DecisionFrame | _VerifiedJournalFrame
     selection: Selection
     candidates: int
 
@@ -481,8 +487,12 @@ class WriterTrainingEpisode:
 class CanonicalEpisodeEncoder:
     """Encode actual native facts; this is content validation, never a live Source."""
 
-    def __init__(self, context: EpisodeEncodingContext, sink: RecordingArtifacts) -> None:
+    def __init__(
+        self, context: EpisodeEncodingContext, sink: RecordingArtifacts,
+        *, _writer_workspace: _WriterWorkspace | None = None,
+    ) -> None:
         self.context, self.sink = context, sink
+        self._writer_workspace = _writer_workspace
         self._native_candidates = is_shared_contract(context.actions.action_contract)
         self._action_contract = asdict(context.actions.action_contract)
         self.game: str | None = None
@@ -580,7 +590,19 @@ class CanonicalEpisodeEncoder:
                 or data["sampling_seed"] != policy.journal["sampling_seed"]
             ):
                 raise ContractError("native pending chronology/policy context mismatch")
-            frame = parse_frame(data["frame"], layout=LAYOUT)
+            frame: DecisionFrame | _VerifiedJournalFrame
+            if self._native_candidates and self._writer_workspace is not None:
+                scratch = self._writer_workspace.frame_scratch
+                try:
+                    frame = _verified_pending_frame(bundle, scratch, c.deadline)
+                except MemoryError:
+                    # The existing workspace is a soft loan. A conservative
+                    # native JSON estimate can exceed it for an admissible frame.
+                    remaining(c.deadline)
+                    frame = parse_frame(data["frame"], layout=LAYOUT)
+                    remaining(c.deadline)
+            else:
+                frame = parse_frame(data["frame"], layout=LAYOUT)
             delta = parse_delta(data["delta"], layout=LAYOUT)
             if self._native_candidates:
                 raw = closed(data["generated"], {"table", "report"})
@@ -665,6 +687,7 @@ class CanonicalEpisodeEncoder:
             if generated is None:
                 index = journal._begin_native_frame(bundle, frame, delta, report, selection, data["command"])
             else:
+                assert isinstance(frame, DecisionFrame)
                 index = journal.begin_frame(frame, delta, generated, selection, data["command"], {})
             if viewer == c.learner_viewer:
                 self._training_pending = _AcceptedTrainingRow(frame, selection, candidate_count)
@@ -785,6 +808,7 @@ class CanonicalEpisodeEncoder:
         self.originals.append(bundle)  # SAME capability/reservation; custody before ACK
 
     def retire(self) -> None:
+        self._writer_workspace = None
         self.originals.clear()
         self.journals.clear()
         self.policy_states.clear()
@@ -792,6 +816,19 @@ class CanonicalEpisodeEncoder:
         if self.training is not None:
             self.training.close()
             self.training = None
+
+
+def _verified_pending_frame(
+    bundle: gf_native.StorageBundle, scratch: gf_native._JournalFrameScratch, deadline: float,
+) -> _VerifiedJournalFrame:
+    try:
+        metadata, payload = bundle._journal_frame(scratch, deadline)
+    except ValueError as error:
+        raise ContractError(str(error)) from error
+    actor, episode, revision, start, boundary, start_hash, frame_hash = metadata
+    return _VerifiedJournalFrame(
+        actor, episode, revision, start, EventBoundary(*boundary), start_hash, payload, frame_hash,
+    )
 
 
 def _state(value: Json) -> tuple[Any, ...]:
@@ -908,14 +945,24 @@ class _Command:
 class _WriterWorkspace:
     """The existing grant shared only by its original writer and inventory."""
 
-    def __init__(self, reservation: Any) -> None:
+    def __init__(self, reservation: Any, *, frame_scratch_bytes: int = 0) -> None:
         self.reservation = reservation
+        self._frame_scratch_bytes = frame_scratch_bytes
+        self._frame_scratch: gf_native._JournalFrameScratch | None = None
         self.writer_live = True
         self.inventories = 0
         self.lock = threading.Lock()
 
+    @property
+    def frame_scratch(self) -> gf_native._JournalFrameScratch:
+        # Only the live writer uses this, on its first eligible pending frame.
+        if self._frame_scratch is None:
+            self._frame_scratch = gf_native.StorageBundle._journal_frame_scratch(self._frame_scratch_bytes)
+        return self._frame_scratch
+
     def _retire(self) -> None:
         if not self.writer_live and not self.inventories and self.reservation is not None:
+            self._frame_scratch = None
             self.reservation.close()
             self.reservation = None
 
@@ -1221,7 +1268,7 @@ class RustPlayerStorage:
             if receipt["action_contract"] != asdict(context.actions.action_contract):
                 raise ContractError("executed receipt differs from planned participant profile")
             staged[context.episode_id] = CanonicalEpisodeEncoder(
-                context, self.sinks[group.group_id])
+                context, self.sinks[group.group_id], _writer_workspace=self._workspace_lease)
         self.encoders.update(staged)
 
     def seal(self) -> CollectionLocator:
@@ -1509,7 +1556,11 @@ class RustPlayerStorage:
         self.thread_identity = threading.get_ident()
         command = None
         try:
-            self._workspace_lease = _WriterWorkspace(self.workspace.reserve(self.workspace_bytes))
+            self._workspace_lease = _WriterWorkspace(
+                self.workspace.reserve(self.workspace_bytes), frame_scratch_bytes=self.workspace_bytes,
+            )
+            for initial_encoder in self.encoders.values():
+                initial_encoder._writer_workspace = self._workspace_lease
             self._work_directory.mkdir(parents=True, exist_ok=False)
             self._database = GroupPackDatabase(max_owned_bytes=self.workspace_bytes)
             values = asdict(self.settings) | {

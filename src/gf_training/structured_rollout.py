@@ -31,6 +31,7 @@ from gf_common.structured import (
     Selection,
     _CorrectedCardInstanceEventBankView,
     _frame_type,
+    _VerifiedJournalFrame,
     event_delta,
 )
 from gf_common.structured_layout import (
@@ -373,7 +374,7 @@ def _episode_correspondence_digest(record: EpisodeRecords) -> str:
 
 
 def _episode_records_digest(contract: Any, purpose: str, synthetic: bool, actor: int, episode: str,
-                            boundary: Any, rows: Iterable[tuple[DecisionFrame, str, Selection]],
+                            boundary: Any, rows: Iterable[tuple[DecisionFrame | _VerifiedJournalFrame, str, Selection]],
                             end_kind: str, outcome: Any, reason: str | None) -> str:
     return digest({"recipe": "structured-source-episode-correspondence-v1",
         **_record_binding(contract, purpose, synthetic),
