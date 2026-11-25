@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0073](0073-rust-live-journal-frame-validation.md) — 共有 CardInstance の
+ライブ Journal で、単一 writer が元のレコードを Rust で検証する。
+
 [0072](0072-sacrifice-eligibility.md) — 通常の「捨てる」と終末の「ささげる」に
 同じ対象判定を使うBot候補生成を、版固定の共有Actionプロファイルで採用。
 

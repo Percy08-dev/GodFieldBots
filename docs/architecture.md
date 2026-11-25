@@ -130,6 +130,16 @@ retain independent verification. The
 [verification record](verification/owned-event-prefix.md) includes collection
 A/B, resume, phase load, and the isolated Eager experiments.
 
+[ADR0073](adr/0073-rust-live-journal-frame-validation.md) uses the original
+native pending bundle to verify shared CardInstance frames on the existing
+writer thread. Journal and the persisted raw frame data use the same
+verified canonical payload. The writer checks separately produced native
+learner rows against that original. The historical frame-layout binding and the active
+candidate/Simulator contract are checked separately. Source workspace
+ownership, ordered EventBank checks and acknowledgement stay with the writer.
+The [migration verification](verification/journal-native-frame.md) records
+the real collection comparisons and parity checks.
+
 CardInstance input validation checks the writer's observation once. The
 ActionOptions checks use that same record's owned snapshot and issue an
 independent owned result. Public entry points still validate their incoming
