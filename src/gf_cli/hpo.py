@@ -810,6 +810,8 @@ def main(argv: list[str] | None = None) -> int:
     watcher.add_argument('--interval',type=float,default=1.)
     watcher.add_argument('--once',action='store_true')
     watcher.add_argument('--json',action='store_true')
+    watcher.add_argument('--no-tensorboard', action='store_true',
+                         help='show only text progress in an interactive standalone HPO watch')
     args = parser.parse_args(argv)
     if args.command == 'recover':
         if args.release_unconfirmed and args.reason is None:
@@ -820,7 +822,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'watch':
             from gf_cli.hpo_progress import watch
             try:
-                return asyncio.run(watch(args.path,interval=args.interval,once=args.once,as_json=args.json))
+                return asyncio.run(watch(args.path, interval=args.interval, once=args.once,
+                                         as_json=args.json, tensorboard=not args.no_tensorboard))
             except KeyboardInterrupt:
                 return 0
         if args.command == 'inspect':

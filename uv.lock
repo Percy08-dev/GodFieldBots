@@ -19,6 +19,15 @@ members = [
 ]
 
 [[package]]
+name = "absl-py"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/1d/58e2b5a6e4d703ccb2a029943d665974cb3d5a4fb2b3e3675dd03a9df10e/absl_py-2.5.1.tar.gz", hash = "sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95", size = 118387, upload-time = "2026-10-09T08:38:58.037Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/7d/01e62f59e4166af1be6238d9f2b7f3453630c51b8044b412d05b5606532a/absl_py-2.5.1-py3-none-any.whl", hash = "sha256:721200f2f0e9960f2ca9dc3a2a706b201f5f75d812c158f059cbbe29eeafbdb8", size = 137673, upload-time = "2026-10-09T08:38:56.629Z" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.20.1"
 source = { registry = "https://pypi.org/simple" }
@@ -118,43 +127,43 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", version = "13.1.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cublas", version = "13.1.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", version = "13.0.96", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-runtime", version = "13.0.96", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cufft = [
-    { name = "nvidia-cufft", version = "12.0.0.61", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cufft", version = "12.0.0.61", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cufile = [
-    { name = "nvidia-cufile", version = "1.15.1.6", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cufile", version = "1.15.1.6", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-cupti", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 curand = [
-    { name = "nvidia-curand", version = "10.4.0.35", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-curand", version = "10.4.0.35", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", version = "13.1.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cusolver", version = "12.0.4.66", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cublas", version = "13.1.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cusolver", version = "12.0.4.66", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cusparse", version = "12.6.3.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.0.88", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-nvtx", version = "13.0.85", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-12-godfieldbots-torch' and extra != 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 
 [[package]]
@@ -167,43 +176,43 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-runtime", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cufft = [
-    { name = "nvidia-cufft", version = "12.2.0.57", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cufft", version = "12.2.0.57", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cufile = [
-    { name = "nvidia-cufile", version = "1.17.1.22", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cufile", version = "1.17.1.22", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-cupti", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 curand = [
-    { name = "nvidia-curand", version = "10.4.2.66", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-curand", version = "10.4.2.66", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cusolver", version = "12.2.0.11", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cublas", version = "13.4.1.3", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cusolver", version = "12.2.0.11", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cusparse", version = "12.7.10.12", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cuda-nvrtc", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-nvtx", version = "13.2.86", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'aarch64' or platform_machine == 'x86_64') and sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda' or platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-12-godfieldbots-torch-cuda' or extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 
 [[package]]
@@ -259,6 +268,9 @@ shared-inference = [
     { name = "tensordict" },
     { name = "torchrl" },
 ]
+tensorboard = [
+    { name = "tensorboard" },
+]
 torch = [
     { name = "torch", version = "2.14.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-12-godfieldbots-torch') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-12-godfieldbots-torch') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
@@ -286,6 +298,7 @@ requires-dist = [
     { name = "numpy", specifier = "==2.5.4" },
     { name = "optuna", marker = "extra == 'hpo'", specifier = "==5.0.0" },
     { name = "pyarrow", marker = "extra == 'data'", specifier = ">=22,<30" },
+    { name = "tensorboard", marker = "extra == 'tensorboard'", specifier = "==2.21.0" },
     { name = "tensordict", marker = "extra == 'shared-inference'", specifier = "==0.15.2" },
     { name = "torch", marker = "extra == 'torch'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "godfieldbots", extra = "torch" } },
     { name = "torch", marker = "extra == 'torch-cuda'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "godfieldbots", extra = "torch-cuda" } },
@@ -293,7 +306,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'torch'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "godfieldbots", extra = "torch" } },
     { name = "torchvision", marker = "extra == 'torch-cuda'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "godfieldbots", extra = "torch-cuda" } },
 ]
-provides-extras = ["data", "lightgbm", "torch", "torch-cuda", "native", "hpo", "shared-inference"]
+provides-extras = ["data", "lightgbm", "torch", "torch-cuda", "native", "hpo", "shared-inference", "tensorboard"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -313,6 +326,27 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "numpy", specifier = "==2.5.4" }]
+
+[[package]]
+name = "grpcio"
+version = "1.85.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/90/c7/37a4a43210ef2ecbf570a84e66c61c8a197db3c4057dc23b20263875f9af/grpcio-1.85.4.tar.gz", hash = "sha256:45c4efd77dbfbb92cfebe493518c7e2a97ef3f4da2673508f81214b7493d7cca", size = 14119566, upload-time = "2026-11-24T10:08:14.94Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/b3/54fa6957a7ec67512ff0e6b54c126b7972a06233bede3c5057c48b9887f6/grpcio-1.85.4-cp314-cp314-linux_armv7l.whl", hash = "sha256:bafcdec12b152d83b0129d628568435e5db73396ee43292adddda0d08e52761f", size = 6803094, upload-time = "2026-11-24T10:07:28.472Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/7e/ecac0ba1f209b667d3b1e14da69fb46256b9e282edce0c15d47c9882d4c4/grpcio-1.85.4-cp314-cp314-macosx_11_0_universal2.whl", hash = "sha256:2a471210eace83a9f2cd7445700a7f41eab2c261bfd56e02330105476200e47b", size = 12640253, upload-time = "2026-11-24T10:07:31.344Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/c3/dde68f94ec42c08b1f3908a4231db053f6bbf1b06b588b14eebe977f5f73/grpcio-1.85.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2499a2a8b1eac38b2845849a2b566b3d424ccb6dc5b11659c9dc71a3e486621a", size = 7187883, upload-time = "2026-11-24T10:07:35.248Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/56/77f6b0a79baf7d84657209bbdd86bbbde416d03dc7464b9a50b185119600/grpcio-1.85.4-cp314-cp314-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:2bad38694cffb899a8dc059704d997b1926065cb213135263151d5a7e89d813f", size = 8187371, upload-time = "2026-11-24T10:07:37.382Z" },
+    { url = "https://files.pythonhosted.org/packages/78/dc/99906c5b50089e68f1522deeaa6bbf0a362617dbc91c16193676a7eea37a/grpcio-1.85.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0b682bd6be9a621fb30e04364b0236f830e713add877c6d09527142a636adfe9", size = 7367056, upload-time = "2026-11-24T10:07:39.489Z" },
+    { url = "https://files.pythonhosted.org/packages/30/2c/0e2ab08f2c45a5f287eb2e9a3f6a7bdad0edfecbb1745c42915ead606503/grpcio-1.85.4-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:414cc472c74e3a2d633c752f4883b3a08f0c982b38c734a735de34b60cea91b0", size = 7940021, upload-time = "2026-11-24T10:07:41.562Z" },
+    { url = "https://files.pythonhosted.org/packages/82/25/4a5dbe06d4eb0c4adc9e62ce16be64d0487ca5349c051f4e2ccc8e21f9ce/grpcio-1.85.4-cp314-cp314-musllinux_1_2_i686.whl", hash = "sha256:56d2108453468b0cf0653762de4de4a7b8d3b093e85905d3cb18b6990c4e8402", size = 9175151, upload-time = "2026-11-24T10:07:43.591Z" },
+    { url = "https://files.pythonhosted.org/packages/18/bb/bb0f0aef29c9dee72a8d4fda27684dc9f3d51d3e2352e8b9b625af4a6aeb/grpcio-1.85.4-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:fdd65fe8df4462a32f9f575ab9642f7f7f2cda157a6a7903d20824ab288c8d1d", size = 8315681, upload-time = "2026-11-24T10:07:45.856Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/6b/b44db1c0ffb064f8b298ffbdd5151cffc886a0c21d9eada3bc00038a9d4b/grpcio-1.85.4-cp314-cp314-win32.whl", hash = "sha256:887d9bed52d9974149d7f108f5a064951cb9b72524aa5fdb0248334fc9ebb8c2", size = 4853698, upload-time = "2026-11-24T10:07:47.799Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/1a/99bfe4a69ea3d7878e970841c61c67a06db7cc93243c4371fd3ff7e0dba1/grpcio-1.85.4-cp314-cp314-win_amd64.whl", hash = "sha256:157eff419b9ddeb5662106a2f940590bb70d82f3efc229e9347ae839e0bee0a4", size = 5758604, upload-time = "2026-11-24T10:07:49.504Z" },
+]
 
 [[package]]
 name = "h11"
@@ -464,6 +498,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/09/e07c4b5579a79f4b16f8d4f29f6c54514ac787c4ad506b8c4f28a0e6b0bf/mako-1.4.3.tar.gz", hash = "sha256:cd6537fe88d5fec315c55c2f8529bc4ce7a9a352ad7db3eeaa6a66e2dd4ec37a", size = 412799, upload-time = "2026-09-22T20:54:31.509Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/a0/053d6af3e8f871e0073b4a36732d9e65be77a72e5434c31b94f6af78a6bb/mako-1.4.3-py3-none-any.whl", hash = "sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f", size = 80164, upload-time = "2026-09-22T20:54:33.128Z" },
+]
+
+[[package]]
+name = "markdown"
+version = "3.11.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/eb/dc0fd6eff604bfb870b7fb68b90985a32caaf3c76f67736bbf7f438acd59/markdown-3.11.3.tar.gz", hash = "sha256:81eb91631dc97ad1efbc76019ef0f80fe90ca49ddf81546752d79989c3bfff3e", size = 498810, upload-time = "2026-11-05T20:30:52.926Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/6f/1fa8970e960e5c832874399e6efa564870ade8206d57fef5d5e296b834f5/markdown-3.11.3-py3-none-any.whl", hash = "sha256:e1a31a112232504d753e5c01bb8c2de90d3f0ba986b063e10770cf7695b09e73", size = 116758, upload-time = "2026-11-05T20:30:51.775Z" },
 ]
 
 [[package]]
@@ -956,6 +999,21 @@ wheels = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "7.36.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/89/5b8517baa72f84a67b8a307ba953c91057af618bf40bf676f3c03551f8f0/protobuf-7.36.2.tar.gz", hash = "sha256:497d0463ff3316681da6c0b9e8d06cb465d61abce00b613ab42226175644d1bb", size = 512737, upload-time = "2026-09-17T20:07:59.326Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/72/98342feb672507c8f3a69e34b4fa8961f608edba5c1a48a6f47156d92cb5/protobuf-7.36.2-cp310-abi3-macosx_10_9_universal2.whl", hash = "sha256:cbc70b17ee27e28894c7fee8bb04be1abead49e936bc70eb60052531eee2079e", size = 456039, upload-time = "2026-09-17T20:07:51.542Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/ea/91fdf7c2b8bbd49cde056f00a9df6773532987e1c00fe2830b895af95c7e/protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:e11e1f0180583a2af89db6a2ecd9e8dc40aa6d2988ca175bfd0e6d12ea72d74e", size = 344219, upload-time = "2026-09-17T20:07:52.914Z" },
+    { url = "https://files.pythonhosted.org/packages/17/ab/5fd5f8ece73fad885c5a09aa849b32d70472f954ba3a92d3bb5974ea953b/protobuf-7.36.2-cp310-abi3-manylinux2014_s390x.whl", hash = "sha256:f4fee11ec330d238b34a05c9b675f693c20415d1c5bd7d5320cc2f8a798eb9cf", size = 357223, upload-time = "2026-09-17T20:07:53.985Z" },
+    { url = "https://files.pythonhosted.org/packages/db/f3/3996583dd2906297a637af12114deddf7658af6e683fedb83be061983fb5/protobuf-7.36.2-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2", size = 343223, upload-time = "2026-09-17T20:07:54.931Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/1b/dcc64f358fcb51811b58ae40b3d28f820725f116d86487cc20bd4b130701/protobuf-7.36.2-cp310-abi3-win32.whl", hash = "sha256:912c1221170e16c08d1f086762f563dd61ff83c18b5fa6652952dfaded66f728", size = 442998, upload-time = "2026-09-17T20:07:55.826Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/55/b77bda4e5e5f5971fb51b07663694690e9afdb9402136c16a522bd621cad/protobuf-7.36.2-cp310-abi3-win_amd64.whl", hash = "sha256:a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353", size = 456514, upload-time = "2026-09-17T20:07:57.188Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/04/d52c7016b04b6c5108f26691f9d33ec82a9b65d041f1a9c771137693d618/protobuf-7.36.2-py3-none-any.whl", hash = "sha256:bdb3a345d48db958e6ce1f18e508beb0cc981d64f24088427549c866cd039f1e", size = 179806, upload-time = "2026-09-17T20:07:58.211Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "26.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1160,6 +1218,36 @@ wheels = [
 ]
 
 [[package]]
+name = "tensorboard"
+version = "2.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "grpcio" },
+    { name = "markdown" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pillow" },
+    { name = "protobuf" },
+    { name = "setuptools" },
+    { name = "tensorboard-data-server" },
+    { name = "werkzeug" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/4b/cd2eec9642781a8f5b2fb9994e3933a7b259ab18e9d49aeede9b5acf6311/tensorboard-2.21.0-py3-none-any.whl", hash = "sha256:7279316dcb6bd5bc391d623dea841531299cde1887310e8133bc34a996d32255", size = 5516204, upload-time = "2026-06-29T20:48:04.472Z" },
+]
+
+[[package]]
+name = "tensorboard-data-server"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/13/e503968fefabd4c6b2650af21e110aa8466fe21432cd7c43a84577a89438/tensorboard_data_server-0.7.2-py3-none-any.whl", hash = "sha256:7e0610d205889588983836ec05dc098e80f97b7e7bbff7e994ebb78f578d0ddb", size = 2356, upload-time = "2023-10-23T21:23:32.16Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/85/dabeaf902892922777492e1d253bb7e1264cadce3cea932f7ff599e53fea/tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60", size = 4823598, upload-time = "2023-10-23T21:23:33.714Z" },
+    { url = "https://files.pythonhosted.org/packages/73/c6/825dab04195756cf8ff2e12698f22513b3db2f64925bdd41671bfb33aaa5/tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530", size = 6590363, upload-time = "2023-10-23T21:23:35.583Z" },
+]
+
+[[package]]
 name = "tensordict"
 version = "0.15.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1260,19 +1348,19 @@ name = "torch"
 version = "2.14.1+cu132"
 source = { registry = "https://download.pytorch.org/whl/cu132" }
 dependencies = [
-    { name = "cuda-bindings", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "cuda-bindings", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "filelock", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "fsspec", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "jinja2", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "networkx", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
-    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
-    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "nvidia-cudnn-cu13", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-cusparselt-cu13", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nccl-cu13", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
+    { name = "nvidia-nvshmem-cu13", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "setuptools", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "sympy", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
-    { name = "triton", marker = "(sys_platform == 'linux' and extra == 'extra-12-godfieldbots-torch-cuda') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
+    { name = "triton", marker = "(sys_platform == 'linux' or extra == 'extra-12-godfieldbots-torch') and extra == 'extra-12-godfieldbots-torch-cuda'" },
     { name = "typing-extensions", marker = "extra == 'extra-12-godfieldbots-torch-cuda'" },
 ]
 wheels = [
@@ -1393,4 +1481,16 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
+]
+
+[[package]]
+name = "werkzeug"
+version = "3.1.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/34/4dd12fc8bb7d61c91467ec3efe415ffa7d5456f799954b40c5bbaeae470e/werkzeug-3.1.9.tar.gz", hash = "sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060", size = 940188, upload-time = "2026-09-27T18:33:41.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl", hash = "sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab", size = 228700, upload-time = "2026-09-27T18:33:39.685Z" },
 ]

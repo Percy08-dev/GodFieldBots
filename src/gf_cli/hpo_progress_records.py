@@ -1,4 +1,4 @@
-"""Read only the latest linked standalone HPO generation and update."""
+"""Read-only observation of committed standalone HPO records."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 import stat
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,10 @@ from gf_training.hpo_update_storage import read_hpo_update
 from gf_training.lineage import generation_path
 
 _READ_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError)
+_PPO_METRICS = ('total_loss', 'policy_loss', 'value_mse', 'entropy', 'approx_kl')
+_DIAGNOSTICS = ('clip_fraction', 'explained_variance', 'pre_clip_grad_norm_mean',
+                'pre_clip_grad_norm_max', 'learning_rate')
+_DURATIONS = ('collection_seconds', 'update_seconds')
 
 
 def collection_rate(count: object, seconds: Any) -> float | None:
@@ -79,6 +84,138 @@ def checked_namespace(parent: Path, operation: Json, scan: SealedScan) -> tuple[
     return directory, identity, lock
 
 
+def _record_scan() -> SealedScan:
+    return SealedScan(max_owned_bytes=MAX_SEALED_SCAN_BYTES, deadline=time.monotonic() + 1.)
+
+
+def _standalone_operation(root: Path, scan: SealedScan) -> Json | None:
+    safe_storage_path(root)
+    operation = scan.object(root / '.rust-player/operation-fresh.json')
+    if operation.get('schema_version') == 2 and operation.get('operation_type') == 'hpo-train':
+        return operation
+    return None
+
+
+def _standalone_state(root: Path, operation: Json, scan: SealedScan) -> Json:
+    state = scan.object(root / 'run.json')
+    effective = state['effective_config']
+    config_sha = checksum(state['config_sha256'])
+    spec = effective['hpo_spec']
+    if (state.get('schema_version') != 5 or state.get('run_variant') != 'hpo-ppo-owned-rust-player-v1'
+            or state.get('model_id') != 'mlp' or spec.get('schema_version') != 6
+            or operation.get('run_id') != state['run_id'] or operation.get('config_sha256') != config_sha
+            or digest(effective) != config_sha):
+        raise ContractError('standalone progress Run5/operation identity differs')
+    if state['status'] not in ('running', 'paused', 'complete', 'incomplete', 'failed'):
+        raise ContractError('unrecognized standalone run status')
+    integer(effective['training']['max_updates'], 1)
+    integer(spec['decision_budget'], 1)
+    integer(state['seed'], 0)
+    return state
+
+
+def _read_generation(root: Path, state: Json, number: int, sha: str, scan: SealedScan) -> Json:
+    generation = scan.object(generation_path(root, number), sha)
+    if (generation.get('schema_version') != 6 or generation.get('run_id') != state['run_id']
+            or type(generation.get('generation')) is not int or generation['generation'] != number):
+        raise ContractError('standalone progress generation identity differs')
+    return generation
+
+
+def _read_update(
+    root: Path, state: Json, number: int, generation: Json, scan: SealedScan,
+) -> Json:
+    update = read_hpo_update(root, number, state, generation['update_sha256'], scan=scan)
+    if (update.get('schema_version') != 8 or update.get('status') != 'complete'
+            or update.get('run_id') != state['run_id']
+            or type(update.get('generation')) is not int or update['generation'] != number):
+        raise ContractError('standalone progress update identity differs')
+    return update
+
+
+@dataclass(frozen=True)
+class ScalarUpdate:
+    step: int
+    values: dict[str, float]
+
+
+def _scalars(number: int, generation: Json, update: Json, budget: int) -> ScalarUpdate:
+    metrics = update['metrics']
+    used = integer(generation['used_decisions'], 0, budget)
+    collected = integer(generation['collected_decisions'], used)
+    values: dict[str, float] = {
+        'progress/used_decisions': used,
+        'progress/collected_decisions': collected,
+    }
+    values.update({f'ppo/{name}': metrics[name] for name in _PPO_METRICS
+                   if finite_number(metrics.get(name))})
+    diagnostics = metrics.get('diagnostics')
+    if type(diagnostics) is dict and diagnostics.get('schema_version') == 1:
+        values.update({f'diagnostics/{name}': diagnostics[name] for name in _DIAGNOSTICS
+                       if finite_number(diagnostics.get(name))})
+    values.update({f'timing/{name}': update[name] for name in _DURATIONS
+                   if finite_number(update.get(name)) and update[name] >= 0})
+    return ScalarUpdate(number, values)
+
+
+class StandaloneScalarHistory:
+    """Incremental verified scalar history for one dashboard session."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root.absolute()
+        self._head: tuple[str, str, int, str] | None = None
+
+    def poll(self) -> list[ScalarUpdate] | None:
+        """Return new verified rows, or None while a consistent head is unavailable."""
+        try:
+            return self._poll()
+        except _READ_ERRORS:
+            return None
+
+    def _poll(self) -> list[ScalarUpdate] | None:
+        scan = _record_scan()
+        operation = _standalone_operation(self.root, scan)
+        if operation is None:
+            return None
+        state = _standalone_state(self.root, operation, scan)
+        if state['generation_sha256'] is None:
+            return None
+        effective = state['effective_config']
+        number = integer(state['updates'], 0, effective['training']['max_updates'])
+        sha = checksum(state['generation_sha256'])
+        latest = scan.object(self.root / 'latest.json')
+        if type(latest.get('generation')) is not int or latest != {'generation': number, 'sha256': sha}:
+            return None
+        head = (state['run_id'], state['config_sha256'], number, sha)
+        prior = self._head
+        if head == prior:
+            return []
+        if prior is not None and (head[:2] != prior[:2] or number <= prior[2]):
+            return None
+
+        rows: list[ScalarUpdate] = []
+        anchor = 0 if prior is None else prior[2]
+        budget = effective['hpo_spec']['decision_budget']
+        for step in range(number, anchor, -1):
+            record_scan = _record_scan()
+            generation = _read_generation(self.root, state, step, sha, record_scan)
+            sha = checksum(generation['parent_sha256'])
+            update = _read_update(self.root, state, step, generation, record_scan)
+            if update.get('parent_sha256') != sha:
+                return None
+            rows.append(_scalars(step, generation, update, budget))
+            del update
+        if prior is None:
+            initial = _read_generation(self.root, state, 0, sha, _record_scan())
+            if initial['parent_sha256'] is not None or initial['update_sha256'] is not None:
+                return None
+        elif sha != prior[3]:
+            return None
+        self._head = head
+        rows.reverse()
+        return rows
+
+
 class StandaloneProgressRecords:
     """One watcher's last coherent diagnostic observation, without lock custody."""
 
@@ -100,13 +237,12 @@ class StandaloneProgressRecords:
         return value
 
     def _read(self) -> Json | None:
-        scan = SealedScan(max_owned_bytes=MAX_SEALED_SCAN_BYTES, deadline=time.monotonic() + 1.)
+        scan = _record_scan()
         root = self.root.absolute()
-        safe_storage_path(root)
         # Only standalone HPO uses this initial operation record. Dashboard
         # parents and the ordinary PPO lane keep their existing watcher shape.
-        operation = scan.object(root / '.rust-player/operation-fresh.json')
-        if operation.get('schema_version') != 2 or operation.get('operation_type') != 'hpo-train':
+        operation = _standalone_operation(root, scan)
+        if operation is None:
             return None
         try:
             self.live_root, _, _ = checked_namespace(root, operation, scan)
@@ -114,23 +250,12 @@ class StandaloneProgressRecords:
             # The older run may have no retained operation-control namespace.
             # The parent pointer still supports the read-only durable view.
             pass
-        state = scan.object(root / 'run.json')
+        state = _standalone_state(root, operation, scan)
         effective = state['effective_config']
-        config_sha = checksum(state['config_sha256'])
-        spec = effective['hpo_spec']
-        if (state.get('schema_version') != 5 or state.get('run_variant') != 'hpo-ppo-owned-rust-player-v1'
-                or state.get('model_id') != 'mlp' or spec.get('schema_version') != 6
-                or operation.get('run_id') != state['run_id'] or operation.get('config_sha256') != config_sha
-                or digest(effective) != config_sha):
-            raise ContractError('standalone progress Run5/operation identity differs')
+        config_sha = state['config_sha256']
         status = state['status']
-        if status not in ('running', 'paused', 'complete', 'incomplete', 'failed'):
-            raise ContractError('unrecognized standalone run status')
         target = effective['training']['max_updates']
-        budget = spec['decision_budget']
-        integer(target, 1)
-        integer(budget, 1)
-        integer(state['seed'], 0)
+        budget = effective['hpo_spec']['decision_budget']
         host_result = state.get('host_result')
         observed: Json = {'availability': 'available', 'status': status, 'model': 'mlp',
             'seed': state['seed'], 'decision_budget': budget, 'target_updates': target,
@@ -160,11 +285,8 @@ class StandaloneProgressRecords:
 
     def _read_commit(self, state: Json, identity: tuple[str, str, int, str],
                      budget: int, scan: SealedScan) -> Json:
-        run_id, _, number, sha = identity
-        generation = scan.object(generation_path(self.root, number), sha)
-        if (generation.get('schema_version') != 6 or generation.get('run_id') != run_id
-                or type(generation.get('generation')) is not int or generation['generation'] != number):
-            raise ContractError('standalone progress generation identity differs')
+        _, _, number, sha = identity
+        generation = _read_generation(self.root, state, number, sha, scan)
         used, collected = generation['used_decisions'], generation['collected_decisions']
         integer(used, 0, budget)
         integer(collected, used)
@@ -172,14 +294,10 @@ class StandaloneProgressRecords:
             'latest_metrics': None, 'latest_durations': None,
             'last_collection_games_per_second': None, 'last_collection_actions_per_second': None}
         if number:
-            update = read_hpo_update(self.root, number, state, generation['update_sha256'], scan=scan)
-            if (update.get('schema_version') != 8 or update.get('status') != 'complete'
-                    or update.get('run_id') != run_id
-                    or type(update.get('generation')) is not int or update['generation'] != number):
-                raise ContractError('standalone progress update identity differs')
+            update = _read_update(self.root, state, number, generation, scan)
             metrics = update.get('metrics', {})
             observed['latest_metrics'] = {name: metrics[name]
-                for name in ('total_loss', 'policy_loss', 'value_mse', 'entropy', 'approx_kl')
+                for name in _PPO_METRICS
                 if finite_number(metrics.get(name))}
             seconds = update.get('collection_seconds')
             proof = update.get('source_proof')
@@ -187,6 +305,6 @@ class StandaloneProgressRecords:
             observed['last_collection_games_per_second'] = collection_rate(update.get('actual_games'), seconds)
             observed['last_collection_actions_per_second'] = collection_rate(actions, seconds)
             observed['latest_durations'] = {name: update[name]
-                for name in ('collection_seconds', 'update_seconds')
+                for name in _DURATIONS
                 if finite_number(update.get(name)) and update[name] >= 0}
         return observed
