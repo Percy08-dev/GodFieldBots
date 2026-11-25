@@ -316,6 +316,20 @@ def test_simulator_release_and_powder_behavior_are_pinned_independently(previous
                 )
 
 
+def test_sacrifice_action_profile_shares_build_but_rejects_foreign_receipts():
+    old = card_instance.pestle_mirage_card_instance_contract()
+    new = card_instance.sacrifice_card_instance_contract()
+    assert asdict(new) == asdict(old) | {"profile_id": "card-instance-simulator-v2-shared-20261125-sacrifice"}
+    assert rule_signature(old, RULES) != rule_signature(new, RULES)
+    old_receipt, new_receipt = (shared_runtime_receipt(profile) for profile in (old, new))
+    for field in ("build", "binary", "source", "executed"):
+        assert old_receipt[field] == new_receipt[field]
+    for profile, own, foreign in ((old, old_receipt, new_receipt), (new, new_receipt, old_receipt)):
+        assert validate_runtime_receipt(own, require_executed=True, expected_contract=profile) == own
+        with pytest.raises(ContractError, match="runtime receipt action contract mismatch"):
+            validate_runtime_receipt(foreign, require_executed=True, expected_contract=profile)
+
+
 @pytest.mark.parametrize("use_new", [False, True], ids=["old", "new"])
 def test_journal6_accepts_own_dream_release_and_rejects_foreign_receipt(tmp_path, use_new):
     old = strength_powder_card_instance_contract()

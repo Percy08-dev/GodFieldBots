@@ -369,17 +369,20 @@ def test_hpo_factory_refuses_missing_companion_before_anchor_and_namespace(tmp_p
 
 
 @pytest.mark.parametrize('entry_point', ['operation', 'campaign'])
-@pytest.mark.parametrize('release,declared_moon,declared_pestle,has_concealed,error', [
-    ('dream_compat', None, None, False, 'concealed draw'),
-    ('moon_dream', 'card-instance-simulator-v2-shared-20261125', None, False, 'concealed draw'),
-    ('moon_dream', None, None, True, 'Moon God'),
-    ('moon_dream', 'card-instance-simulator-v2-shared-20261124', None, True, 'Moon God'),
-    ('pestle_mirage', None, 'card-instance-simulator-v2-shared-20261125-pestle', False, 'concealed draw'),
-    ('pestle_mirage', 'card-instance-simulator-v2-shared-20261125', None, True, 'Dangerous Pestle'),
-    ('pestle_mirage', None, 'card-instance-simulator-v2-shared-20261125', True, 'Dangerous Pestle'),
+@pytest.mark.parametrize('release,markers,has_concealed,error', [
+    ('dream_compat', {}, False, 'concealed draw'),
+    ('moon_dream', {'moon_dream': 'card-instance-simulator-v2-shared-20261125'}, False, 'concealed draw'),
+    ('moon_dream', {}, True, 'Moon God'),
+    ('moon_dream', {'moon_dream': 'card-instance-simulator-v2-shared-20261124'}, True, 'Moon God'),
+    ('pestle_mirage', {'pestle_mirage': 'card-instance-simulator-v2-shared-20261125-pestle'}, False, 'concealed draw'),
+    ('pestle_mirage', {'moon_dream': 'card-instance-simulator-v2-shared-20261125'}, True, 'Dangerous Pestle'),
+    ('pestle_mirage', {'pestle_mirage': 'card-instance-simulator-v2-shared-20261125'}, True, 'Dangerous Pestle'),
+    ('sacrifice', {'sacrifice': 'card-instance-simulator-v2-shared-20261125-sacrifice'}, False, 'concealed draw'),
+    ('sacrifice', {'pestle_mirage': 'card-instance-simulator-v2-shared-20261125-pestle'}, True, 'Sacrifice'),
+    ('sacrifice', {'sacrifice': 'card-instance-simulator-v2-shared-20261125-pestle'}, True, 'Sacrifice'),
 ])
 def test_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(
-        tmp_path, monkeypatch, entry_point, release, declared_moon, declared_pestle, has_concealed, error):
+        tmp_path, monkeypatch, entry_point, release, markers, has_concealed, error):
     from gf_cli import hpo
     from gf_cli.config import load_config
     from gf_cli.rust_player_campaign import prepare_campaign
@@ -398,13 +401,9 @@ def test_hpo_refuses_pre_marker_runtime_before_companion_or_ownership(
     monkeypatch.setattr(entry, 'check_native_collection_storage', lambda *_a, **_kw: None)
     monkeypatch.setattr(hpo, 'check_storage', lambda *_a, **_kw: {})
     monkeypatch.setattr(hpo, '_conditions', lambda *_a: {})
-    build = {}
+    build = {f'card_instance_{key}': value for key, value in markers.items()}
     if has_concealed:
         build['card_instance_concealed_draw'] = native_backend.CARD_INSTANCE_CONCEALED_DRAW
-    if declared_moon is not None:
-        build['card_instance_moon_dream'] = declared_moon
-    if declared_pestle is not None:
-        build['card_instance_pestle_mirage'] = declared_pestle
     monkeypatch.setattr(native_backend, 'binary_identity', lambda: {'build': build})
     monkeypatch.setattr(rust_player_companion, 'discover_companion', lambda *_a: pytest.fail('companion reached'))
     dest = tmp_path / 'control'

@@ -13,8 +13,8 @@ import pytest
 from gf_cli.config import load_config, load_rust_player_effective
 from gf_cli.hpo_config import campaign_config, load_hpo_config, materialize_hpo_run
 from gf_common.card_instance import (
-    moon_dream_card_instance_contract,
     pestle_mirage_card_instance_contract,
+    sacrifice_card_instance_contract,
 )
 from gf_common.domain import ContractError, canonical, digest
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
@@ -75,14 +75,14 @@ def test_hpo_source_recipe_materializes_with_canonical_rust_encoder(tmp_path):
         campaign_config(raw | {"encoder": "canonical-python"}, origin=tmp_path)
 
 
-def test_default_convergence_preset_uses_new_pestle_stage_and_keeps_archived_base():
+def test_default_convergence_preset_uses_sacrifice_stage_and_keeps_archived_base():
     loaded = load_hpo_config(ROOT / "configs/hpo/mlp-256-convergence-1000.toml")
-    archived = load_config(ROOT / "configs/experiments/hpo-rust-mlp-moon-dream-base.toml")
-    release = pestle_mirage_card_instance_contract()
-    assert loaded.config.stage == "mlp-256-convergence-1000-pestle-mirage"
+    archived = load_config(ROOT / "configs/experiments/hpo-rust-mlp-pestle-mirage-base.toml")
+    release = sacrifice_card_instance_contract()
+    assert loaded.config.stage == "mlp-256-convergence-1000-sacrifice"
     assert loaded.base.config.actions.action_contract == release
     assert loaded.base.config.server.simulator_revision == release.simulator_revision
-    assert archived.config.actions.action_contract == moon_dream_card_instance_contract()
+    assert archived.config.actions.action_contract == pestle_mirage_card_instance_contract()
 
 
 def test_normal_explicit_runtime_normalizes_wait_and_keeps_effective_hash():

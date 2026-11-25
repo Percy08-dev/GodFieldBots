@@ -442,15 +442,15 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 
 新規の[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000.toml)は、
 月神・〈夢〉・ちからの粉と、あぶないキネ＋〈蜃気楼〉の修正を含むSimulator
-`6d50603` を使います。
+`6d50603` と、「捨てる」「ささげる」の対象判定を揃えたBot候補生成を使います。
 収束診断のTOML先頭に新しいIDの生成と `tools/rust_player_operation.py` の起動例を
-記載しています。確定済み成果物は `ppo-hpo/mlp-256-convergence-1000-pestle-mirage`
+記載しています。確定済み成果物は `ppo-hpo/mlp-256-convergence-1000-sacrifice`
 配下に保存します。
 `uv sync --locked --inexact --extra torch-cuda --extra hpo --extra shared-inference`
 で `.venv` に依存関係を揃え、統合版に対応したNativeホイールを同じ環境に
 インストールします。起動時は `uv run --no-sync` でその環境を使います。
-検証済みwheelは `runs/pestle-mirage-compat/wheels` にあります。
-[実行版の検証記録](verification/pestle-mirage-simulator.md)
+検証済みwheelは `runs/sacrifice-eligibility/wheels` にあります。
+[実行版の検証記録](verification/sacrifice-eligibility.md)
 
 [版固定の256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)と
 [プローブのテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)は

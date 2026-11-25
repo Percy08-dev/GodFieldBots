@@ -19,6 +19,7 @@ from gf_common.card_instance import (
     dream_compat_card_instance_contract,
     moon_dream_card_instance_contract,
     pestle_mirage_card_instance_contract,
+    sacrifice_card_instance_contract,
     shared_card_instance_contract,
     strength_powder_card_instance_contract,
 )
@@ -582,5 +583,114 @@ def test_hpo_pestle_mirage_replays_recorded_target(
         finally:
             health = await server.stop()
             assert health["exit_code"] == 0 and health["log_error"] is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "release,repaired",
+    [
+        pytest.param(pestle_mirage_card_instance_contract(), False, id="archived"),
+        pytest.param(sacrifice_card_instance_contract(), True, id="repaired"),
+    ],
+)
+def test_hpo_sacrifice_replays_protected_artifact(
+    tmp_path: Path, release: CardInstanceContract, repaired: bool,
+) -> None:
+    binary = os.environ.get("GFB_PESTLE_MIRAGE_TEST_SERVER")
+    source = os.environ.get("GFB_PESTLE_MIRAGE_TEST_SOURCE")
+    config = os.environ.get("GFB_HTTP_DIAGNOSTICS_TEST_CONFIG")
+    if not binary or not source or not config:
+        pytest.skip("explicit managed Simulator binary/config/approved source required")
+    native = pytest.importorskip("gf_native")
+    case = json.loads((_ROOT / "docs/issues/cases/0018-sacrifice-protected-artifact.json").read_text())
+    archived, expected = case["rejected"], case["expected_repaired"]
+    actor, revision = archived["actor"], archived["revision"]
+    assert case["simulator_revision"] == release.simulator_revision
+    assert (case["original_profile"] == release.profile_id) is (not repaired)
+    assert len(case["accepted"]) == revision
+    evidence = CardInstanceRuntimeEvidence(Path(binary), Path(source), contract=release)
+    evidence.preflight()
+    server = ManagedServer(binary, config, case["game_seed"], 1, tmp_path / "server")
+
+    async def run() -> None:
+        startup = await server.start()
+        try:
+            evidence.verify_executed(server.process)
+            client = AttestedClient(
+                startup["base_url"],
+                expected_fingerprint=seed_fingerprint(case["game_seed"]),
+                fixed_seed_experiment=True,
+                expected_effective=startup["test_server_config"],
+                startup_info=startup["test_server_info"],
+                contract=release,
+                retries=0,
+            )
+            try:
+                game = (await client.create())["game_id"]
+                for player in (1, 2):
+                    assert (await client.join(game, str(uuid.uuid4())))["player_id"] == player
+                for previous, step in enumerate(case["accepted"]):
+                    assert step["revision"] == previous
+                    receipt = await client.act(game, step["actor"], {
+                        "command_id": str(uuid.uuid4()),
+                        "expected_revision": previous,
+                        "action": step["action"],
+                    })
+                    assert receipt["state_revision"] == previous + 1 and receipt["status"] == "active"
+
+                observation = await client.observe(game, actor)
+                assert observation["state_revision"] == revision and observation["actionable"] is True
+                assert observation["current_player"] == actor and observation["end_times"] is True
+                visible = {row["card_ref"]: row["definition_id"] for row in observation["own"]["cards"]}
+                refs = archived["action"]["card_refs"]
+                assert [visible[ref] for ref in refs] == ["energy-armor", "dangerous-mortar"]
+                protected = {ref for ref, name in visible.items() if name in ("sun-amulet", "dangerous-mortar")}
+                hints = await client.actor_options(game, actor, observation)
+                assert hints["action_options"]["can_sacrifice"] is True
+                events, cursor = await client.events(game, actor, None)
+                value = decision_input(observation, events, cursor, await client.public_catalog(), hints)
+                frame, bank = _public_frame(value, "sacrifice-diagnostic")
+                generated = PublicCandidateGeneratorV3(
+                    ActionConfigV3(action_contract=release), rules=card_instance_rules(), clock=lambda: 0.0,
+                ).generate_game(frame, bank.view(), Random(17), NumericCosts())
+                py_actions = [generated.table.to_action(i, frame) for i in range(len(generated.table.kinds))]
+                native_actions = _native_search_actions(
+                    value, native.player_search_v5, contract=release, clock_calls=1_000_000,
+                )
+                for actions in (py_actions, native_actions):
+                    assert expected["action"] in actions
+                    if repaired:
+                        assert all(protected.isdisjoint(action["card_refs"])
+                                   for action in actions if action["type"] == "sacrifice")
+                    else:
+                        assert archived["action"] in actions
+
+                request = {
+                    "command_id": str(uuid.uuid4()), "expected_revision": revision,
+                    "action": expected["action"] if repaired else archived["action"],
+                }
+                if repaired:
+                    receipt = await client.act(game, actor, request)
+                    assert receipt["state_revision"] == expected["revision"]
+                    assert receipt["status"] == "active"
+                    resolved_events, _ = await client.events(game, actor, cursor)
+                    assert {"type": "artifact_discarded", "player": actor,
+                            "definition_id": "energy-armor"} in resolved_events
+                    assert {"type": "turn_started", "turn": 151, "active_player": 1} in resolved_events
+                else:
+                    with pytest.raises(ApiError) as caught:
+                        await client.act(game, actor, request)
+                    error = caught.value.body["error"]
+                    assert (caught.value.status, error["details"]["rejection_code"]) == (
+                        archived["http_status"], archived["rejection_code"],
+                    )
+                    assert await client.observe(game, actor) == observation
+            finally:
+                await client.close()
+        finally:
+            health = await server.stop()
+        assert health["exit_code"] == 0 and health["log_error"] is None
 
     asyncio.run(run())

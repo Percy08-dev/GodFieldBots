@@ -103,12 +103,24 @@ fn pestle_mirage_card_instance_contract() -> &'static Value {
     &CONTRACT
 }
 
+pub(crate) const SACRIFICE_PROFILE: &str = "card-instance-simulator-v2-shared-20261125-sacrifice";
+
+fn sacrifice_card_instance_contract() -> &'static Value {
+    static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
+        let mut contract = pestle_mirage_card_instance_contract().clone();
+        contract["profile_id"] = json!(SACRIFICE_PROFILE);
+        contract
+    });
+    &CONTRACT
+}
+
 fn is_shared_card_instance_contract(contract: &Value) -> bool {
     contract == shared_card_instance_contract()
         || contract == strength_powder_card_instance_contract()
         || contract == dream_compat_card_instance_contract()
         || contract == moon_dream_card_instance_contract()
         || contract == pestle_mirage_card_instance_contract()
+        || contract == sacrifice_card_instance_contract()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -131,6 +143,8 @@ pub struct Config {
     requires_powder_weapon: bool,
     #[serde(skip)]
     mirage_danger_requires_opponent: bool,
+    #[serde(skip)]
+    protects_sacrifice_artifacts: bool,
 }
 impl Config {
     pub fn parse(v: &Value, rules: &Value) -> Result<Self> {
@@ -176,16 +190,21 @@ impl Config {
                 .all(|w| *w > 0 && *w <= i32::MAX as u64),
             "invalid channel weight",
         )?;
-        let is_pestle_mirage_profile = c.action_contract["profile_id"] == PESTLE_MIRAGE_PROFILE;
-        c.mirage_danger_requires_opponent = is_pestle_mirage_profile;
-        c.requires_powder_weapon = is_pestle_mirage_profile
+        let profile = c.action_contract["profile_id"].as_str();
+        let uses_pestle_build = matches!(profile, Some(PESTLE_MIRAGE_PROFILE | SACRIFICE_PROFILE));
+        c.protects_sacrifice_artifacts = profile == Some(SACRIFICE_PROFILE);
+        c.mirage_danger_requires_opponent = uses_pestle_build;
+        c.requires_powder_weapon = uses_pestle_build
             || c.action_contract == *strength_powder_card_instance_contract()
             || c.action_contract == *dream_compat_card_instance_contract()
             || c.action_contract == *moon_dream_card_instance_contract();
         Ok(c)
     }
     fn simulator_binary_sha256(&self) -> &'static str {
-        if self.action_contract["profile_id"] == PESTLE_MIRAGE_PROFILE {
+        if matches!(
+            self.action_contract["profile_id"].as_str(),
+            Some(PESTLE_MIRAGE_PROFILE | SACRIFICE_PROFILE)
+        ) {
             "500d55cd8eb03126f65d3c24fe58b6091bf8acdb2fc20aed76622a8679f4000d"
         } else if self.action_contract == *moon_dream_card_instance_contract() {
             "15137c72e670a90a64fd474030ee9024c91b97b1282c8d103db895f54a2bfa37"

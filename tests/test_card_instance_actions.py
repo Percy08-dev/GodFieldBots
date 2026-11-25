@@ -126,12 +126,19 @@ def test_discard_independent_subsets_include_both_states_but_exclude_artifact_we
 
 
 @pytest.mark.parametrize(
-    "contract", [card_instance_contract(), corrected_card_instance_contract()],
-    ids=["07e", "91d5926"],
+    "contract,protect_in_end_times",
+    [
+        pytest.param(card_instance_contract(), False, id="07e"),
+        pytest.param(corrected_card_instance_contract(), False, id="91d5926"),
+        pytest.param(card_instance.pestle_mirage_card_instance_contract(), False, id="pestle"),
+        pytest.param(card_instance.sacrifice_card_instance_contract(), True, id="sacrifice"),
+    ],
 )
 @pytest.mark.parametrize("end_times", [False, True], ids=["discard", "sacrifice"])
 @pytest.mark.parametrize("dream", [False, True], ids=["ordinary-view", "dream-view"])
-def test_protected_artifact_exact_subsets_use_perceived_definitions(contract, end_times, dream):
+def test_protected_artifact_exact_subsets_use_perceived_definitions(
+    contract, protect_in_end_times, end_times, dream,
+):
     artifacts = ["sun-amulet", "dangerous-mortar", "steel-armor"]
     if dream:
         # Same opaque references, different supplied perceptions. No canonical
@@ -152,7 +159,8 @@ def test_protected_artifact_exact_subsets_use_perceived_definitions(contract, en
     ).generate(frame, bank.view(), random.Random(17), NumericCosts())
     result.table.validate(frame)
     actions = [result.table.to_action(index, frame) for index in range(len(result.table.kinds))]
-    allowed = (0, 1, 2, 4, 5) if end_times else (0 if dream else 2, 4, 5)
+    historical_sacrifice = end_times and not protect_in_end_times
+    allowed = (0, 1, 2, 4, 5) if historical_sacrifice else (0 if dream else 2, 4, 5)
     expected = {
         canonical({
             "type": "sacrifice" if end_times else "discard",
@@ -162,7 +170,7 @@ def test_protected_artifact_exact_subsets_use_perceived_definitions(contract, en
         for subset in itertools.combinations(allowed, length)
     }
     assert {canonical(action) for action in actions} == expected
-    count, elements = (31, 80) if end_times else (7, 12)
+    count, elements = (31, 80) if historical_sacrifice else (7, 12)
     assert result.report.precount.mode == "exact"
     assert result.report.precount.full_enumeration_admitted
     assert result.report.precount.complete == result.report.discovered == len(actions) == count

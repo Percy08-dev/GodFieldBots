@@ -274,13 +274,14 @@ impl<'a> Space<'a> {
                 }
             }
         }
+        let allow_protected_artifacts = input.end_times && !config.protects_sacrifice_artifacts;
         choices[4] = input
             .cards
             .iter()
             .filter(|c| {
                 c.miracle
                     || c.kind != "weapons"
-                        && (input.end_times
+                        && (allow_protected_artifacts
                             || !matches!(c.id.as_str(), "sun-amulet" | "dangerous-mortar"))
             })
             .map(|c| c.slot)

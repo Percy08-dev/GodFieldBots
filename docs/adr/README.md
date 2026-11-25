@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0072](0072-sacrifice-eligibility.md) — 通常の「捨てる」と終末の「ささげる」に
+同じ対象判定を使うBot候補生成を、版固定の共有Actionプロファイルで採用。
+
 [0066](0066-strength-powder-simulator-contract.md) — ちからの粉の夢と
 武器併用条件を訂正したSimulatorを新しい共有Action契約で採用。
 

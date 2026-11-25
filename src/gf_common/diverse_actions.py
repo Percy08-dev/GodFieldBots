@@ -644,10 +644,12 @@ class _CardInstanceSpace:
             card.subclass == "status" or card.ability == "cutCost")]
         self.defense = [card.slot for card in self.cards if card.slot in self.usable and (
             defense_kind(card) is not None or card.ability == "cutCost")]
-        # ADR0005's protected-artifact rule applies only to normal Discard;
-        # the owner-confirmed permission for every miracle remains independent.
+        # Historical profiles applied protection only to ordinary Discard.
+        allow_protected_artifacts = (
+            self.obs["end_times"] and not config.action_contract.protects_sacrifice_artifacts
+        )
         self.discard = [card.slot for card in self.cards if card.miracle or (
-            card.definition["kind"] != "weapons" and (self.obs["end_times"]
+            card.definition["kind"] != "weapons" and (allow_protected_artifacts
                 or card.definition["definition_id"] not in ("sun-amulet", "dangerous-mortar")))]
         self.total = sum(self.obs["own"][name] for name in ("hp", "mp", "money"))
         self.maximum = min(config.max_sequence_length, len(self.cards), 18)

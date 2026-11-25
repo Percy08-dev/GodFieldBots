@@ -588,7 +588,7 @@ def test_sequence_payment_roles_rounds_and_uncertain_defense(spec, options):
         )
 
 
-@pytest.mark.parametrize("profile", ["moon_dream", "pestle_mirage"])
+@pytest.mark.parametrize("profile", ["moon_dream", "pestle_mirage", "sacrifice"])
 @pytest.mark.parametrize("targets,hints", [
     (("opponent", "self"), (1, 2)), (("self",), (1, 2)),
     (("opponent", "self"), (1,)),
@@ -601,6 +601,23 @@ def test_pestle_mirage_search_matches_python_for_each_release(profile, targets, 
         contract=contract, targets=targets,
     )
     assert result is not None
+
+
+@pytest.mark.parametrize("profile", ["pestle_mirage", "sacrifice"])
+@pytest.mark.parametrize("end_times", [False, True], ids=["discard", "sacrifice"])
+def test_protected_discard_and_sacrifice_slots_match_python(profile, end_times):
+    contract = getattr(card_instance, f"{profile}_card_instance_contract")()
+    value = inputs([
+        ("sun-amulet", None), ("dangerous-mortar", None), ("steel-armor", None),
+        ("bronze-club", None), ("flame", "unused"), ("fireball", "learned"),
+    ], mp=0, usable=(), end_times=end_times)
+    value.observation["own"]["status"]["dream"] = True
+    native = differential(value, contract=contract)
+    assert native is not None
+    expected = {0, 1, 2, 4, 5} if end_times and profile == "pestle_mirage" else {2, 4, 5}
+    table = native["generated"]["table"]
+    assert set(table["slots"]) == expected
+    assert table["kinds"] == ["sacrifice" if end_times else "discard"] * (2 ** len(expected) - 1)
 
 
 @pytest.mark.parametrize("mutation", ["kind", "target", "carrier", "presence", "negative_mp"])
@@ -757,7 +774,7 @@ def test_baseline_capacity_is18_while_generator_capacity_remains128(maximum, kin
         ([("strength-powder", None), ("wand-of-mystic-water", None)], {(0, 1), (1, 0)}),
     ],
 )
-@pytest.mark.parametrize("release", ["strength_powder", "dream_compat", "moon_dream", "pestle_mirage"])
+@pytest.mark.parametrize("release", ["strength_powder", "dream_compat", "moon_dream", "pestle_mirage", "sacrifice"])
 def test_strength_powder_public_candidates(spec, powder_attacks, release):
     value = inputs(spec, can_pray=True)
     value.observation["own"]["status"]["dream"] = True
@@ -803,6 +820,12 @@ def test_historical_shared_strength_powder_remains_a_completed_singleton():
     native = differential(inputs([("strength-powder", None)], can_pray=True))
     assert native is not None
     assert "play_sequence" in native["generated"]["table"]["kinds"]
+
+
+def test_native_declares_sacrifice_capability():
+    assert dict(gf_native.build_info()).get("card_instance_sacrifice") == (
+        "card-instance-simulator-v2-shared-20261125-sacrifice"
+    )
 
 
 @pytest.mark.parametrize("older,newer", [

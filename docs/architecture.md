@@ -2,14 +2,19 @@
 
 ## Status and scope
 
-[ADR0070](adr/0070-pestle-mirage-simulator.md) adopts the Dangerous Pestle and
-Mirage patch for new HPO6 convergence runs. The Simulator owns the composed
+[ADR0072](adr/0072-sacrifice-eligibility.md) makes Discard and Sacrifice use
+the same item eligibility in new HPO6 convergence runs. The new Action
+profile inherits the existing Simulator release and binds the corrected
+Python and Rust candidate pool.
+
+[ADR0070](adr/0070-pestle-mirage-simulator.md) binds the Dangerous Pestle and
+Mirage Simulator patch inherited by ADR0072. The Simulator owns the composed
 attack attribute and actual target draw. The new shared Action profile binds
 the patched release and selects opponent submissions for effective Mirage
 through the existing Python and Rust candidate searches.
 
 [ADR0069](adr/0069-moon-dream-simulator.md) binds the combined Moon God,
-Dream, and Strength Powder release used by the previous HPO6 convergence run.
+Dream, and Strength Powder release used by an earlier HPO6 convergence run.
 The Simulator owns the automatic Full Moon Blade attack. Existing
 actor-visible event and candidate interfaces carry its projection.
 

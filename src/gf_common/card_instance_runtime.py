@@ -13,6 +13,7 @@ from gf_common.card_instance import (
     MOON_DREAM_REVIEWED_SPEC_CHANGES,
     PESTLE_MIRAGE_PROFILE,
     PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES,
+    SACRIFICE_PROFILE,
     STRENGTH_POWDER_PROFILE,
     CardInstanceContract,
     is_corrected_contract,
@@ -126,7 +127,7 @@ def require_corrected_contract(contract: CardInstanceContract) -> None:
 
 def approved_binary_sha256(contract: CardInstanceContract) -> str:
     require_corrected_contract(contract)
-    if contract.profile_id == PESTLE_MIRAGE_PROFILE:
+    if contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
         return PESTLE_MIRAGE_BINARY_SHA256
     if contract.profile_id == MOON_DREAM_PROFILE:
         return MOON_DREAM_BINARY_SHA256
@@ -141,7 +142,7 @@ def approved_binary_sha256(contract: CardInstanceContract) -> str:
 
 def approved_runtime_build(contract: CardInstanceContract) -> Json:
     binary_sha256 = approved_binary_sha256(contract)
-    if contract.profile_id == PESTLE_MIRAGE_PROFILE:
+    if contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
         change_hash, change_files = PESTLE_MIRAGE_CHANGE_SHA256, PESTLE_MIRAGE_CHANGE_FILES
     elif contract.profile_id == MOON_DREAM_PROFILE:
         change_hash, change_files = MOON_DREAM_CHANGE_SHA256, MOON_DREAM_CHANGE_FILES

@@ -41,6 +41,7 @@ PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES = MappingProxyType({
     "docs/spec/godfield_rule_verification_register.md":
         "5a5269fcb62acbd1dd1507c38d9a65d29228cf9266929af4a84b82e10f6274b5",
 })
+SACRIFICE_PROFILE = "card-instance-simulator-v2-shared-20261125-sacrifice"
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -82,11 +83,16 @@ class CardInstanceContract:
     def requires_powder_weapon(self) -> bool:
         return self.profile_id in (
             STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE,
+            SACRIFICE_PROFILE,
         )
 
     @property
     def mirage_danger_requires_opponent(self) -> bool:
-        return self.profile_id == PESTLE_MIRAGE_PROFILE
+        return self.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE)
+
+    @property
+    def protects_sacrifice_artifacts(self) -> bool:
+        return self.profile_id == SACRIFICE_PROFILE
 
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
@@ -139,6 +145,10 @@ _PESTLE_MIRAGE_PIN: tuple[Any, ...] = tuple(
     }.get(name, default)
     for name, default in zip(_CONTRACT_FIELD_NAMES, _MOON_DREAM_PIN, strict=True)
 )
+_SACRIFICE_PIN: tuple[Any, ...] = tuple(
+    SACRIFICE_PROFILE if name == "profile_id" else pin
+    for name, pin in zip(_CONTRACT_FIELD_NAMES, _PESTLE_MIRAGE_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
@@ -148,6 +158,7 @@ _CONTRACT_PINS = MappingProxyType(
         DREAM_COMPAT_PROFILE: _DREAM_COMPAT_PIN,
         MOON_DREAM_PROFILE: _MOON_DREAM_PIN,
         PESTLE_MIRAGE_PROFILE: _PESTLE_MIRAGE_PIN,
+        SACRIFICE_PROFILE: _SACRIFICE_PIN,
     }
 )
 
@@ -180,6 +191,10 @@ def pestle_mirage_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _PESTLE_MIRAGE_PIN, strict=True)))
 
 
+def sacrifice_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _SACRIFICE_PIN, strict=True)))
+
+
 def is_shared_contract(contract: object) -> bool:
     return type(contract) is CardInstanceContract and contract.profile_id in (
         "card-instance-simulator-v2-shared-20261118",
@@ -187,6 +202,7 @@ def is_shared_contract(contract: object) -> bool:
         DREAM_COMPAT_PROFILE,
         MOON_DREAM_PROFILE,
         PESTLE_MIRAGE_PROFILE,
+        SACRIFICE_PROFILE,
     )
 
 
@@ -218,7 +234,7 @@ def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
             )
         elif contract.profile_id == MOON_DREAM_PROFILE:
             specs.update(MOON_DREAM_REVIEWED_SPEC_CHANGES)
-        elif contract.profile_id == PESTLE_MIRAGE_PROFILE:
+        elif contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
             specs.update(PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES)
         return specs
     return dict(CORRECTED_REVIEWED_SPEC_HASHES if is_corrected_contract(contract) else REVIEWED_SPEC_HASHES)

@@ -15,6 +15,8 @@
   [the separate contract clarification](../issues/0004-zero-mp-dynamic-weapon-target-contract.md).
   V3, its historical pilot and the wholly failed PPO parent remain unchanged;
   no new legality rule is inferred from the rejection.
+- Follow-up 2026-11-25: [ADR0072](0072-sacrifice-eligibility.md) records the
+  owner's confirmation that Sacrifice and Discard share item eligibility.
 
 ## Context and authority
 
