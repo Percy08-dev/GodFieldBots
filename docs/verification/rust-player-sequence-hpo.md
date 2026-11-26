@@ -13,15 +13,17 @@ schema 2, Journal 6, candidate codec 2, and HPO6. The managed limits were
 workers, width 32, and a 1 ms formation window were fixed. Each diagnostic
 produced 5,081 actions and the same semantic Journal and initial weight hashes.
 
-For timed runs the primary rate divides actual accepted actions across both
-seats by elapsed time from command start through collection and durable seal.
-Use command start to the coordinator's collection-start event, then add the
-stored `collection_seconds`. For a run stopped after sealing, use the
-standalone progress record's `collect` duration. The wide diagnostic
-`collection` phase also spans downstream Source work, so its end event
-measures a longer interval. The initial preparation-inclusive figures used
-that wide interval and are recomputed below. The diagnostic CUDA results
-inform attribution and carry their own probe overhead.
+The primary rate for the Journal changes divides accepted actions across
+both seats by `collection_seconds`. This interval starts before batch setup,
+including checkpoint publication, inference preparation and writer startup,
+and ends after the durable collection seal. For a run stopped after sealing,
+use the standalone progress record's `collect` duration. [Timer](../../src/gf_training/ppo_run.py#L777) · [Batch setup](../../src/gf_training/rust_player_collection.py#L310)
+
+Launch-through-seal timings also include the command's startup and initial
+checkpoint creation. They are a separate operational observation. Add the
+collection duration to the command-start-to-collection-start interval. The
+wide diagnostic `collection` phase runs through downstream Source work and
+has a later end event. GIL and queue diagnostics carry their own probe overhead.
 
 ## Early GIL contention
 
@@ -68,12 +70,11 @@ the original pending-before-Act and revision checks. [Stage results](../../runs/
 
 ## Journal changes
 
-The implementation branch carries the previously accepted Rust frame
-verification from ADR0073. Its three earlier pairs improved the median
-collection interval from 180.56 to 197.76 actions/s. Recomputing that data
-from full command launch through seal gives 149.71 to 162.58 actions/s, with
-a 30.02 actions/s control range. The earlier adoption used the collection
-interval that includes batch preparation. [Frame verification](journal-native-frame.md)
+The implementation branch carries the Rust frame verification from ADR0073.
+Its three earlier pairs improved the median collection interval from 180.56
+to 197.76 actions/s. The gain of 17.20 actions/s exceeded the control range
+of 8.21 actions/s and met the adoption threshold. Launch through seal gives
+149.71 to 162.58 actions/s. [Frame verification](journal-native-frame.md)
 
 A separate candidate removed the duplicate neural header validation. The
 CPU replay dropped from 15.112 to 9.639 ms median per two-model game. All
@@ -83,15 +84,22 @@ same Stage 1 release wheel, alternating order, fixed weights and the same
 
 | Metric | Control | Candidate |
 | --- | ---: | ---: |
-| Preparation-inclusive actions/s, median | 147.09 | 146.57 |
-| Stored collection interval actions/s, median | 187.96 | 192.87 |
+| Collection interval actions/s, median | 187.96 | 192.87 |
+| Launch-through-seal actions/s, median | 147.09 | 146.57 |
 | Inference round-trip p95, range of bins | 2,819–3,087 ms | 2,147–2,617 ms |
 | Torch reserved high-water, maximum | 474 MiB | 388 MiB |
 
-The preparation-inclusive control range was 30.87 actions/s. The candidate
-missed the approved throughput gate and was removed from the implementation
-branch. The original patch and trial details remain in the experiment
-directory. [Matched pairs](../../runs/rust-sequence-hpo/mlp-header-comparison.json)
+Inference p95 improved in all three pairs. The median collection gain of
+4.91 actions/s fell within the control range of 18.55 actions/s. The header
+candidate was removed after the trial. [Matched pairs](../../runs/rust-sequence-hpo/mlp-header-comparison.json)
+
+The no-change control from the frame series and the both-changes candidate
+from the header series give 180.56 and 192.87 collection actions/s. These
+are medians from separate series. In the runs representing the
+launch-through-seal medians, time before collection start was 5.80 s for
+the no-change control and 7.00 s for the both-changes candidate. This
+startup difference preceded writer construction. Both Journal changes
+operate after collection starts.
 
 ## Reference capacity
 
@@ -111,7 +119,7 @@ All decision keys, candidate column hashes, selected indices and actions
 agreed. The FP32 comparison of saved selected log probabilities and critic
 values was within `atol=rtol=1e-5` in every row.
 
-| Model | Python preparation-inclusive actions/s | Rust preparation-inclusive actions/s | Largest absolute FP32 difference |
+| Model | Python launch-through-seal actions/s | Rust launch-through-seal actions/s | Largest absolute FP32 difference |
 | --- | ---: | ---: | ---: |
 | GRU | 10.75 | 31.15 | 2.68e-7 |
 | Transformer | 15.22 | 30.89 | 2.62e-6 |
@@ -129,7 +137,7 @@ The explicit sequence configuration now checks the existing encoder limit
 before collection. The comparison uses a 512 MiB Numeric6 budget for both
 the Rust and resident Python sequence paths.
 
-| Run | Configured concurrency | Natural games | Actions | Preparation-inclusive actions/s | Collection interval actions/s | Torch reserved peak |
+| Run | Configured concurrency | Natural games | Actions | Launch-through-seal actions/s | Collection interval actions/s | Torch reserved peak |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Fresh, paused at update 1 | 16 | 16 | 376 | 34.64 | 79.87 | 164 MiB |
 | Resume, paused at update 2 | 16 | 16 | 228 | 14.31 | 59.76 | 172 MiB |
@@ -151,7 +159,7 @@ pause and resumed the same parent for a second audited update. The frozen
 initial weight SHA-256 was
 `0f2d090bcd85af053a0b3ac398e4f6584b4bfbc100e2e26503815066fc8d9120`.
 
-| Run | Configured concurrency | Natural games | Actions | Preparation-inclusive actions/s | Collection interval actions/s | Torch reserved peak |
+| Run | Configured concurrency | Natural games | Actions | Launch-through-seal actions/s | Collection interval actions/s | Torch reserved peak |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Fresh, paused at update 1 | 16 | 16 | 376 | 20.81 | 52.97 | 222 MiB |
 | Resume, paused at update 2 | 16 | 16 | 235 | 14.84 | 56.08 | 238 MiB |
@@ -180,7 +188,7 @@ an actual overlap lower bound of 256 in both runs. The sealed report and
 manifest control hashes, group Pack hashes, candidate sidecars, and total
 action counts were checked from the original SQLite file.
 
-| Model | Prep through seal | Prep-inclusive actions/s | Collection-only actions/s | Inference round-trip p95 bin | Torch reserved peak |
+| Model | Launch through seal | Launch-through-seal actions/s | Collection interval actions/s | Inference round-trip p95 bin | Torch reserved peak |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | GRU | 49.24 s | 103.33 | 145.30 | 3,221–3,288 ms | 246 MiB |
 | Transformer | 45.88 s | 110.89 | 126.26 | 3,691–3,758 ms | 1,404 MiB |
@@ -209,7 +217,7 @@ identical semantic Journal fingerprints. The 0.5 ms and 0 ms settings did
 not demonstrate an advantage beyond the observed control variation in
 these single trials. The existing 1 ms campaign setting remains selected.
 
-| Formation wait | Preparation-inclusive actions/s | Collection interval actions/s | Inference p95 bin | Torch reserved peak |
+| Formation wait | Launch-through-seal actions/s | Collection interval actions/s | Inference p95 bin | Torch reserved peak |
 | --- | ---: | ---: | ---: | ---: |
 | 1.0 ms | 129.67 | 187.45 | 2,751–2,819 ms | 416 MiB |
 | 0.5 ms | 148.37 | 190.01 | 2,819–2,886 ms | 442 MiB |
