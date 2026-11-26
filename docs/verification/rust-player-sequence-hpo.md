@@ -130,6 +130,34 @@ The median inference round-trip p95 bin moves from 3,087–3,154 ms to
 These runs measure the combined effect. The header-only comparison above
 provides the evidence on the incremental change. [Direct retest results](../../runs/rust-sequence-hpo/mlp-journal-direct-comparison.json)
 
+### Adoption
+
+The owner accepted both Journal changes following the direct retest. The
+shared Journal 6 writer uses the benchmarked header implementation for
+MLP, GRU, and Transformer. Construction validates the owned neural metadata
+snapshot once and reuses the validated settings for that header. The cold
+reader validates original wire metadata independently. The native frame
+verification continues to use ADR0073's original writer and resource-only
+fallback. The acceptance and publication order and Journal 6 schema are
+preserved.
+
+The adopted source-matched mimalloc wheel has SHA-256
+`d8d93760cc35d06066c6d4a3d150b6ad012e2cabd65025a633cbc1b081e5ee66`.
+The hardware and loopback suite passed 401 checks with 21 skips. Independent
+review confirmed the exact benchmarked diff, byte-identical Model4 headers,
+and reader validation of corrupted metadata. [Adoption tests](../../runs/rust-sequence-hpo/adoption-hardware-tests.log)
+
+The supervised verifier accepted one fresh update per model with this wheel
+and the adopted header implementation. MLP confirmed 256 simultaneous
+games, 5,081 actions and 200.70 collection actions/s. GRU and Transformer
+each passed 16 games and 376 actions with full Source audit. All three
+matched their previous initial weights and semantic Journal hashes.
+[MLP run](../../runs/rust-sequence-hpo/adoption-mlp-256/) · [GRU run](../../runs/rust-sequence-hpo/adoption-gru-16/) · [Transformer run](../../runs/rust-sequence-hpo/adoption-transformer-16/)
+
+The archived baseline environment has the same producer fingerprint as the
+previous main checkout installation. Paused parents keep their recorded
+producer requirements. [Previous environment](../../runs/journal-writer-throughput/baseline-venv/)
+
 ## Reference capacity
 
 The existing Model4 Python resident path used HPO4, `canonical-python`, the

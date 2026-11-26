@@ -35,6 +35,7 @@ from gf_models.structured_policy import GameStructuredPolicyV3, StructuredPolicy
 from gf_models.structured_runtime import admit_game_workers_v3, own_game_worker_settings_v3
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
 from gf_simulator_client.structured_resources import ReservationLedger
+from gf_training import card_instance_journal
 from gf_training.card_instance_collection import collection_metadata
 from gf_training.card_instance_journal import CardInstanceJournal, read_card_instance_journal
 from tests.model3_support import LAYOUT, model3, raw_inputs
@@ -415,18 +416,42 @@ def test_neural_journal_requires_both_old_policy_statistics_before_decision_appe
     owner.release()
 
 
-def test_neural_journal_uses_actual_window_and_collection_requires_complete_sealed_bindings(tmp_path):
-    owner, label, execution, _, _, _, _ = saved(tmp_path, window=2)
+@pytest.mark.parametrize("temporal", ["mlp", "gru", "transformer"])
+def test_neural_journal_uses_actual_window_and_collection_requires_complete_sealed_bindings(
+    tmp_path, monkeypatch, temporal,
+):
+    owner, label, execution, _, _, _, _ = saved(tmp_path, temporal, window=2)
     _, _, bank, _, _, caps, costs = generated(execution)
     directory = tmp_path / "journal"
     directory.mkdir()
+    neural = owner.journal_metadata(label)
+    validations = []
+
+    def observe_validation(raw, **kwargs):
+        validations.append(raw)
+        return validate_neural_metadata(raw, **kwargs)
+
+    monkeypatch.setattr(card_instance_journal, "validate_neural_metadata", observe_validation)
     journal = CardInstanceJournal(directory, "episode", 1, label, run_id="run", game_id="game", actions=ACTIONS,
-        bank_episode=bank.episode, caps=asdict(caps), numeric_costs=asdict(costs), model_id="mlp",
-        runtime_evidence=receipt(), neural=owner.journal_metadata(label))
+        bank_episode=bank.episode, caps=asdict(caps), numeric_costs=asdict(costs), model_id=temporal,
+        runtime_evidence=receipt(), neural=neural)
+    assert len(validations) == 1
+    assert validations[0] == journal.header["neural"] and validations[0] is not neural
+    neural["files"][0]["sha256"] = "0" * 64
     assert journal.header["aggregate_window"] == 2
     assert journal.header["token_signature"] != journal.header["layout_signature"]
     journal.finish("incomplete", None)
-    assert read_card_instance_journal(journal.final_path, actions=ACTIONS).header["neural"] == owner.journal_metadata(label)
+    assert journal.final_path.read_text().splitlines()[0] == canonical(journal.header)
+    data = read_card_instance_journal(journal.final_path, actions=ACTIONS)
+    assert len(validations) == 2 and validations[1] is not validations[0]
+    assert canonical(data.header) == canonical(journal.header)
+    assert data.header["neural"] == owner.journal_metadata(label)
+    malformed = owner.journal_metadata(label)
+    malformed["files"] = tuple(malformed["files"])
+    with pytest.raises(ContractError, match="external inference file inventory mismatch"):
+        CardInstanceJournal(directory, "episode", 1, label, run_id="run", game_id="game", actions=ACTIONS,
+            bank_episode=bank.episode, caps=asdict(caps), numeric_costs=asdict(costs), model_id=temporal,
+            runtime_evidence=receipt(), neural=malformed)
     options = {"actions": ACTIONS, "config": {}, "runtime_evidence": [receipt()], "schedule": [{}], "inventory": [{}],
         "policies": [label], "bots_revision": "fixture"}
     sealed = owner.finalize(deadline=time.monotonic() + 30)

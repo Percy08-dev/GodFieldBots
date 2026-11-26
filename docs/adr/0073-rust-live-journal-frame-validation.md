@@ -25,6 +25,15 @@ workspace の既存貸与から子 scratch を一つ使い、native 資源制限
 試合内 EventBank、原本の SHA-256、全候補、選択コマンド、Replay の照合と
 FIFO の受領 ACK は既存の確定条件を引き継ぐ。
 
+## Journal 6 ヘッダー検証の共通化
+
+256試合の直接比較を経て、フレーム検証のGIL解放と、ヘッダー作成時の
+モデル情報の重複検証削減を採用する。共通の Journal 6 コンストラクタが
+所有するスナップショットを1回検証し、その結果を同じヘッダーの検査に使う。
+MLP・GRU・Transformerに同じ経路を適用する。保存済みヘッダーの読み込みでは
+独立して検証する。正規バイト列と保存形式を維持する。
+[直接比較と採用時の検証](../verification/rust-player-sequence-hpo.md#direct-256-game-retest-of-both-journal-changes)
+
 ## 検証と見直し
 
 [実機検証](../verification/journal-native-frame.md) に採否、同じ原本からの

@@ -146,6 +146,12 @@ ownership, ordered EventBank checks and acknowledgement stay with the writer.
 The [migration verification](verification/journal-native-frame.md) records
 the real collection comparisons and parity checks.
 
+Journal 6 construction validates its owned neural metadata snapshot once and
+uses that result when checking the corresponding header. The common writer
+uses this path for MLP, GRU, and Transformer. Reading a saved header runs the
+independent metadata validation. The [combined Journal verification](verification/rust-player-sequence-hpo.md#direct-256-game-retest-of-both-journal-changes)
+records the adoption evidence.
+
 CardInstance input validation checks the writer's observation once. The
 ActionOptions checks use that same record's owned snapshot and issue an
 independent owned result. Public entry points still validate their incoming
