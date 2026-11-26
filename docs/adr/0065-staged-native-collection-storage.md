@@ -30,12 +30,18 @@ Existing HPO HTTP retention remains diagnostic storage.
 At seal, the writer closes the mutable SQLite connection and sidecars and
 uses its original immutable database and descriptor as the source. It copies
 to a private directory on the admitted HDD ext4 filesystem. It re-reads the
-destination's SHA-256, validates SQLite and every Pack, then synchronizes the
-data and directory. It installs the files under an exclusively claimed
+destination's SHA-256 and validates SQLite and every Pack. The staged Rust
+Journal path can overlap that audit with syncing both private files. It
+captures the identity, size and timestamps of the open files after writing
+and rechecks them after the audit and file sync. It waits for both operations
+to finish before cleanup, and requires their success before any file is
+installed. The serial path audits the files before syncing them. The writer
+synchronizes the staged directory and installs the files under an exclusively claimed
 collection directory on that filesystem, synchronizes the affected directory
 ancestry, and publishes the durable catalog entry. Existing Source ownership
 binds the actual verified HDD database and descriptor before issuing the
-collection to the learner. The live transfer has one writer and is synchronous.
+collection to the learner. The writer keeps custody of both file descriptors
+through the transfer, audit and sync.
 
 The existing final path, hashes, run and seal IDs, and lineage formats remain
 the durable identities. When the option is omitted, historical effective

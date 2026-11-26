@@ -1,9 +1,12 @@
 //! Independent Journal6 candidate validation over an original pending capture.
-use super::{ensure, error, game::action_from_parts, is_shared_card_instance_contract};
 #[cfg(test)]
 use super::shared_card_instance_contract;
-use crate::error::Result;
+use super::{
+    ensure, error, game::action_from_parts, is_shared_card_instance_contract,
+    search::Table as ActorTable,
+};
 use crate::structured_journal::{TARGETS, card_instance::KINDS};
+use crate::{error::Result, json::ValueExt};
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{MapAccess, Visitor, value::MapAccessDeserializer},
@@ -103,17 +106,17 @@ fn table_object<'de, D: Deserializer<'de>>(
 // contract is a sorted serde_json::Value; remaining validated values are ASCII
 // codebook strings, nonnegative offsets, bounded integers and bools.
 #[derive(Serialize)]
-struct CanonicalTable<'a> {
+struct CanonicalTable<'a, Kind, Slot> {
     action_contract: &'a Value,
     frame_hash: &'a str,
-    kinds: &'a [&'a str],
+    kinds: &'a [Kind],
     numerics: &'a [[i64; 4]],
     offsets: &'a [usize],
     presence: &'a [[bool; 4]],
     purpose: &'a str,
-    slots: &'a [u8],
+    slots: &'a [Slot],
     synthetic_capacity: bool,
-    targets: &'a [&'a str],
+    targets: &'a [Kind],
 }
 struct HashWriter(Sha256);
 impl io::Write for HashWriter {
@@ -156,12 +159,119 @@ pub(super) fn check(
         generated: Generated { table },
     } = serde_json::from_slice(whole)
         .map_err(|exc| error(format!("writer candidate JSON: {exc}")))?;
+    let content = CanonicalTable {
+        action_contract: &table.action_contract,
+        frame_hash: table.frame_hash,
+        kinds: &table.kinds,
+        numerics: &table.numerics,
+        offsets: &table.offsets,
+        presence: &table.presence,
+        purpose: table.purpose,
+        slots: &table.slots,
+        synthetic_capacity: table.synthetic_capacity,
+        targets: &table.targets,
+    };
+    #[allow(unused_mut)]
+    let mut checked = check_columns(
+        selected,
+        frame,
+        content,
+        table.table_hash,
+        max_positions,
+        output_bytes,
+    )?;
+    #[cfg(test)]
+    {
+        checked.parsed_columns_bytes = vec_bytes(&table.kinds)
+            + vec_bytes(&table.targets)
+            + vec_bytes(&table.numerics)
+            + vec_bytes(&table.presence)
+            + vec_bytes(&table.offsets)
+            + vec_bytes(&table.slots);
+    }
+    Ok(checked)
+}
+
+pub(super) fn check_actor_table<'a>(
+    frame: &'a Value,
+    selected: usize,
+    table: &'a ActorTable,
+    max_positions: usize,
+    output_bytes: usize,
+) -> Result<Candidates<'a>> {
+    let payload = frame.require("payload")?;
+    let cards = payload
+        .require("observation")?
+        .require("own")?
+        .require("cards")?
+        .array()?;
+    let metadata = payload.require("typed_metadata")?.array()?;
+    let frame = Frame {
+        actor: frame.require("actor")?.integer(1, 2)? as u64,
+        frame_hash: frame.require("frame_hash")?.string()?,
+        payload: FramePayload {
+            observation: Observation {
+                own: Own {
+                    cards: cards
+                        .iter()
+                        .map(|card| {
+                            Ok(Card {
+                                card_ref: card.require("card_ref")?.string()?,
+                            })
+                        })
+                        .collect::<Result<_>>()?,
+                },
+            },
+            typed_metadata: metadata
+                .iter()
+                .map(|item| {
+                    Ok(ActionKind {
+                        kind: item.require("type")?.string()?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+        },
+    };
+    let content = CanonicalTable {
+        action_contract: &table.action_contract,
+        frame_hash: &table.frame_hash,
+        kinds: &table.kinds,
+        numerics: &table.numerics,
+        offsets: &table.offsets,
+        presence: &table.presence,
+        purpose: &table.purpose,
+        slots: &table.slots,
+        synthetic_capacity: table.synthetic_capacity,
+        targets: &table.targets,
+    };
+    check_columns(
+        selected,
+        frame,
+        content,
+        &table.table_hash,
+        max_positions,
+        output_bytes,
+    )
+}
+
+fn check_columns<'a, Kind, Slot>(
+    selected: usize,
+    frame: Frame<'a>,
+    table: CanonicalTable<'_, Kind, Slot>,
+    table_hash: &'a str,
+    max_positions: usize,
+    output_bytes: usize,
+) -> Result<Candidates<'a>>
+where
+    Kind: AsRef<str> + serde::Serialize,
+    Slot: Copy + Into<usize> + serde::Serialize,
+{
     ensure(
         (1..=128).contains(&max_positions),
         "invalid position capacity",
     )?;
     ensure(
-        is_shared_card_instance_contract(&table.action_contract)
+        is_shared_card_instance_contract(table.action_contract)
             && table.purpose == "qualified_game"
             && !table.synthetic_capacity
             && frame.frame_hash == table.frame_hash
@@ -205,13 +315,13 @@ pub(super) fn check(
     )?;
     let mut binary = vec![0u8; output_bytes];
     for i in 0..n {
-        let kind = table.kinds[i];
+        let kind = table.kinds[i].as_ref();
         let code = KINDS
             .iter()
             .position(|&value| value == kind)
             .filter(|&code| permitted & (1 << code) != 0)
             .ok_or_else(|| error("writer candidate outside typed metadata"))?;
-        let target = table.targets[i];
+        let target = table.targets[i].as_ref();
         let targeted = matches!(kind, "play_sequence" | "sell" | "buy");
         ensure(
             if targeted {
@@ -238,17 +348,16 @@ pub(super) fn check(
         };
         ensure(cardinality_ok, "writer candidate reference cardinality")?;
         let mut seen = 0u32;
-        for &slot in row {
-            ensure(
-                (slot as usize) < own.len(),
-                "candidate slot outside original own view",
-            )?;
+        for (j, &slot) in row.iter().enumerate() {
+            let slot = slot.into();
+            ensure(slot < own.len(), "candidate slot outside original own view")?;
             let bit = 1 << slot;
             ensure(
                 seen & bit == 0,
                 "writer candidate repeats a physical reference",
             )?;
             seen |= bit;
+            binary[slot_start + a + j] = slot as u8;
         }
         let presence = match kind {
             "exchange" => [true, true, true, false],
@@ -278,32 +387,19 @@ pub(super) fn check(
         binary[offset..offset + 8].copy_from_slice(&(a as i64).to_le_bytes());
     }
     binary[slot_start - 8..slot_start].copy_from_slice(&(elements as i64).to_le_bytes());
-    binary[slot_start..].copy_from_slice(&table.slots);
-    let content = CanonicalTable {
-        action_contract: &table.action_contract,
-        frame_hash: table.frame_hash,
-        kinds: &table.kinds,
-        numerics: &table.numerics,
-        offsets: &table.offsets,
-        presence: &table.presence,
-        purpose: table.purpose,
-        slots: &table.slots,
-        synthetic_capacity: table.synthetic_capacity,
-        targets: &table.targets,
-    };
     let mut hasher = HashWriter(Sha256::new());
-    serde_json::to_writer(&mut hasher, &content).map_err(|exc| error(exc.to_string()))?;
+    serde_json::to_writer(&mut hasher, &table).map_err(|exc| error(exc.to_string()))?;
     ensure(
-        format!("{:x}", hasher.0.finalize()) == table.table_hash,
+        format!("{:x}", hasher.0.finalize()) == table_hash,
         "writer candidate table hash",
     )?;
     let row = &table.slots[table.offsets[selected]..table.offsets[selected + 1]];
     let action = action_from_parts(
-        table.kinds[selected],
-        table.targets[selected],
+        table.kinds[selected].as_ref(),
+        table.targets[selected].as_ref(),
         frame.actor,
         row.iter()
-            .map(|&slot| Value::from(own[slot as usize].card_ref))
+            .map(|&slot| Value::from(own[slot.into()].card_ref))
             .collect(),
         &table.numerics[selected],
         &table.presence[selected],
@@ -311,17 +407,10 @@ pub(super) fn check(
     let action = serde_json::to_vec(&action).map_err(|exc| error(exc.to_string()))?;
     let sha256 = format!("{:x}", Sha256::digest(&binary));
     #[cfg(test)]
-    let parsed_columns_bytes = vec_bytes(&table.kinds)
-        + vec_bytes(&table.targets)
-        + vec_bytes(&table.numerics)
-        + vec_bytes(&table.presence)
-        + vec_bytes(&table.offsets)
-        + vec_bytes(&table.slots);
-    #[cfg(test)]
     let parsed_frame_bytes = vec_bytes(&own) + vec_bytes(&frame.payload.typed_metadata);
     Ok(Candidates {
         frame_hash: frame.frame_hash,
-        table_hash: table.table_hash,
+        table_hash,
         selected,
         count: n,
         elements,
@@ -329,7 +418,7 @@ pub(super) fn check(
         payload: binary,
         sha256,
         #[cfg(test)]
-        parsed_columns_bytes,
+        parsed_columns_bytes: 0,
         #[cfg(test)]
         parsed_frame_bytes,
     })

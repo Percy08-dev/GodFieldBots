@@ -38,22 +38,22 @@ pub(crate) fn episode_digest(
         SourceFormat::Engineering,
     )
 }
-fn episode_digest_context(
-    classification: &Value,
-    actor: &Value,
-    episode: &Value,
-    boundary: &Value,
-    frames: &[Value],
-    end_kind: &Value,
-    outcome: &Value,
-    reason: &Value,
+pub(crate) fn episode_digest_context<'a>(
+    classification: &'a Value,
+    actor: &'a Value,
+    episode: &'a Value,
+    boundary: &'a Value,
+    frames: impl IntoIterator<Item = &'a Value> + Clone,
+    end_kind: &'a Value,
+    outcome: &'a Value,
+    reason: &'a Value,
     budget: &Arc<Budget>,
     control: &Control,
     format: SourceFormat,
 ) -> Result<String> {
     control.check()?;
     let mut raw = 65536usize;
-    for value in frames.iter().chain([
+    for value in frames.clone().into_iter().chain([
         classification,
         actor,
         episode,
@@ -82,7 +82,7 @@ fn episode_digest_context(
             "frames",
             json::array(
                 frames
-                    .iter()
+                    .into_iter()
                     .map(|v| json::copy(v, control))
                     .collect::<Result<Vec<_>>>()?,
             ),
@@ -131,6 +131,27 @@ mod tests {
         fs::create_dir(&root).unwrap();
         root
     }
+    #[test]
+    fn corrected_episode_digest_from_borrowed_rows_matches_python_bytes() {
+        use serde_json::json;
+        let classification = json!({
+            "action_contract":{"profile_id":"fixture"},
+            "purpose":"qualified_game","synthetic_capacity":false,
+            "rule_signature":"rule","layout_signature":"layout"
+        });
+        let frames = [
+            (17, json!({"revision":17,"selection":{"index":1,"logprob":-0.0,"value":0.10000000149011612}})),
+            (19, json!({"revision":19,"selection":{"index":0,"logprob":-9.25e-7,"value":0.375}})),
+        ];
+        let digest = episode_digest_context(
+            &classification, &json!(2), &json!("ep-fixture"), &json!({"end":12,"prefix_hash":"bank"}),
+            frames.iter().map(|(_, frame)| frame), &json!("natural"), &json!("draw"), &Value::Null,
+            &Budget::new(8 * 1024 * 1024), &Control::new(f64::MAX).unwrap(), SourceFormat::Corrected,
+        ).unwrap();
+        // json.dumps(sort_keys=True, ensure_ascii=False, separators=(",", ":")) then SHA-256.
+        assert_eq!(digest, "010eb0bb0bd415a0aa556e4807ad5302d1ac3bffc75f54034c2251cc2d8c3ae2");
+    }
+
     #[test]
     fn original_sixteen_role_journals_stage_exact_python_c1_named_arrays_metadata_and_digests() {
         // A frozen Python Source reference component, not whole-parent/Source

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -59,7 +60,8 @@ class RustMatchPump:
                       batch_id: str, evidence: CardInstanceRuntimeEvidence,
                       http_diagnostics: HPODiagnosticsConfig | None = None,
                       operation_id: str | None = None,
-                      progress: ProgressCallback | None = None) -> RustMatchResult:
+                      progress: ProgressCallback | None = None,
+                      player_worker_threads: int = 1) -> RustMatchResult:
         """Caller already preflighted; errors return through its original cleanup."""
         accepted: list[Json] = []
         bound_contexts: dict[int, str] = {}
@@ -72,6 +74,10 @@ class RustMatchPump:
         abnormal_pairs: set[int] = set()
         total = sum(len(group.episodes) for group in groups)
         full_wave = 0 < total <= game_concurrency
+        native_journal = writer._rollout is not None
+        if native_journal and not full_wave:
+            raise ContractError("native Journal reader requires prebound full cohort")
+        parallel_start = native_journal and player_worker_threads > 1
         next_group = 0
         drain_error: BaseException | None = None
 
@@ -94,7 +100,7 @@ class RustMatchPump:
                 check_drain()
                 raise
 
-        async def admit_group(index: int) -> None:
+        def register_group(index: int) -> tuple[ManagedServer, Json]:
             group = groups[index]
             capture = (None if http_diagnostics is None else HttpPairCapture.configured(
                 http_diagnostics, operation_id=operation_id or run_id, collection_id=batch_id,
@@ -110,10 +116,48 @@ class RustMatchPump:
             self.server_history.append(history)
             if capture is not None:
                 self._pending_http[managed] = (HttpFacts(), history)
+            return managed, history
+
+        async def start_server(index: int, managed: ManagedServer, history: Json) -> None:
             startup = await managed.start()
-            receipt = evidence.verify_executed(managed.process)
-            history['runtime_evidence'] = receipt
-            startups[index], receipts[index], positions[index] = startup, receipt, 0
+            process = managed.process
+
+            def retain_receipt(receipt: Json) -> None:
+                history['runtime_evidence'] = receipt
+                startups[index], receipts[index], positions[index] = startup, receipt, 0
+
+            if not parallel_start:
+                retain_receipt(evidence.verify_executed(process))
+                return
+
+            original = evidence.prepare_executed_read(process, deadline=execution_deadline)
+            read = asyncio.create_task(asyncio.to_thread(original.read))
+            try:
+                receipt = await asyncio.shield(read)
+            except asyncio.CancelledError as primary:
+                # Do not hand this live server to cleanup while its original
+                # executable is still being read.
+                while not read.done():
+                    try:
+                        await asyncio.shield(read)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:  # noqa: BLE001 - retrieve the completed result below.
+                        break
+                try:
+                    receipt = read.result()
+                    evidence.confirm_executed_read(managed.process, original)
+                except BaseException as failure:  # noqa: BLE001 - preserve the original cancellation.
+                    primary.add_note("executed receipt not retained: " + type(failure).__name__)
+                else:
+                    retain_receipt(receipt)
+                raise
+            evidence.confirm_executed_read(managed.process, original)
+            retain_receipt(receipt)
+
+        async def bind_group(index: int) -> None:
+            group = groups[index]
+            startup, receipt = startups[index], receipts[index]
             real_contexts = tuple(EpisodeEncodingContext(**contexts[episode.episode_id],
                 runtime_evidence=receipt) for episode in group.episodes)
             await asyncio.to_thread(writer.bind_contexts, real_contexts)
@@ -135,12 +179,38 @@ class RustMatchPump:
             if not full_wave:
                 start_games([current_specs[group.episodes[0].episode_id]])
 
-        while next_group < min(len(groups), game_concurrency):
-            await admit_group(next_group)
-            next_group += 1
+        async def admit_group(index: int) -> None:
+            managed, history = register_group(index)
+            await start_server(index, managed, history)
+            await bind_group(index)
+
+        initial_groups = min(len(groups), game_concurrency)
+        if parallel_start:
+            for offset in range(0, initial_groups, player_worker_threads):
+                cohort = range(offset, min(offset + player_worker_threads, initial_groups))
+                owners = [(index, *register_group(index)) for index in cohort]
+                try:
+                    async with asyncio.TaskGroup() as startup_tasks:
+                        for index, managed, history in owners:
+                            startup_tasks.create_task(start_server(index, managed, history))
+                except ExceptionGroup as failure:
+                    if len(failure.exceptions) == 1 and not isinstance(failure.exceptions[0], BaseExceptionGroup):
+                        original = failure.exceptions[0]
+                        raise original from original.__cause__
+                    raise
+            # Every startup has settled. Bind the original contexts in plan
+            # order before the single native admission of the whole wave.
+            for index in range(initial_groups):
+                await bind_group(index)
+            next_group = initial_groups
+        else:
+            while next_group < initial_groups:
+                await admit_group(next_group)
+                next_group += 1
         if full_wave:
             # Repeated-seed games have independent IDs and use the same seed.
             # Submit only after the original writer contexts are bound.
+            writer._finish_rollout_registration()
             start_games([current_specs[episode.episode_id] for group in groups for episode in group.episodes])
         episode_group = {episode.episode_id: index for index, group in enumerate(groups) for episode in group.episodes}
         loop = asyncio.get_running_loop()
@@ -149,13 +219,30 @@ class RustMatchPump:
         def drain_storage() -> None:
             nonlocal drain_error
             terminal_count = 0
+            rollout = None
+            deferred_releases: list[tuple[tuple[str, str, str], str]] = []
             try:
+                rollout = writer._begin_rollout_read()
+                defer_release = rollout is not None and full_wave
                 while terminal_count < total:
-                    bundle = self.runtime.next_storage(execution_deadline)
+                    if rollout is None:
+                        bundle, packet = self.runtime.next_storage(execution_deadline), None
+                    else:
+                        packet = rollout.next_terminal(execution_deadline)
+                        accepted.extend(json.loads(packet.prior_receipts()))
+                        bundle = packet.bundle()
                     row = {'id': bundle.id, 'kind': bundle.kind, 'episode': bundle.episode,
                         'game': bundle.game, 'transport_sha256': bundle.transport_sha256, 'bytes': bundle.reserved_bytes}
-                    writer.accept(bundle)
-                    self.runtime.storage_ack(bundle)
+                    if packet is None:
+                        writer.accept(bundle)
+                    else:
+                        writer.accept_rollout(bundle, packet)
+                    if defer_release:
+                        owner = self.runtime._storage_ack_defer_release(bundle)
+                        if owner is not None:
+                            deferred_releases.append(owner)
+                    else:
+                        self.runtime.storage_ack(bundle)
                     if http_diagnostics is not None and row['kind'] == 'terminal':
                         facts = bundle._http_diagnostics()
                         if facts is None:
@@ -164,16 +251,24 @@ class RustMatchPump:
                     # One producer appends completed metadata. The event-loop cursor
                     # only reads this prefix and never owns a native bundle.
                     accepted.append(row)
-                    del bundle
+                    del bundle, packet
                     if row['kind'] == 'terminal':
                         terminal_count += 1
                         loop.call_soon_threadsafe(terminal_ready.set)
+                if defer_release:
+                    self.runtime._settle_deferred_storage_releases(
+                        deferred_releases, execution_deadline,
+                    )
             except BaseException as error:
                 # Publish the cause and stop native admission even if the event loop
                 # has not yet delivered the executor future's completion callback.
                 drain_error = error
                 cancel_owner(self.runtime.cancel, error)
+                if rollout is not None:
+                    cancel_owner(lambda _: writer._finish_rollout_read(failed=True), error)
                 raise
+            if rollout is not None:
+                writer._finish_rollout_read(failed=False)
 
         drain = loop.run_in_executor(None, drain_storage)
         drain.add_done_callback(lambda _: terminal_ready.set())

@@ -5,6 +5,7 @@ use crate::{
     error::{Error, Result},
     json::{Value, ValueExt},
     structured_journal::card_instance,
+    structured_tokens::Recipe,
 };
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
@@ -479,6 +480,16 @@ impl Http {
         .await
     }
     pub async fn act(&mut self, game: &str, viewer: u8, pending: &Value) -> Result<Value> {
+        self.act_with_recipe(game, viewer, pending, None).await
+    }
+
+    pub(super) async fn act_with_recipe(
+        &mut self,
+        game: &str,
+        viewer: u8,
+        pending: &Value,
+        recipe: Option<&Recipe>,
+    ) -> Result<Value> {
         let v = self
             .request(
                 Method::POST,
@@ -487,11 +498,24 @@ impl Http {
                 true,
             )
             .await?;
-        Self::validate_act_ack(&v, viewer, pending)?;
+        if recipe.is_some() {
+            Self::validate_act_ack_with_recipe(&v, viewer, pending, recipe)?;
+        } else {
+            Self::validate_act_ack(&v, viewer, pending)?;
+        }
         // Validation only: ACK events/options/next_observation never enter history.
         Ok(v)
     }
-    fn validate_act_ack(v: &Value, viewer: u8, pending: &Value) -> Result<()> {
+    pub(crate) fn validate_act_ack(v: &Value, viewer: u8, pending: &Value) -> Result<()> {
+        Self::validate_act_ack_with_recipe(v, viewer, pending, None)
+    }
+
+    pub(super) fn validate_act_ack_with_recipe(
+        v: &Value,
+        viewer: u8,
+        pending: &Value,
+        recipe: Option<&Recipe>,
+    ) -> Result<()> {
         v.closed(
             &[
                 "public_event_schema_version",
@@ -535,9 +559,15 @@ impl Http {
         )?;
         let budget = Budget::new(12usize << 30);
         let control = Control::new(f64::MAX)?;
-        let recipe = crate::structured_tokens::Recipe::corrected(16, &budget, &control)?;
+        let local_recipe;
+        let recipe = if let Some(recipe) = recipe {
+            recipe
+        } else {
+            local_recipe = Recipe::corrected(16, &budget, &control)?;
+            &local_recipe
+        };
         for event in v["events"].array()? {
-            card_instance::event(event, &recipe, &budget, &control)?;
+            card_instance::event(event, recipe, &budget, &control)?;
         }
         let obs = &v["next_observation"];
         if !obs.is_null() {
@@ -604,9 +634,18 @@ mod tests {
             "next_observation":null,
             "action_options":null
         });
-        Http::validate_act_ack(&ack, 1, &pending).unwrap();
-        assert_eq!(ack["events"].array().unwrap().len(), 8);
+        let budget = Budget::new(8 << 20);
+        let control = Control::new(f64::MAX).unwrap();
+        let recipe = Recipe::corrected(16, &budget, &control).unwrap();
+        for reused in [None, Some(&recipe)] {
+            let original = ack.clone();
+            Http::validate_act_ack_with_recipe(&ack, 1, &pending, reused).unwrap();
+            assert_eq!(ack, original);
+            assert_eq!(ack["events"].array().unwrap().len(), 8);
+        }
         ack["events"][0]["type"] = json!("artifact_used");
-        assert!(Http::validate_act_ack(&ack, 1, &pending).is_err());
+        let baseline = Http::validate_act_ack(&ack, 1, &pending).unwrap_err();
+        let reused = Http::validate_act_ack_with_recipe(&ack, 1, &pending, Some(&recipe)).unwrap_err();
+        assert_eq!(baseline, reused);
     }
 }

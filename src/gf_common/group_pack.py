@@ -117,7 +117,7 @@ def parse_json(data: bytes, *, canonical: bool = True, limit: int = MAX_INDEX) -
         raise ValueError("invalid JSON") from exc
 
 
-def digest(data: bytes) -> str:
+def digest(data: bytes | memoryview) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
@@ -194,9 +194,9 @@ def unpack_raw(compressed: bytes, max_uncompressed_bytes: int = 256 * MIB) -> by
         raise ValueError("invalid Pack frame") from exc
 
 
-def decode_pack(
-    compressed: bytes, max_uncompressed_bytes: int = 256 * MIB
-) -> tuple[PackMember, ...]:
+def _checked_pack(
+    compressed: bytes, max_uncompressed_bytes: int
+) -> tuple[bytes, int, list[dict[str, Json]]]:
     raw = unpack_raw(compressed, max_uncompressed_bytes)
     if len(raw) < 16 or raw[:8] != MAGIC:
         raise ValueError("invalid Pack header")
@@ -214,9 +214,10 @@ def decode_pack(
         raise ValueError("invalid Pack index")
     cursor = 0
     previous = ""
-    members = []
     payload_start = 16 + size
-    for entry in index["files"]:
+    view = memoryview(raw)
+    files: list[dict[str, Json]] = index["files"]
+    for entry in files:
         if not isinstance(entry, dict) or set(entry) != {
             "kind",
             "name",
@@ -238,12 +239,28 @@ def decode_pack(
             or entry["kind"] not in KINDS
         ):
             raise ValueError("invalid Pack range or order")
-        data = raw[payload_start + cursor : payload_start + cursor + length]
-        if digest(data) != entry["sha256"]:
+        start = payload_start + cursor
+        if digest(view[start : start + length]) != entry["sha256"]:
             raise ValueError("Pack member hash mismatch")
-        members.append(PackMember(entry["kind"], name, data))
         cursor += length
         previous = name
     if payload_start + cursor != len(raw):
         raise ValueError("Pack payload coverage mismatch")
+    return raw, payload_start, files
+
+
+def inspect_pack(compressed: bytes, max_uncompressed_bytes: int) -> tuple[int, list[dict[str, Json]]]:
+    """Fully check a Pack and return its byte length and verified member index."""
+    raw, _, files = _checked_pack(compressed, max_uncompressed_bytes)
+    return len(raw), files
+
+
+def decode_pack(
+    compressed: bytes, max_uncompressed_bytes: int = 256 * MIB
+) -> tuple[PackMember, ...]:
+    raw, payload_start, files = _checked_pack(compressed, max_uncompressed_bytes)
+    members = []
+    for entry in files:
+        start = payload_start + entry["offset"]
+        members.append(PackMember(entry["kind"], entry["name"], raw[start : start + entry["length"]]))
     return tuple(members)

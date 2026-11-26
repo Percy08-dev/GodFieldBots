@@ -1,4 +1,5 @@
 //! Immutable capture transport. Acceptance transfers custody, never proves persistence.
+use super::capture::OwnedAction;
 use super::super::{
     ensure, error,
     http::HttpFacts,
@@ -18,9 +19,14 @@ use sha2::{Digest, Sha256};
 use std::{
     borrow::Cow,
     collections::{HashMap, VecDeque},
-    io::Write,
-    sync::{Arc, Condvar, Mutex},
+    io::{self, Write},
+    sync::{
+        Arc, Condvar, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
+
+pub(crate) mod rollout;
 
 struct Count(usize);
 impl Write for Count {
@@ -37,6 +43,8 @@ struct Ledger {
     native: usize,
     external: usize,
     training: usize,
+    provisional: usize,
+    waiters: usize,
     peak: usize,
 }
 pub struct Account {
@@ -44,33 +52,87 @@ pub struct Account {
     limit: usize,
     training_limit: usize,
     ledger: Mutex<Ledger>,
+    available: Condvar,
 }
 impl Account {
-    fn change(&self, native: bool, training: bool, old: usize, new: usize) -> Result<()> {
+    fn change(
+        &self,
+        native: bool,
+        training: bool,
+        old: usize,
+        new: usize,
+        deadline: Option<f64>,
+    ) -> Result<()> {
         let mut s = self.ledger.lock().unwrap();
-        let total = s
-            .native
-            .checked_add(s.external)
-            .and_then(|n| n.checked_sub(old))
-            .and_then(|n| n.checked_add(new))
-            .filter(|n| *n <= self.limit)
-            .ok_or_else(|| Error::resource("recording byte budget exhausted"))?;
-        if training {
-            s.training = s.training.checked_sub(old)
-                .and_then(|n| n.checked_add(new))
-                .filter(|n| *n <= self.training_limit)
-                .ok_or_else(|| Error::resource("PPO numeric byte budget exhausted"))?;
+        let mut waiting = false;
+        let result = loop {
+            if deadline.is_some_and(|expires| monotonic() >= expires) {
+                break Err(Error::Deadline);
+            }
+            let Some(total) = (s.native + s.external - old)
+                .checked_add(new)
+                .filter(|n| *n <= self.limit)
+            else {
+                break Err(Error::resource("recording byte budget exhausted"));
+            };
+            let next_training = if training {
+                let Some(bytes) = (s.training - old)
+                    .checked_add(new)
+                    .filter(|n| *n <= self.training_limit)
+                else {
+                    break Err(Error::resource("PPO numeric byte budget exhausted"));
+                };
+                bytes
+            } else {
+                s.training
+            };
+            if total <= self.limit - s.provisional {
+                if native {
+                    s.native = s.native - old + new;
+                } else {
+                    s.external = s.external - old + new;
+                }
+                s.training = next_training;
+                s.peak = s.peak.max(total + s.provisional);
+                if new < old && s.waiters != 0 {
+                    self.available.notify_all();
+                }
+                break Ok(());
+            }
+
+            // Only transient encoders block this otherwise admissible request.
+            // Their synchronous leases never wait to grow or to become retained.
+            let timeout = match deadline
+                .map(super::super::requests::wait_duration)
+                .transpose()
+            {
+                Ok(timeout) => timeout,
+                Err(failure) => break Err(failure),
+            };
+            if !waiting {
+                s.waiters += 1;
+                waiting = true;
+            }
+            s = match timeout {
+                Some(remaining) => self.available.wait_timeout(s, remaining).unwrap().0,
+                None => self.available.wait(s).unwrap(),
+            };
+        };
+        if waiting {
+            s.waiters -= 1;
         }
-        if native {
-            s.native = s.native - old + new;
-        } else {
-            s.external = s.external - old + new;
-        }
-        s.peak = s.peak.max(total);
-        Ok(())
+        result
     }
     fn reserve(self: &Arc<Self>, bytes: usize, native: bool) -> Result<Reservation> {
-        self.change(native, false, 0, bytes)?;
+        self.reserve_until(bytes, native, None)
+    }
+    fn reserve_until(
+        self: &Arc<Self>,
+        bytes: usize,
+        native: bool,
+        deadline: Option<f64>,
+    ) -> Result<Reservation> {
+        self.change(native, false, 0, bytes, deadline)?;
         Ok(Reservation {
             bytes,
             native,
@@ -79,13 +141,26 @@ impl Account {
         })
     }
     pub(crate) fn reserve_training(self: &Arc<Self>, bytes: usize) -> Result<Reservation> {
-        self.change(true, true, 0, bytes)?;
+        self.change(true, true, 0, bytes, None)?;
         Ok(Reservation { bytes, native: true, training: true, account: self.clone() })
     }
     pub(crate) fn training_fits(&self, bytes: usize) -> bool {
         let ledger = self.ledger.lock().unwrap();
         bytes <= self.limit - ledger.native - ledger.external
             && bytes <= self.training_limit - ledger.training
+    }
+    fn try_provision(self: &Arc<Self>, bytes: usize) -> Option<Provisional<'_>> {
+        let mut ledger = self.ledger.lock().unwrap();
+        let used = ledger.native + ledger.external + ledger.provisional;
+        if ledger.waiters != 0 || bytes > self.limit - used {
+            return None;
+        }
+        ledger.provisional += bytes;
+        ledger.peak = ledger.peak.max(used + bytes);
+        Some(Provisional {
+            account: self,
+            bytes,
+        })
     }
 }
 pub struct Reservation {
@@ -96,13 +171,105 @@ pub struct Reservation {
 }
 impl Reservation {
     pub(crate) fn bytes(&self) -> usize { self.bytes }
+    fn resize(&mut self, size: usize) -> Result<()> {
+        self.account
+            .change(self.native, self.training, self.bytes, size, None)?;
+        self.bytes = size;
+        Ok(())
+    }
+
+    fn split(&mut self, bytes: usize) -> Result<Self> {
+        self.bytes = self.bytes.checked_sub(bytes)
+            .ok_or_else(|| error("split exceeds the admitted recording reservation"))?;
+        Ok(Self {
+            bytes,
+            native: self.native,
+            training: self.training,
+            account: self.account.clone(),
+        })
+    }
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
         // A refund cannot exceed the admitted total; no allocation or callback.
-        self.account.change(self.native, self.training, self.bytes, 0).unwrap();
+        self.account
+            .change(self.native, self.training, self.bytes, 0, None)
+            .unwrap();
     }
 }
+
+struct Provisional<'a> {
+    account: &'a Arc<Account>,
+    bytes: usize,
+}
+impl Provisional<'_> {
+    fn promote(&mut self) -> Option<Reservation> {
+        let mut ledger = self.account.ledger.lock().unwrap();
+        if ledger.waiters != 0 {
+            return None;
+        }
+        let bytes = std::mem::take(&mut self.bytes);
+        ledger.provisional -= bytes;
+        ledger.native += bytes;
+        Some(Reservation {
+            bytes,
+            native: true,
+            training: false,
+            account: self.account.clone(),
+        })
+    }
+}
+impl Drop for Provisional<'_> {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            let mut ledger = self.account.ledger.lock().unwrap();
+            ledger.provisional -= self.bytes;
+            if ledger.waiters != 0 {
+                self.account.available.notify_all();
+            }
+        }
+    }
+}
+
+struct CaptureEncoder<'a> {
+    // Keep the allocation charged until after the buffer has been freed.
+    bytes: Vec<u8>,
+    reservation: Provisional<'a>,
+    retry_exact: bool,
+}
+impl CaptureEncoder<'_> {
+    fn replace_buffer(&mut self, capacity: usize) -> bool {
+        let Some(reservation) = self.reservation.account.try_provision(capacity) else {
+            return false;
+        };
+        let mut replacement = Vec::new();
+        if replacement.try_reserve_exact(capacity).is_err() || replacement.capacity() != capacity {
+            return false;
+        }
+        replacement.extend_from_slice(&self.bytes);
+        self.bytes = replacement;
+        self.reservation = reservation;
+        true
+    }
+}
+impl Write for CaptureEncoder<'_> {
+    fn write(&mut self, chunk: &[u8]) -> io::Result<usize> {
+        let needed = self.bytes.len().saturating_add(chunk.len());
+        let capacity = self.bytes.capacity();
+        if needed > capacity && !self.replace_buffer(needed.max(capacity.saturating_mul(2)).max(8))
+        {
+            self.retry_exact = true;
+            return Err(io::Error::other("provisional capture buffer unavailable"));
+        }
+        self.bytes.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[pyclass(frozen)]
 #[derive(Clone)]
 pub struct RecordingAccount {
@@ -119,7 +286,7 @@ impl RecordingAccount {
     fn used(&self) -> usize {
         self.account.metrics.increment("pyo3_other", 1);
         let s = self.account.ledger.lock().unwrap();
-        s.native + s.external
+        s.native + s.external + s.provisional
     }
     #[getter]
     fn peak(&self) -> usize {
@@ -129,7 +296,8 @@ impl RecordingAccount {
     #[getter]
     fn native_bytes(&self) -> usize {
         self.account.metrics.increment("pyo3_other", 1);
-        self.account.ledger.lock().unwrap().native
+        let s = self.account.ledger.lock().unwrap();
+        s.native + s.provisional
     }
     #[getter]
     fn external_bytes(&self) -> usize {
@@ -174,11 +342,7 @@ impl RecordingLease {
         let r = s
             .as_mut()
             .ok_or_else(|| crate::python_error(error("recording lease closed")))?;
-        r.account
-            .change(false, false, r.bytes, bytes)
-            .map_err(crate::python_error)?;
-        r.bytes = bytes;
-        Ok(())
+        r.resize(bytes).map_err(crate::python_error)
     }
     fn close(&self) {
         self.metrics.increment("pyo3_other", 1);
@@ -201,7 +365,18 @@ pub struct Record {
     release_key: Option<(String, String, String)>,
     training: Option<Arc<Episode>>,
     http_diagnostics: Option<TerminalHttpDiagnostics>,
+    action_capture: Mutex<Option<Weak<OwnedAction>>>,
     _reservation: Reservation,
+}
+
+impl Record {
+    fn take_action_capture(&self) -> Option<Weak<OwnedAction>> {
+        self.action_capture.lock().unwrap().take()
+    }
+
+    pub(crate) fn discard_action_capture(&self) {
+        drop(self.take_action_capture());
+    }
 }
 struct Entry {
     record: Arc<Record>,
@@ -254,8 +429,23 @@ pub struct Mailbox {
     async_wake: tokio::sync::Notify,
     account: Arc<Account>,
     capacity: usize,
+    native_rollout: AtomicBool,
     pub metrics: Arc<super::super::metrics::Metrics>,
 }
+
+struct NativeRolloutLease {
+    mailbox: Arc<Mailbox>,
+}
+
+impl Drop for NativeRolloutLease {
+    fn drop(&mut self) {
+        // Coordinate with publishers inserting a record and a successor claiming
+        // the same mailbox. The writer retires its workers before dropping this.
+        let _state = self.mailbox.state.lock().unwrap();
+        self.mailbox.native_rollout.store(false, Ordering::Release);
+    }
+}
+
 impl Mailbox {
     pub fn new(limit: usize, capacity: usize) -> Result<Arc<Self>> {
         Self::new_monitored(limit, capacity, Arc::new(super::super::metrics::Metrics::default()))
@@ -283,10 +473,22 @@ impl Mailbox {
                 limit,
                 training_limit,
                 ledger: Mutex::new(Ledger::default()),
+                available: Condvar::new(),
             }),
             capacity,
+            native_rollout: AtomicBool::new(false),
             metrics,
         }))
+    }
+    pub(in crate::player_runtime) fn native_rollout_active(&self) -> bool {
+        self.native_rollout.load(Ordering::Acquire)
+    }
+    fn claim_native_rollout(self: &Arc<Self>) -> Result<NativeRolloutLease> {
+        let _state = self.state.lock().unwrap();
+        self.native_rollout
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| error("native Journal reader already owns this mailbox"))?;
+        Ok(NativeRolloutLease { mailbox: self.clone() })
     }
     pub fn measurement_quiet(&self) -> bool {
         let s = self.state.lock().unwrap();
@@ -302,7 +504,8 @@ impl Mailbox {
         self.metrics.queue(queued, in_service, queued + in_service, s.queue.len());
     }
     pub fn used(&self) -> usize {
-        self.account.ledger.lock().unwrap().native
+        let s = self.account.ledger.lock().unwrap();
+        s.native + s.provisional
     }
     pub fn account(&self) -> RecordingAccount {
         RecordingAccount {
@@ -312,6 +515,61 @@ impl Mailbox {
     fn notify(&self) {
         self.wake.notify_all();
         self.async_wake.notify_waiters();
+    }
+    fn encode_capture<T: Serialize>(
+        &self,
+        value: &T,
+        deadline: f64,
+    ) -> Result<(Vec<u8>, Reservation)> {
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
+        if let Some(reservation) = self.account.try_provision(0) {
+            let mut encoder = CaptureEncoder {
+                bytes: Vec::new(),
+                reservation,
+                retry_exact: false,
+            };
+            match serde_json::to_writer(&mut encoder, value) {
+                Ok(()) => {
+                    if monotonic() >= deadline {
+                        return Err(Error::Deadline);
+                    }
+                    let len = encoder.bytes.len();
+                    // Exported records retain their allocation through every custody alias.
+                    if (encoder.bytes.capacity() == len || encoder.replace_buffer(len))
+                        && let Some(reservation) = encoder.reservation.promote()
+                    {
+                        return Ok((encoder.bytes, reservation));
+                    }
+                }
+                Err(failure) if failure.is_io() && encoder.retry_exact => {}
+                Err(failure) => return Err(error(failure.to_string())),
+            }
+        }
+
+        // Retry exact only after all provisional bytes of this capture have retired.
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
+        let mut count = Count(0);
+        serde_json::to_writer(&mut count, value).map_err(|e| error(e.to_string()))?;
+        let admitted = self.account.reserve_until(count.0, true, Some(deadline));
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
+        let reservation = match admitted {
+            Ok(reservation) => reservation,
+            Err(Error::ResourceLimit(_)) => {
+                let failure = Error::resource("native capture storage byte budget exhausted");
+                self.close(failure.clone());
+                return Err(failure);
+            }
+            Err(failure) => return Err(failure),
+        };
+        let mut encoded = Vec::with_capacity(count.0);
+        serde_json::to_writer(&mut encoded, value).map_err(|e| error(e.to_string()))?;
+        Ok((encoded, reservation))
     }
     pub async fn publish<T: Serialize + Sync>(
         &self,
@@ -324,7 +582,26 @@ impl Mailbox {
     ) -> Result<()> {
         self.publish_with_training(kind, episode, game, value, release_key, deadline, None, None).await
     }
+    pub(super) async fn publish_action(&self, action: &Arc<OwnedAction>, deadline: f64) -> Result<()> {
+        let (kind, episode, game) = action.routing();
+        self.publish_original(kind, episode, game, action.as_ref(), None, deadline, None, None,
+            Some(Arc::downgrade(action))).await
+    }
     pub(crate) async fn publish_with_training<T: Serialize + Sync>(
+        &self,
+        kind: &str,
+        episode: &str,
+        game: &str,
+        value: &T,
+        release_key: Option<(String, String, String)>,
+        deadline: f64,
+        training: Option<Arc<Episode>>,
+        http_diagnostics: Option<TerminalHttpDiagnostics>,
+    ) -> Result<()> {
+        self.publish_original(kind, episode, game, value, release_key, deadline, training,
+            http_diagnostics, None).await
+    }
+    async fn publish_original<T: Serialize + Sync>(
         &self,
         kind: &str,
         episode: &str,
@@ -334,38 +611,16 @@ impl Mailbox {
         deadline: f64,
         mut training: Option<Arc<Episode>>,
         http_diagnostics: Option<TerminalHttpDiagnostics>,
+        mut action_capture: Option<Weak<OwnedAction>>,
     ) -> Result<()> {
         super::super::requests::wait_duration(deadline)?;
+        let prepared = self.encode_capture(value, deadline)?;
         if monotonic() >= deadline {
             return Err(Error::Deadline);
         }
-        // Encoding workspace is temporary actor state. Count first, reserve exact
-        // retained bytes before allocation; one lease follows every exported view.
-        let mut count = Count(0);
-        serde_json::to_writer(&mut count, value).map_err(|e| error(e.to_string()))?;
-        let bytes = count.0;
-        if monotonic() >= deadline {
-            return Err(Error::Deadline);
-        }
-        let reservation = match self.account.reserve(bytes, true) {
-            Ok(reservation) => reservation,
-            Err(_) => {
-                let failure = Error::resource("native capture storage byte budget exhausted");
-                self.close(failure.clone());
-                return Err(failure);
-            }
-        };
-        if monotonic() >= deadline {
-            return Err(Error::Deadline);
-        }
-        let mut encoded = Vec::with_capacity(bytes);
-        serde_json::to_writer(&mut encoded, value).map_err(|e| error(e.to_string()))?;
-        if monotonic() >= deadline {
-            return Err(Error::Deadline);
-        }
-        let transport_sha256 = format!("{:x}", Sha256::digest(&encoded));
+        let transport_sha256 = format!("{:x}", Sha256::digest(&prepared.0));
         let answer = Arc::new(StorageAnswer::default());
-        let mut owned = Some((Array1::from_vec(encoded), reservation));
+        let mut owned = Some((Array1::from_vec(prepared.0), prepared.1));
         let mut admission = super::super::metrics::StorageAdmission::new(&self.metrics);
         loop {
             let wake = self.async_wake.notified();
@@ -393,6 +648,9 @@ impl Mailbox {
                         release_key: release_key.clone(),
                         training: training.take(),
                         http_diagnostics,
+                        action_capture: Mutex::new(
+                            action_capture.take().filter(|_| self.native_rollout_active()),
+                        ),
                         _reservation,
                     });
                     s.entries.insert(
@@ -420,38 +678,62 @@ impl Mailbox {
         }
         answer.wait(deadline).await
     }
+    fn pop_ready(&self, s: &mut State, deadline: f64, before_terminal: bool) -> Result<Option<Arc<Record>>> {
+        if let Some(e) = &s.closed {
+            return Err(e.clone());
+        }
+        let now = monotonic();
+        if now >= deadline {
+            return Err(Error::Deadline);
+        }
+        let Some(id) = s.queue.front() else { return Ok(None); };
+        let entry = s.entries.get_mut(id).expect("queued original");
+        if now >= entry.deadline {
+            return Err(Error::Deadline);
+        }
+        if before_terminal && entry.record.kind == "terminal" {
+            return Ok(None);
+        }
+        s.queue.pop_front();
+        entry.exported = true;
+        self.metrics.interval("storage_queue_age", entry.enqueued_ns, self.metrics.now());
+        let record = entry.record.clone();
+        self.observe_queue(s);
+        Ok(Some(record))
+    }
     pub fn next(&self, deadline: f64) -> Result<Arc<Record>> {
         super::super::requests::wait_duration(deadline)?;
         let mut s = self.state.lock().unwrap();
         loop {
-            if let Some(e) = &s.closed {
-                return Err(e.clone());
-            }
-            if monotonic() >= deadline {
-                return Err(Error::Deadline);
-            }
-            if let Some(id) = s.queue.front() {
-                if monotonic() >= s.entries[id].deadline {
-                    return Err(Error::Deadline);
-                }
-            }
-            if let Some(id) = s.queue.pop_front() {
-                let entry = s.entries.get_mut(&id).unwrap();
-                entry.exported = true;
-                self.metrics.interval("storage_queue_age", entry.enqueued_ns, self.metrics.now());
-                let record = entry.record.clone();
-                self.observe_queue(&s);
+            if let Some(record) = self.pop_ready(&mut s, deadline, false)? {
                 return Ok(record);
             }
-            if monotonic() >= deadline {
+            s = self.wake.wait_timeout(s, super::super::requests::wait_duration(deadline)?).unwrap().0;
+        }
+    }
+    fn next_before_terminal(&self, deadline: f64) -> Result<Option<Arc<Record>>> {
+        self.pop_ready(&mut self.state.lock().unwrap(), deadline, true)
+    }
+    fn ack_prepared(&self, records: &[Arc<Record>]) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        if let Some(e) = &s.closed {
+            return Err(e.clone());
+        }
+        ensure(records.windows(2).all(|p| p[0].id < p[1].id), "prepared receipt order differs")?;
+        let now = monotonic();
+        for record in records {
+            let entry = s.entries.get(&record.id).ok_or_else(|| error("missing prepared receipt"))?;
+            ensure(entry.exported && Arc::ptr_eq(&entry.record, record), "prepared receipt original differs")?;
+            if now >= entry.deadline {
                 return Err(Error::Deadline);
             }
-            s = self
-                .wake
-                .wait_timeout(s, super::super::requests::wait_duration(deadline)?)
-                .unwrap()
-                .0;
         }
+        for record in records {
+            s.entries.remove(&record.id).expect("prepared original").answer.finish(Ok(()));
+        }
+        self.observe_queue(&s);
+        self.notify();
+        Ok(())
     }
     pub fn ack(&self, record: &Arc<Record>, failure: Option<String>) -> Result<()> {
         let mut s = self.state.lock().unwrap();
@@ -504,7 +786,7 @@ pub struct JournalFrameScratch {
     budget: Arc<Budget>,
 }
 
-type FrameMetadata = (u8, String, u64, usize, (usize, String), String, String);
+pub(super) type FrameMetadata = (u8, String, u64, usize, (usize, String), String, String);
 
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -544,7 +826,7 @@ fn capture_frame<'a>(raw: &'a [u8], control: &Control) -> Result<&'a [u8]> {
     }
 }
 
-fn checked_journal_frame(
+pub(super) fn checked_journal_frame(
     raw: &[u8],
     budget: &Arc<Budget>,
     control: &Control,
@@ -827,7 +1109,90 @@ mod tests {
         drop(other);
     }
     #[test]
-    fn ingress_admission_wait_excludes_original_count_encode_and_hash_preparation() {
+    fn retained_recording_admission_has_priority_over_provisional_encoding() {
+        let mailbox =
+            Mailbox::new_with_training_limit(100, 1, 35, Arc::new(Default::default())).unwrap();
+        let account = mailbox.account().account;
+        let mut retained = account.reserve(35, false).unwrap();
+        let mut provisional = account.try_provision(50).unwrap();
+        assert_eq!(mailbox.used(), 50);
+        assert!(account.training_fits(30));
+        let deadline = monotonic() + 2.;
+        assert!(matches!(
+            account.reserve_until(66, true, Some(deadline)),
+            Err(Error::ResourceLimit(_))
+        ));
+        assert!(matches!(
+            account.reserve_training(36),
+            Err(Error::ResourceLimit(_))
+        ));
+
+        let (ready, admitted) = std::sync::mpsc::channel();
+        let worker_account = account.clone();
+        let waiter = std::thread::spawn(move || {
+            ready.send(worker_account.reserve_training(30)).unwrap();
+        });
+        while account.ledger.lock().unwrap().waiters == 0 {
+            assert!(monotonic() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(admitted.try_recv().is_err());
+        assert!(account.try_provision(1).is_none());
+        assert!(provisional.promote().is_none());
+
+        // Ordinary refunds must wake the waiter even while the encoder is live.
+        retained.resize(20).unwrap();
+        let training = admitted
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(account.ledger.lock().unwrap().peak, 100);
+        assert_eq!(mailbox.used(), 80);
+        waiter.join().unwrap();
+        drop((training, retained, provisional));
+        assert_eq!(mailbox.used(), 0);
+    }
+
+    #[test]
+    fn temporary_capacity_wait_obeys_the_original_deadline_without_closing_the_mailbox() {
+        let mailbox = Mailbox::new(20, 1).unwrap();
+        let account = mailbox.account().account;
+        let temporary = account.try_provision(19).unwrap();
+        run(async {
+            assert!(matches!(
+                mailbox
+                    .publish("pending", "e", "g", &1234, None, monotonic() + 0.02)
+                    .await,
+                Err(Error::Deadline)
+            ));
+        });
+        assert!(mailbox.state.lock().unwrap().closed.is_none());
+        assert_eq!(account.ledger.lock().unwrap().waiters, 0);
+        assert_eq!(mailbox.used(), 19);
+        drop(temporary);
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn exact_fallback_reuses_budget_after_growth_or_compaction_is_refused() {
+        let value = serde_json::json!({"x": 1});
+        let expected = serde_json::to_vec(&value).unwrap();
+        assert_eq!(expected.len(), 7);
+        // At seven bytes the first growth is refused. At fourteen bytes the
+        // eight-byte buffer fits and the seven-byte replacement does not.
+        for (limit, peak) in [(7, 7), (14, 8)] {
+            let mailbox = Mailbox::new(limit, 1).unwrap();
+            let (encoded, reservation) = mailbox.encode_capture(&value, monotonic() + 2.).unwrap();
+            assert_eq!(encoded, expected);
+            assert_eq!(encoded.capacity(), expected.len());
+            assert_eq!(mailbox.used(), expected.len());
+            assert_eq!(mailbox.account.ledger.lock().unwrap().peak, peak);
+            assert!(mailbox.state.lock().unwrap().closed.is_none());
+            drop((encoded, reservation));
+            assert_eq!(mailbox.used(), 0);
+        }
+    }
+    #[test]
+    fn ingress_admission_wait_excludes_original_capture_preparation() {
         use std::sync::atomic::{AtomicUsize,Ordering};
         use super::super::super::metrics::{Metrics,test_clock,set_test_clock};
         struct TimedEncoding(AtomicUsize);
@@ -897,9 +1262,37 @@ mod tests {
         assert_eq!(mailbox.used(), 0);
     }
     #[test]
-    fn count_and_encode_cannot_spend_then_renew_publication_cutoff() {
-        for delayed_call in [1, 2] {
-            let mailbox = Mailbox::new(1024, 1).unwrap();
+    fn a_timely_publication_serializes_once_and_holds_exact_original_bytes() {
+        let mailbox = Mailbox::new(1024, 1).unwrap();
+        let probe = Probe {
+            calls: AtomicUsize::new(0),
+            delayed_call: 0,
+        };
+        let consumer = mailbox.clone();
+        let thread = std::thread::spawn(move || {
+            let record = consumer.next(monotonic() + 2.).unwrap();
+            assert_eq!(record.array.as_slice().unwrap(), b"1");
+            assert_eq!(record.transport_sha256, format!("{:x}", Sha256::digest(b"1")));
+            assert_eq!(consumer.used(), 1);
+            consumer.ack(&record, None).unwrap();
+            record
+        });
+        run(async {
+            mailbox
+                .publish("pending", "e", "g", &probe, None, monotonic() + 2.)
+                .await
+                .unwrap();
+        });
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        let held = thread.join().unwrap();
+        assert_eq!(mailbox.used(), 1);
+        drop(held);
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn fallback_count_and_encode_cannot_spend_then_renew_publication_cutoff() {
+        for delayed_call in [1, 2, 3] {
+            let mailbox = Mailbox::new(1, 1).unwrap();
             let probe = Probe {
                 calls: AtomicUsize::new(0),
                 delayed_call,
@@ -952,6 +1345,53 @@ mod tests {
         drop(held);
         assert_eq!(mailbox.used(), 0);
     }
+    #[test]
+    fn prepared_receipts_fail_atomically_and_ready_drain_stops_at_terminal() {
+        let mailbox = Mailbox::new(1024, 4).unwrap();
+        let deadline = monotonic() + 5.;
+        let mut threads = vec![];
+        for (episode, kind) in [("e1", "pending"), ("e2", "pending"), ("e3", "terminal")] {
+            let shared = mailbox.clone();
+            threads.push(std::thread::spawn(move || run(async move {
+                assert!(shared.publish(kind, episode, "g", &1, None, deadline).await.is_err());
+            })));
+            while mailbox.state.lock().unwrap().queue.len() < threads.len() {
+                assert!(monotonic() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        let first = mailbox.next(deadline).unwrap();
+        let second = mailbox.next_before_terminal(deadline).unwrap().unwrap();
+        assert!(mailbox.next_before_terminal(deadline).unwrap().is_none());
+        assert_eq!(mailbox.next(deadline).unwrap().kind, "terminal");
+        assert!(mailbox.ack_prepared(&[first.clone(), first.clone()]).is_err());
+        mailbox.state.lock().unwrap().entries.get_mut(&second.id).unwrap().deadline = monotonic() - 1.;
+        assert!(matches!(mailbox.ack_prepared(&[first.clone(), second.clone()]), Err(Error::Deadline)));
+        assert!(mailbox.state.lock().unwrap().entries[&first.id].answer.result.lock().unwrap().is_none());
+        mailbox.close(Error::Deadline);
+        for worker in threads {
+            worker.join().unwrap();
+        }
+        drop((first, second));
+        assert_eq!(mailbox.used(), 0);
+    }
+
+    #[test]
+    fn split_recording_reservation_preserves_the_total_until_each_alias_retires() {
+        let mailbox = Mailbox::new(8, 1).unwrap();
+        let account = mailbox.account().account;
+        let mut members = account.reserve(8, true).unwrap();
+        let evidence = members.split(3).unwrap();
+        assert_eq!(members.bytes(), 5);
+        assert_eq!(evidence.bytes(), 3);
+        assert_eq!(mailbox.used(), 8);
+        assert!(account.reserve(1, false).is_err());
+        drop(evidence);
+        assert_eq!(mailbox.used(), 5);
+        drop(members);
+        assert_eq!(mailbox.used(), 0);
+    }
+
     #[test]
     fn timely_original_ack_still_succeeds() {
         let mailbox = Mailbox::new(1024, 1).unwrap();
@@ -1030,5 +1470,88 @@ mod tests {
             let failure = answer.wait(monotonic() - 1.).await.unwrap_err();
             assert!(failure.to_string().contains("actual recording failure"));
         });
+    }
+
+    fn owned_ack() -> Arc<OwnedAction> {
+        Arc::new(OwnedAction::Ack(super::super::capture::OwnedAck {
+            schema: "rust-player-ack-v1",
+            game: "g".into(),
+            episode: "e".into(),
+            actor: 1,
+            command: serde_json::json!({"action": {"type": "pray"}}),
+            acknowledgement: serde_json::json!({"status":"active"}),
+        }))
+    }
+
+    #[test]
+    fn captured_action_bytes_and_weak_alias_follow_native_and_legacy_custody() {
+        let mailbox = Mailbox::new(4096, 1).unwrap();
+        let _lease = mailbox.claim_native_rollout().unwrap();
+        let action = owned_ack();
+        let original = serde_json::to_vec(action.as_ref()).unwrap();
+        for legacy in [false, true] {
+            run(async {
+                let deadline = monotonic() + 2.;
+                let (result, ()) = tokio::join!(mailbox.publish_action(&action, deadline), async {
+                    let record = mailbox.next(deadline).unwrap();
+                    assert_eq!(record.array.as_slice().unwrap(), original.as_slice());
+                    assert_eq!(
+                        record.transport_sha256,
+                        format!("{:x}", Sha256::digest(&original))
+                    );
+                    if legacy {
+                        record.discard_action_capture();
+                    } else {
+                        let typed = record.take_action_capture().unwrap().upgrade().unwrap();
+                        assert!(Arc::ptr_eq(&typed, &action));
+                    }
+                    assert!(record.take_action_capture().is_none());
+                    mailbox.ack(&record, None).unwrap();
+                });
+                result.unwrap();
+            });
+        }
+        assert_eq!(mailbox.used(), 0);
+    }
+
+    #[test]
+    fn after_native_retirement_a_blocked_action_is_only_published_as_raw_bytes() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mailbox = Mailbox::new(4096, 1).unwrap();
+        let lease = mailbox.claim_native_rollout().unwrap();
+        let action = owned_ack();
+        run(async {
+            let deadline = monotonic() + 2.;
+            let mut occupied = Box::pin(mailbox.publish("pending", "e", "g", &0, None, deadline));
+            poll_fn(|cx| {
+                assert!(occupied.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let mut waiting = Box::pin(mailbox.publish_action(&action, deadline));
+            poll_fn(|cx| {
+                assert!(waiting.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+
+            drop(lease);
+            let original = mailbox.next(deadline).unwrap();
+            mailbox.ack(&original, None).unwrap();
+            occupied.await.unwrap();
+            let (result, ()) = tokio::join!(waiting, async {
+                let record = mailbox.next(deadline).unwrap();
+                assert!(record.take_action_capture().is_none());
+                assert_eq!(
+                    record.array.as_slice().unwrap(),
+                    serde_json::to_vec(action.as_ref()).unwrap().as_slice()
+                );
+                mailbox.ack(&record, None).unwrap();
+            });
+            result.unwrap();
+        });
+        assert_eq!(mailbox.used(), 0);
     }
 }

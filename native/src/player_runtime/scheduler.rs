@@ -152,8 +152,22 @@ pub struct PlayerRuntime {
     shared: Arc<Shared>,
     life: Mutex<Lifecycle>,
 }
+fn attach_pair_catalogs(games: &mut [GameSpec]) {
+    let mut ordered = games.iter_mut().peekable();
+    while let Some(first) = ordered.next() {
+        if ordered.peek().is_some_and(|second| {
+            first.run == second.run && first.trial == second.trial
+                && first.server == second.server && first.runtime_evidence == second.runtime_evidence
+        }) {
+            let catalog = game::SharedCatalog::default();
+            first.shared_catalog = Some(catalog.clone());
+            ordered.next().expect("matching adjacent game").shared_catalog = Some(catalog);
+        }
+    }
+}
+
 impl PlayerRuntime {
-    fn submit_inner(&self, games: Vec<GameSpec>) -> Result<()> {
+    fn submit_inner(&self, mut games: Vec<GameSpec>) -> Result<()> {
         // Validate the entire accepted wave before any native game admission.
         let mut incoming = HashSet::new();
         for game in &games {
@@ -185,6 +199,9 @@ impl PlayerRuntime {
                 return Err(e);
             }
             life.started = true;
+        }
+        if self.storage.native_rollout_active() {
+            attach_pair_catalogs(&mut games);
         }
         for game in games {
             let worker = if self.config.scheduler == "fixed" {
@@ -365,7 +382,11 @@ impl PlayerRuntime {
     fn next_storage(&self, py: Python<'_>, deadline: f64) -> PyResult<StorageBundle> {
         self.dispatcher.metrics.increment("pyo3_other", 1);
         let record = py
-            .detach(|| self.storage.next(deadline))
+            .detach(|| {
+                let record = self.storage.next(deadline)?;
+                record.discard_action_capture();
+                Ok(record)
+            })
             .map_err(crate::python_error)?;
         Ok(StorageBundle { record })
     }
@@ -375,6 +396,18 @@ impl PlayerRuntime {
         self.storage
             .ack(&bundle.record, failure)
             .map_err(crate::python_error)
+    }
+    fn _rollout_writer(
+        &self,
+        workspace_bytes: usize,
+    ) -> PyResult<super::game::storage::rollout::RolloutWriter> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
+        super::game::storage::rollout::RolloutWriter::new(
+            self.storage.clone(),
+            workspace_bytes,
+            self.config.player_worker_threads,
+        )
+        .map_err(crate::python_error)
     }
     fn recording_account(&self) -> RecordingAccount {
         self.dispatcher.metrics.increment("pyo3_other", 1);
@@ -498,6 +531,42 @@ impl Drop for PlayerRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_test_game() -> GameSpec {
+        serde_json::from_value(serde_json::json!({
+            "episode": "episode", "run": "run", "trial": "trial",
+            "server": {"base_url": "http://127.0.0.1:9999", "startup_info": {"server_instance_id": "owned"}},
+            "runtime_evidence": {"executed": {"pid": 42, "start_time": 123}},
+            "actions": {}, "rules": {}, "numeric_costs": {},
+            "policies": [{"kind": "random", "seed": 1}, {"kind": "random", "seed": 2}],
+            "max_decisions": 4, "deadline": 1., "cleanup_deadline": 2.,
+        })).unwrap()
+    }
+
+    #[test]
+    fn catalog_sharing_requires_the_same_planned_server_and_execution() {
+        let first = catalog_test_game();
+        let mut different = first.clone();
+        different.runtime_evidence["executed"]["start_time"] = 456.into();
+        let mut games = [first.clone(), different.clone(), different.clone(), first.clone()];
+        attach_pair_catalogs(&mut games);
+        assert!(games[0].shared_catalog.is_none());
+        assert!(games[3].shared_catalog.is_none());
+        assert!(Arc::ptr_eq(games[1].shared_catalog.as_ref().unwrap(), games[2].shared_catalog.as_ref().unwrap()));
+        let mut other_batch = [different.clone(), different];
+        attach_pair_catalogs(&mut other_batch);
+        assert!(!Arc::ptr_eq(games[1].shared_catalog.as_ref().unwrap(), other_batch[0].shared_catalog.as_ref().unwrap()));
+        let mut other_trial = first.clone();
+        other_trial.trial = "different-trial".into();
+        let mut other_server = first.clone();
+        other_server.server["startup_info"]["server_instance_id"] = "other".into();
+        for different in [other_trial, other_server] {
+            let mut games = [first.clone(), different];
+            attach_pair_catalogs(&mut games);
+            assert!(games.iter().all(|game| game.shared_catalog.is_none()));
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn failed_original_worker_wakes_surviving_shutdown_gate() {
         let shared = Arc::new(Shared {

@@ -825,10 +825,48 @@ fn report(
 ) -> Result<()> {
     report_context(value, header, table, expected_rng, budget, control, false)
 }
-fn report_context(
+pub(crate) fn report_context(
     value: &Value,
     header: &Value,
     table: &Value,
+    expected_rng: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    corrected: bool,
+) -> Result<()> {
+    report_context_for_table(
+        value, header, ReportTable::Original(table), expected_rng, budget, control, corrected,
+    )
+}
+
+pub(crate) enum ReportTable<'a> {
+    Original(&'a Value),
+    Typed { hash: &'a str, kinds: usize, slots: usize },
+}
+
+impl ReportTable<'_> {
+    fn same_hash(&self, hash: &Value) -> Result<bool> {
+        match self {
+            Self::Original(table) => Ok(hash == table.require("table_hash")?),
+            Self::Typed { hash: original, .. } => Ok(hash == *original),
+        }
+    }
+
+    fn counts_match(&self, selected: usize, elements: usize) -> Result<bool> {
+        match self {
+            Self::Original(table) => Ok(
+                selected == table.require("kinds")?.array()?.len()
+                    && elements == table.require("slots")?.array()?.len(),
+            ),
+            Self::Typed { kinds, slots, .. } => Ok(selected == *kinds && elements == *slots),
+        }
+    }
+}
+
+pub(crate) fn report_context_for_table(
+    value: &Value,
+    header: &Value,
+    table: ReportTable<'_>,
     expected_rng: &Value,
     budget: &Arc<Budget>,
     control: &Control,
@@ -865,7 +903,7 @@ fn report_context(
     if value.require("action_contract")? != header.require("action_contract")?
         || value.require("generator_version")? != header.require("generator_version")?
         || value.require("config_hash")? != header.require("action_config_hash")?
-        || value.require("table_hash")? != table.require("table_hash")?
+        || !table.same_hash(value.require("table_hash")?)?
     {
         return fail("search report identity mismatch");
     }
@@ -935,8 +973,7 @@ fn report_context(
     if prunes > attempts
         || mandatory > selected
         || selected > discovered
-        || selected != table.require("kinds")?.array()?.len()
-        || elements != table.require("slots")?.array()?.len()
+        || !table.counts_match(selected, elements)?
     {
         return fail("search report counts inconsistent");
     }
@@ -1016,7 +1053,7 @@ fn uuid(value: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn command(
+pub(crate) fn command(
     value: &Value,
     frame: &Value,
     selected: &Value,
@@ -1036,7 +1073,7 @@ fn command(
     }
     Ok(())
 }
-fn acknowledgement(response: &Value, command: &Value) -> Result<()> {
+pub(crate) fn acknowledgement(response: &Value, command: &Value) -> Result<()> {
     response.closed(
         &[
             "command_id",

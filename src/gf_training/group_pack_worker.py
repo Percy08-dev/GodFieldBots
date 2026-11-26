@@ -21,6 +21,7 @@ from gf_training.group_pack_db import (
     new_database,
     seal_transaction,
     store_control,
+    store_controls,
     submit_group,
 )
 from gf_training.group_pack_resources import (
@@ -127,6 +128,12 @@ class GroupPackDatabase:
     def max_payload_bytes(self) -> int:
         return self.settings.max_pack_bytes + MIB if self.settings else 0
 
+    def _prepare_existing(self) -> None:
+        assert self.settings is not None and self.directory is not None and self.run_id is not None
+        assert self.db is not None and self.database_original is not None
+        self.database_original.check_identity()
+        configure(self.db, self.deadline)
+
     def prepare(self, request: Json, payload_size: int) -> str:
         """Validate before a transport retains/reads its bounded payload."""
         if self.finished:
@@ -139,12 +146,7 @@ class GroupPackDatabase:
         if command not in ("submit", "control") and payload_size:
             raise ValueError("unexpected Writer payload")
         if command != "init":
-            assert (
-                self.settings is not None and self.directory is not None and self.run_id is not None
-            )
-            assert self.db is not None and self.database_original is not None
-            self.database_original.check_identity()
-            configure(self.db, self.deadline)
+            self._prepare_existing()
         if command == "submit":
             assert self.settings is not None
             if (
@@ -162,6 +164,29 @@ class GroupPackDatabase:
     def execute(self, request: Json, payload: bytes | None = None) -> Any:
         command = self.prepare(request, len(payload) if payload is not None else 0)
         return self._execute(request, payload, command)
+
+    def execute_controls(self, request_id: int, values: tuple[tuple[str, bytes], ...]) -> None:
+        """Batch controls retained by the same-process writer on its original thread."""
+        if self.finished:
+            raise ValueError("Writer already finished")
+        if type(request_id) is not int or request_id != self.request_id:
+            raise ValueError("invalid Writer request")
+        if request_id == 0:
+            raise ValueError("Writer must initialize first")
+        self._prepare_existing()
+        assert self.settings is not None and self.max_owned_bytes is not None
+        assert self.db is not None and self.database_original is not None
+        limit = min(self.settings.max_pack_bytes, 64 * MIB)
+        if any(type(data) is not bytes or len(data) > limit for _, data in values):
+            raise ValueError("control exceeds bound")
+        try:
+            store_controls(self.db, values, deadline=self.deadline)
+            self.database_original.recheck()
+            remaining(self.deadline)
+            self.request_id += 1
+        except BaseException as error:
+            _retain_failure(self, error)
+            raise
 
     def _execute(self, request: Json, payload: bytes | None, command: str) -> Any:
         deadline, settings, directory, run_id = (

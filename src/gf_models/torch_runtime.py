@@ -6,6 +6,7 @@ import os
 import platform
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -21,10 +22,23 @@ _TORCH_LOCK = threading.RLock()
 
 
 @contextmanager
-def serialized_torch() -> Iterator[None]:
-    """The one shared host learner/serving/accounting serialization boundary."""
-    with _TORCH_LOCK:
-        yield
+def serialized_torch(*, deadline: float | None = None) -> Iterator[None]:
+    """Serialize shared Torch work, optionally bounding entry by a monotonic deadline."""
+    if deadline is None:
+        with _TORCH_LOCK:
+            yield
+        return
+
+    while (remaining := deadline - time.monotonic()) > 0:
+        if _TORCH_LOCK.acquire(timeout=min(remaining, threading.TIMEOUT_MAX)):
+            try:
+                if time.monotonic() >= deadline:
+                    raise ContractError("Torch serialization deadline expired")
+                yield
+            finally:
+                _TORCH_LOCK.release()
+            return
+    raise ContractError("Torch serialization deadline expired")
 
 
 def runtime_metadata() -> Json:

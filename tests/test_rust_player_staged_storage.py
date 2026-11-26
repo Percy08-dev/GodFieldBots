@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import sqlite3
+import threading
 import time
 from contextlib import closing
 from hashlib import sha256
@@ -99,7 +100,7 @@ def sealed(tmp_path: Path):
         original.close()
 
 
-def _promote(tmp_path: Path, sealed):
+def _promote(tmp_path: Path, sealed, *, overlap_file_sync: bool = False):
     from gf_training.rust_player_promotion import promote_collection
 
     source, descriptor, raw = sealed
@@ -107,7 +108,7 @@ def _promote(tmp_path: Path, sealed):
     owner = promote_collection(
         source, directory=final, descriptor=descriptor, raw=raw,
         settings=settings(tmp_path / "hdd"), deadline=source.deadline,
-        max_owned_bytes=512 * 1024**2, mount_root=tmp_path,
+        max_owned_bytes=512 * 1024**2, mount_root=tmp_path, overlap_file_sync=overlap_file_sync,
     )
     return final, owner
 
@@ -277,6 +278,117 @@ def test_catalog_commit_then_sync_failure_retains_complete_descriptor(
     assert sha256((final / DATABASE).read_bytes()).hexdigest() == descriptor["database_sha256"]
 
 
+@pytest.mark.parametrize("failure", [None, "audit", "sync", "both"])
+def test_overlap_joins_staged_file_sync_and_audit_before_publication_or_cleanup(
+    tmp_path: Path, sealed, monkeypatch: pytest.MonkeyPatch, failure: str | None,
+) -> None:
+    from gf_training import rust_player_promotion as promotion
+
+    audit, sync, rename = promotion.validate_database, os.fsync, os.rename
+    audit_failure = ValueError("injected staged audit failure")
+    sync_failure = OSError(errno.EIO, "injected staged file sync failure")
+    sync_started, audit_done, sync_done = (threading.Event() for _ in range(3))
+    final = tmp_path / "hdd/catalog/run-1/collections/batch-000000"
+    catalog = tmp_path / "hdd/catalog/catalog.sqlite3"
+    final_renames = []
+
+    def verification(*args, **kwargs):
+        assert sync_started.wait(timeout=2)
+        assert not final.exists() and not catalog.exists()
+        try:
+            if failure in ("audit", "both"):
+                raise audit_failure
+            return audit(*args, **kwargs)
+        finally:
+            audit_done.set()
+
+    def file_sync(fd):
+        path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        if path.parent.name.endswith(".staging"):
+            if path.name == DATABASE:
+                assert not final.exists() and not catalog.exists()
+                sync_started.set()
+                assert audit_done.wait(timeout=2)
+                # Cleanup cannot unlink or close the exact file during sync.
+                assert os.fstat(fd).st_ino == path.stat().st_ino
+                if failure in ("sync", "both"):
+                    sync_done.set()
+                    raise sync_failure
+            elif path.name == "collection.pending.json":
+                sync(fd)
+                sync_done.set()
+                return
+        return sync(fd)
+
+    def install(source, target, **kwargs):
+        assert audit_done.is_set() and sync_done.is_set()
+        final_renames.append(target)
+        return rename(source, target, **kwargs)
+
+    monkeypatch.setattr(promotion, "validate_database", verification)
+    monkeypatch.setattr(os, "fsync", file_sync)
+    monkeypatch.setattr(os, "rename", install)
+    if failure is None:
+        _, owner = _promote(tmp_path, sealed, overlap_file_sync=True)
+        try:
+            owner.recheck()
+            assert final_renames == [DATABASE, "collection.pending.json"]
+            assert catalog.exists()
+        finally:
+            owner.close()
+    else:
+        expected = sync_failure if failure == "sync" else audit_failure
+        with pytest.raises(type(expected)) as observed:
+            _promote(tmp_path, sealed, overlap_file_sync=True)
+        assert observed.value is expected
+        if failure == "both":
+            assert any("injected staged file sync failure" in note for note in expected.__notes__)
+        assert sync_done.is_set()
+        assert not final_renames and not final.exists() and not catalog.exists()
+        assert list(final.parent.iterdir()) == []
+
+
+@pytest.mark.parametrize("affected", [DATABASE, "collection.pending.json"])
+def test_overlap_rejects_rewrite_and_restore_before_audit(
+    tmp_path: Path, sealed, monkeypatch: pytest.MonkeyPatch, affected: str,
+) -> None:
+    from gf_training import rust_player_promotion as promotion
+
+    sync = promotion._sync_staged_files
+    original_file = promotion.OriginalFile
+    restored = threading.Event()
+    final = tmp_path / "hdd/catalog/run-1/collections/batch-000000"
+
+    def sync_then_restore(database_fd, descriptor_fd):
+        fd = database_fd if affected == DATABASE else descriptor_fd
+        info = os.fstat(fd)
+        first = os.pread(fd, 1, 0)
+        wrong = bytes([first[0] ^ 1])
+        assert os.pwrite(fd, wrong, 0) == 1
+        sync(database_fd, descriptor_fd)
+        assert os.pwrite(fd, first, 0) == 1
+        # Guarantee a different timestamp even on a filesystem with coarse clocks.
+        os.utime(fd, ns=(info.st_atime_ns, info.st_mtime_ns - 1_000_000_000))
+        restored.set()
+
+    def open_original(path, *args, **kwargs):
+        if path.parent.name.endswith(".staging"):
+            assert restored.wait(timeout=2)
+        return original_file(path, *args, **kwargs)
+
+    def install(*_args, **_kwargs):
+        pytest.fail("a modified staged file must never be renamed")
+
+    monkeypatch.setattr(promotion, "_sync_staged_files", sync_then_restore)
+    monkeypatch.setattr(promotion, "OriginalFile", open_original)
+    monkeypatch.setattr(os, "rename", install)
+    with pytest.raises(ValueError, match="staged HDD files changed during sync or audit"):
+        _promote(tmp_path, sealed, overlap_file_sync=True)
+    assert not final.exists()
+    assert not (tmp_path / "hdd/catalog/catalog.sqlite3").exists()
+    assert list(final.parent.iterdir()) == []
+
+
 def test_descriptor_rename_failure_cannot_publish_source(tmp_path: Path, sealed,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     rename = os.rename
@@ -363,6 +475,7 @@ def test_hpo_accounting_failure_retires_unclaimed_durable_collection(tmp_path: P
     collector.collect = collect
     ops = object.__new__(RustHpoOperations)
     ops._ownership = SimpleNamespace(directory=tmp_path)
+    ops._progress = None
     ops.registry, ops.collector = registry, collector
     ops.pool = SimpleNamespace(_base_charge=0, budget=SimpleNamespace(limit=10, used=0, peak=0))
     ops.writer = SimpleNamespace(write=fail_accounting)

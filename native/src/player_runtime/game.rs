@@ -1,5 +1,6 @@
 //! One external game transition path, used unchanged by both schedulers.
 mod capture;
+mod rollout_journal;
 pub mod storage;
 use super::{
     Config, Input,
@@ -62,6 +63,28 @@ impl PolicySpec {
 fn threshold() -> Value {
     json!(12)
 }
+pub(super) type SharedCatalog = Arc<tokio::sync::Mutex<Option<Arc<Value>>>>;
+
+async fn load_pair_catalog(
+    cache: &SharedCatalog,
+    deadline: f64,
+    load: impl std::future::Future<Output = Result<Value>>,
+) -> Result<Arc<Value>> {
+    // Bound only the wait for custody. The actual HTTP call retains its own
+    // deadline, transport-error accounting and error classification.
+    let wait = super::requests::wait_duration(deadline)?;
+    let mut entry = tokio::time::timeout(wait, cache.lock())
+        .await
+        .map_err(|_| Error::Deadline)?;
+    if let Some(value) = entry.as_ref() {
+        return Ok(value.clone());
+    }
+    // On error or cancellation, the empty cell remains available to the other actor.
+    let value = Arc::new(load.await?);
+    *entry = Some(value.clone());
+    Ok(value)
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GameSpec {
@@ -82,6 +105,8 @@ pub struct GameSpec {
     pub runtime_evidence: Value,
     #[serde(default)]
     pub clock: Value,
+    #[serde(skip)]
+    pub(super) shared_catalog: Option<SharedCatalog>,
 }
 impl GameSpec {
     pub fn has_sequence(&self) -> bool {
@@ -218,7 +243,12 @@ struct Participant {
     accepted: Vec<Value>,
 }
 impl Participant {
-    fn new(actor: u8, episode: String, spec: PolicySpec) -> Result<Self> {
+    fn new(
+        actor: u8,
+        episode: String,
+        spec: PolicySpec,
+        native_rollout: bool,
+    ) -> Result<Self> {
         let policy: Box<dyn OwnPolicy> = if spec.learned() {
             Box::new(Inference)
         } else {
@@ -230,7 +260,11 @@ impl Participant {
             })
         };
         Ok(Self {
-            history: History::new(actor, episode)?,
+            history: if native_rollout {
+                History::new_with_pins(actor, episode, true)?
+            } else {
+                History::new(actor, episode)?
+            },
             search: PythonRng::seed(search_seed(spec.seed)?),
             policy,
             spec,
@@ -345,15 +379,15 @@ pub(super) fn action_from_parts(
     Ok(a)
 }
 impl Actor {
-    fn new(spec: GameSpec, client: reqwest::Client) -> Result<Self> {
+    fn new(spec: GameSpec, client: reqwest::Client, native_rollout: bool) -> Result<Self> {
         let http = Http::new(
             client,
             serde_json::from_value(spec.server.clone()).map_err(|e| error(e.to_string()))?,
             spec.deadline,
         )?;
         let seats = [
-            Participant::new(1, spec.episode.clone(), spec.policies[0].clone())?,
-            Participant::new(2, spec.episode.clone(), spec.policies[1].clone())?,
+            Participant::new(1, spec.episode.clone(), spec.policies[0].clone(), native_rollout)?,
+            Participant::new(2, spec.episode.clone(), spec.policies[1].clone(), native_rollout)?,
         ];
         let report = GameReport {
             episode: spec.episode.clone(),
@@ -383,7 +417,11 @@ impl Actor {
             self.training = Some(Trajectory::new(storage.account().account));
         }
         self.http.attest().await?;
-        let definitions = self.http.catalog().await?;
+        let definitions = if let Some(cache) = &self.spec.shared_catalog {
+            load_pair_catalog(cache, self.spec.deadline, self.http.catalog()).await?
+        } else {
+            Arc::new(self.http.catalog().await?)
+        };
         let game = self.http.create().await?;
         self.game = Some(game.clone());
         self.report.game = Some(game.clone());
@@ -398,6 +436,7 @@ impl Actor {
         ];
         let budget = Budget::new(12usize << 30);
         let control = Control::new(f64::MAX)?;
+        let typed_capture = storage.native_rollout_active();
         let mut obs = self.http.observe(&game, 1).await?;
         loop {
             if !obs["result"].is_null() {
@@ -517,39 +556,75 @@ impl Actor {
             // Immutable validated pending and writer custody precede the first Act.
             let search_after = seat.search.state();
             let policy_after = seat.policy.state();
-            let pending = capture::Pending {
-                schema: "rust-player-pending-v1",
-                run: &self.spec.run,
-                trial: &self.spec.trial,
-                game: &game,
-                episode: &self.spec.episode,
-                actor,
-                frame: &frame,
-                delta: &delta,
-                generated: (&generated).into(),
-                selected,
-                scores: scores.as_ref(),
-                command: &command,
-                search_rng_before: &search_before,
-                search_rng_after: &search_after,
-                policy_state_before: &policy_before,
-                policy_state_after: &policy_after,
-                sampling_seed: seat.spec.seed,
-                policy: &seat.spec,
+            let owned_capture;
+            let (command, scores) = if typed_capture {
+                owned_capture = Arc::new(capture::OwnedAction::Pending(capture::OwnedPending {
+                    schema: "rust-player-pending-v1",
+                    run: self.spec.run.clone(),
+                    trial: self.spec.trial.clone(),
+                    game: game.clone(),
+                    episode: self.spec.episode.clone(),
+                    actor,
+                    frame,
+                    delta,
+                    generated,
+                    selected,
+                    scores,
+                    command,
+                    search_rng_before: search_before,
+                    search_rng_after: search_after,
+                    policy_state_before: policy_before,
+                    policy_state_after: policy_after,
+                    sampling_seed: seat.spec.seed,
+                    policy: seat.spec.clone(),
+                }));
+                storage.publish_action(&owned_capture, self.spec.deadline).await?;
+                match &*owned_capture {
+                    capture::OwnedAction::Pending(pending) => (&pending.command, pending.scores.as_ref()),
+                    capture::OwnedAction::Ack(_) => unreachable!("published pending"),
+                }
+            } else {
+                let pending = capture::Pending {
+                    schema: "rust-player-pending-v1",
+                    run: &self.spec.run,
+                    trial: &self.spec.trial,
+                    game: &game,
+                    episode: &self.spec.episode,
+                    actor,
+                    frame: &frame,
+                    delta: &delta,
+                    generated: (&generated).into(),
+                    selected,
+                    scores: scores.as_ref(),
+                    command: &command,
+                    search_rng_before: &search_before,
+                    search_rng_after: &search_after,
+                    policy_state_before: &policy_before,
+                    policy_state_after: &policy_after,
+                    sampling_seed: seat.spec.seed,
+                    policy: &seat.spec,
+                };
+                storage
+                    .publish(
+                        "pending",
+                        &self.spec.episode,
+                        &game,
+                        &pending,
+                        None,
+                        self.spec.deadline,
+                    )
+                    .await?;
+                (&command, scores.as_ref())
             };
-            storage
-                .publish(
-                    "pending",
-                    &self.spec.episode,
-                    &game,
-                    &pending,
-                    None,
-                    self.spec.deadline,
-                )
-                .await?;
-            let ack = self.http.act(&game, actor, &command).await?;
+            let ack = if typed_capture {
+                self.http
+                    .act_with_recipe(&game, actor, command, Some(seat.history.event_recipe()))
+                    .await?
+            } else {
+                self.http.act(&game, actor, command).await?
+            };
             if ack["status"] != "aborted" && let Some(row) = training_row {
-                let scores = scores.as_ref().expect("accepted learner MLP inference");
+                let scores = scores.expect("accepted learner MLP inference");
                 self.training.as_mut().expect("explicit learner trajectory")
                     .accept(row, scores.identity.request, scores.sample, scores.logprob, scores.value);
             }
@@ -562,25 +637,38 @@ impl Actor {
             seat.accepted.push(command["action"].clone());
             seat.decisions += 1;
             self.report.decisions += 1;
-            let record = capture::Ack {
-                schema: "rust-player-ack-v1",
-                game: &game,
-                episode: &self.spec.episode,
-                actor,
-                command: &command,
-                acknowledgement: &ack,
-            };
-            storage
-                .publish(
-                    "ack",
-                    &self.spec.episode,
-                    &game,
-                    &record,
-                    None,
-                    self.spec.deadline,
-                )
-                .await?;
-            if ack["status"] != "active" {
+            let active = ack["status"] == "active";
+            if typed_capture {
+                let owned_ack = Arc::new(capture::OwnedAction::Ack(capture::OwnedAck {
+                    schema: "rust-player-ack-v1",
+                    game: game.clone(),
+                    episode: self.spec.episode.clone(),
+                    actor,
+                    command: command.clone(),
+                    acknowledgement: ack,
+                }));
+                storage.publish_action(&owned_ack, self.spec.deadline).await?;
+            } else {
+                let record = capture::Ack {
+                    schema: "rust-player-ack-v1",
+                    game: &game,
+                    episode: &self.spec.episode,
+                    actor,
+                    command,
+                    acknowledgement: &ack,
+                };
+                storage
+                    .publish(
+                        "ack",
+                        &self.spec.episode,
+                        &game,
+                        &record,
+                        None,
+                        self.spec.deadline,
+                    )
+                    .await?;
+            }
+            if !active {
                 break;
             }
             obs = self.http.observe(&game, actor).await?;
@@ -723,7 +811,7 @@ pub async fn run(
     cancel: Arc<super::scheduler::Cancellation>,
 ) -> GameReport {
     let episode = spec.episode.clone();
-    let mut actor = match Actor::new(spec, client) {
+    let mut actor = match Actor::new(spec, client, storage.native_rollout_active()) {
         Ok(v) => v,
         Err(e) => {
             return GameReport {
@@ -825,4 +913,38 @@ pub async fn run(
         }
     };
     actor.report
+}
+
+
+#[cfg(test)]
+mod pair_catalog_tests {
+    use super::*;
+    use crate::budget::monotonic;
+    use std::future::{pending, ready};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn catalog_wait_uses_own_deadline_and_failed_owner_does_not_poison_pair() {
+        let catalog = SharedCatalog::default();
+        let cell = catalog.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let initializer = tokio::spawn(async move {
+            load_pair_catalog(&cell, monotonic() + 2., async {
+                started.send(()).unwrap();
+                pending().await
+            }).await
+        });
+        entered.await.unwrap();
+        assert!(matches!(load_pair_catalog(&catalog, monotonic() + 0.01, async {
+            panic!("waiting caller cannot replace live initializer");
+        }).await, Err(Error::Deadline)));
+        assert!(!initializer.is_finished());
+        initializer.abort();
+        assert!(initializer.await.unwrap_err().is_cancelled());
+        assert!(load_pair_catalog(&catalog, monotonic() + 2., ready(Err(error("invalid catalog")))).await.is_err());
+        let validated = load_pair_catalog(&catalog, monotonic() + 2., ready(Ok(json!({"pinned":true})))).await.unwrap();
+        let shared = load_pair_catalog(&catalog, monotonic() + 2., async {
+            panic!("validated catalog must be reused");
+        }).await.unwrap();
+        assert!(Arc::ptr_eq(&validated, &shared));
+    }
 }

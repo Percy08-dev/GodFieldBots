@@ -22,7 +22,7 @@ from gf_common.hpo_storage import (
 from gf_common.rust_player import LEARNED_POLICY_KINDS, SEQUENCE_MODEL_KINDS, deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_common.schedule import serialize_schedule
-from gf_models.structured_runtime import own_game_worker_settings_v3
+from gf_models.structured_runtime import WorkerCaps, own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.rust_player import RustPlayerRuntime
 from gf_training.rust_player_lineage import validate_record_shape
@@ -189,14 +189,19 @@ class RustPlayerCollector:
 
     def _contexts(self, plan: Any) -> dict[str, Json]:
         inputs = self.registry.journal_inputs(plan.bindings)
+        settings_by_label: dict[str, tuple[WorkerCaps, NumericCosts]] = {}
         contexts = {}
         for group in plan.groups:
             for episode in group.episodes:
                 policies = []
                 for viewer, label in enumerate(episode.policies, 1):
                     binding = plan.bindings[label]
-                    caps, costs, _, _ = own_game_worker_settings_v3(binding.model_id,
-                        self.config.actions, binding.policy_options, rules=self.registry.local.learner._context.rules)
+                    settings = settings_by_label.get(label)
+                    if settings is None:
+                        caps, costs, _, _ = own_game_worker_settings_v3(binding.model_id,
+                            self.config.actions, binding.policy_options, rules=self.registry.local.learner._context.rules)
+                        settings = settings_by_label[label] = caps, costs
+                    caps, costs = settings
                     native: Json = {"kind": "refresh" if binding.model_id == "heuristic_refresh" else binding.model_id,
                         "seed": episode.sampling_seeds[viewer - 1], "checkpoint": None, "epoch": 0,
                         "limits": None, "attack_threshold": 12, "numeric_costs": asdict(costs)}
@@ -268,6 +273,20 @@ class RustPlayerCollector:
                 operation_id=self.registry.admission.observation["operation_id"],
                 invocation_id=self.registry.admission.observation["invocation_id"], phase="idle"))
         return result
+
+    def _uses_native_journal(self, plan: Any) -> bool:
+        from gf_common.card_instance import sacrifice_card_instance_contract
+
+        games = sum(len(group.episodes) for group in plan.groups)
+        return (
+            self.registry.hpo
+            and self.mode is not None
+            and self.registry.state["model_id"] == "mlp"
+            and self.config.actions.action_contract == sacrifice_card_instance_contract()
+            and 0 < games <= self.declaration["game_concurrency"]
+            and all(binding.model_id in ("mlp", "random", "heuristic", "heuristic_refresh")
+                    for binding in plan.bindings.values())
+        )
 
     async def _collect_owned(self, plan: Any, *,
                              progress: ProgressCallback | None = None) -> RustCollectedBatch:
@@ -343,11 +362,13 @@ class RustPlayerCollector:
         work = None if work_mount_config is None else self._create_work(*work_mount_config)
         grant = self.registry.budget.limit - self.registry.budget.used
         try:
+            native_rollout = durable_mount is not None and self._uses_native_journal(plan)
             writer = RustPlayerStorage(self.runtime, db_directory, run_id=self.registry.state["run_id"],
                 contexts=(), groups=groups, settings=self.settings, workspace=self.registry.budget,
                 workspace_bytes=grant, deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
                 deferred_contexts=True, context_plans=plans, training=self.mode is not None,
-                work_directory=None if work is None else work / "originals", durable_mount=durable_mount)
+                work_directory=None if work is None else work / "originals", durable_mount=durable_mount,
+                native_rollout=native_rollout)
         except BaseException as failure:
             owner = vars(failure).get("cleanup_owner")
             if work is not None and isinstance(owner, RustPlayerStorage):
@@ -365,10 +386,13 @@ class RustPlayerCollector:
         if work is None:
             evidence.preflight()
 
-        def store(name: str, value: Json) -> tuple[str, int]:
+        def store(name: str, value: Json, *, batch: list[tuple[str, bytes]] | None = None) -> tuple[str, int]:
             controls.json(name, value)
             data = controls.chunks[name][0][0]
-            writer.store_control(name, data)
+            if batch is None:
+                writer.store_control(name, data)
+            else:
+                batch.append((name, data))
             return hashlib.sha256(data).hexdigest(), len(data)
 
         try:
@@ -380,6 +404,7 @@ class RustPlayerCollector:
                 execution_deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
                 game_concurrency=self.declaration["game_concurrency"], run_id=self.registry.state["run_id"],
                 batch_id=plan.linkage["batch_id"], evidence=evidence, progress=progress,
+                player_worker_threads=self.declaration["player_worker_threads"],
                 **({} if http_diagnostics is None else {"http_diagnostics": http_diagnostics,
                     "operation_id": actual["operation_id"]}))
             accepted, bound_contexts, completed_groups = execution.accepted, execution.bound_contexts, execution.completed_groups
@@ -413,6 +438,7 @@ class RustPlayerCollector:
                 "encoding_contexts_sha256": digest([bound_contexts[i] for i in range(len(plan.groups))]),
                 "accepted_records": accepted, "completed_reports_sha256": digest(reports)}
             rows, result_files = [], []
+            result_batch: list[tuple[str, bytes]] | None = [] if native_rollout else None
             for (group, episode), native in zip(
                     ((item, spec) for item in plan.groups for spec in item.episodes), reports, strict=True):
                 report = native["report"]
@@ -424,8 +450,12 @@ class RustPlayerCollector:
                     health=health, decisions=report["decisions"]))
                 rows.append(result)
                 name = episode.episode_id + "/result.json"
-                checksum, size = store(name, result)
+                checksum, size = store(name, result, batch=result_batch)
                 result_files.append({"path": name, "sha256": checksum, "bytes": size})
+            if result_batch is not None:
+                # RecordingArtifacts owns these same blobs until original writer retirement.
+                writer.store_controls(tuple(result_batch))
+            del result_batch
             healthy = (all(row["end_kind"] == "natural" and row["failure"] is None and not any(row["health"].values())
                 for row in rows) and all(not group_health_failures(completed_groups[i]) for i in completed_groups)
                 and all(row["report"]["inference_released"] and row["report"]["storage_accepted"] for row in reports))

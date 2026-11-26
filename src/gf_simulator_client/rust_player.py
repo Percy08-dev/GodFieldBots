@@ -342,6 +342,52 @@ class RustPlayerRuntime:
                     for checkpoint in self._holds.pop(key, []):
                         self.service.release(checkpoint)
 
+    def _storage_ack_defer_release(
+        self, bundle: Any,
+    ) -> tuple[tuple[str, str, str], str] | None:
+        """Commit the original native ACK and return its exact checkpoint owner."""
+        with self._lock:
+            self._native.storage_ack(bundle, None)
+            key = bundle.release_key
+            if key is not None and self.service is not None:
+                return key, bundle.game
+            return None
+
+    def _settle_deferred_storage_releases(
+        self, owners: list[tuple[tuple[str, str, str], str]], deadline: float,
+    ) -> None:
+        """Release the acknowledged full wave after its inference routes retire."""
+        if not owners:
+            return
+        from gf_models.rust_player import serialized_torch
+
+        def remaining() -> float:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise ContractError("terminal checkpoint release deadline expired")
+            return left
+
+        with self._lock:
+            with self._settled:
+                for (run, trial, _episode), game in owners:
+                    route = (run, trial, game)
+                    while self._active_routes.get(route, 0):
+                        self._settled.wait(remaining())
+                remaining()
+                if self._service_error is not None:
+                    return
+            # Leave each unreleased checkpoint owned by joined cleanup.
+            with serialized_torch(deadline=deadline):
+                for key, _game in owners:
+                    if (checkpoints := self._holds.get(key)) is None:
+                        continue
+                    while checkpoints:
+                        remaining()
+                        self.service.release(checkpoints[0])
+                        del checkpoints[0]
+                    del self._holds[key]
+                remaining()
+
     def recording_account(self) -> Any:
         """Return the SAME native recording account, without another pool/charge."""
         return self._native.recording_account()

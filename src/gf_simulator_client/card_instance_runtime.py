@@ -7,7 +7,7 @@ import os
 import stat
 import subprocess
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,33 @@ def _read_hash(path: Path, deadline: float) -> tuple[str, list[int]]:
         return value.hexdigest(), _identity(before)
     finally:
         os.close(descriptor)
+
+
+def _process_start_time(pid: int) -> int:
+    # The comm field may contain spaces or parentheses. State follows the last ')'.
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    if fields[0] == "Z":
+        raise ContractError("owned runtime process is a zombie")
+    return int(fields[19])  # Linux starttime is field22.
+
+
+@dataclass(frozen=True)
+class _ExecutedRead:
+    pid: int
+    start_time: int
+    base_receipt: Json
+    deadline: float
+
+    def read(self) -> Json:
+        if _process_start_time(self.pid) != self.start_time:
+            raise ContractError("runtime process identity changed before executable read")
+        executable = Path(f"/proc/{self.pid}/exe")
+        sha, identity = _read_hash(executable, self.deadline)
+        if (_process_start_time(self.pid) != self.start_time
+                or _identity(executable.stat()) != identity):
+            raise ContractError("runtime process identity changed during executable read")
+        executed = {"pid": self.pid, "start_time": self.start_time, "sha256": sha, "identity": identity}
+        return validate_runtime_receipt({**self.base_receipt, "executed": executed}, require_executed=True)
 
 
 class CardInstanceRuntimeEvidence:
@@ -126,12 +153,26 @@ class CardInstanceRuntimeEvidence:
     def _start_time(self, process: Any) -> int:
         if process.returncode is not None:
             raise ContractError("owned runtime process is not live")
-        # comm may contain spaces/parentheses; fields after final ')' start at state(3).
-        status = Path(f"/proc/{process.pid}/stat").read_text()
-        fields = status.rsplit(")", 1)[1].split()
-        if fields[0] == "Z":
-            raise ContractError("owned runtime process is a zombie")
-        return int(fields[19])  # Linux starttime is field22.
+        return _process_start_time(process.pid)
+
+    def prepare_executed_read(self, process: Any, *, deadline: float) -> _ExecutedRead:
+        if self._closed:
+            raise ContractError("runtime owner already finalized")
+        cutoff = min(self.deadline, deadline)
+        if time.monotonic() >= cutoff:
+            raise TimeoutError("runtime evidence read deadline")
+        start_time = self._start_time(process)
+        base = self.receipt()  # Validation returns a detached nested snapshot.
+        base["executed"] = None
+        return _ExecutedRead(process.pid, start_time, base, cutoff)
+
+    def confirm_executed_read(self, process: Any, original: _ExecutedRead) -> None:
+        if self._closed:
+            raise ContractError("runtime owner already finalized")
+        if time.monotonic() >= original.deadline:
+            raise TimeoutError("runtime evidence read deadline")
+        if process.pid != original.pid or self._start_time(process) != original.start_time:
+            raise ContractError("runtime process identity changed before executable acceptance")
 
     def verify_executed(self, process: Any) -> Json:
         if self._closed:

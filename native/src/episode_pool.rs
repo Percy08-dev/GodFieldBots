@@ -6,7 +6,7 @@ use crate::{
 };
 use std::sync::Arc;
 
-const STACK_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const STACK_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) fn with_pool<T>(
     workers: usize,

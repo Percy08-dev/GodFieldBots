@@ -8,9 +8,17 @@ use crate::{
     structured_controls::{checksum, digest},
     validation,
 };
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, OnceLock},
+};
 
 const PINS: &[u8] = include_bytes!("../assets/card-instance-validation-pins-v2.json");
+pub(crate) fn embedded_pins() -> &'static Value {
+    static PIN: OnceLock<Value> = OnceLock::new();
+    PIN.get_or_init(|| serde_json::from_slice(PINS).expect("built-in validation contract"))
+}
+
 pub(crate) const KINDS: &[&str] = &[
     "pray",
     "play_sequence",
@@ -519,6 +527,19 @@ pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()>
 /// Validates one original actionable own frame. Perceived definition hashes
 /// authenticate supplied definitions only; no missing values are looked up.
 pub(crate) fn frame(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    frame_with_pins(value, budget, control, false)
+}
+
+pub(crate) fn frame_for_rollout(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    frame_with_pins(value, budget, control, true)
+}
+
+fn frame_with_pins(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    reuse: bool,
+) -> Result<()> {
     control.check()?;
     value.closed(
         &[
@@ -580,7 +601,16 @@ pub(crate) fn frame(value: &Value, budget: &Arc<Budget>, control: &Control) -> R
     if !payload.require("history_end")?.is_null() {
         validation::text_value(payload.require("history_end")?)?;
     }
-    let pins = pins(budget, control)?;
+    // Cache only this exact embedded document, never the supplied frame or
+    // the observed definition digests it still has to prove.
+    let parsed;
+    let pins = if reuse {
+        control.check()?;
+        embedded_pins()
+    } else {
+        parsed = pins(budget, control)?;
+        &parsed.root
+    };
     let catalog = payload.require("catalog")?.object()?;
     let cards = obs.require("own")?.require("cards")?.array()?;
     let names = cards
@@ -594,7 +624,6 @@ pub(crate) fn frame(value: &Value, budget: &Arc<Budget>, control: &Control) -> R
     for (name, definition) in catalog {
         control.check()?;
         let expected = pins
-            .root
             .require("definition_sha256")?
             .get(name)
             .ok_or_else(|| Error::contract("unknown perceived definition"))?
@@ -629,7 +658,7 @@ pub(crate) fn frame(value: &Value, budget: &Arc<Budget>, control: &Control) -> R
     // DecisionFrame._binding() adds these layout identities even though they
     // are not fields in the serialized frame DTO. Historical card frames bind
     // recipe/policy only; corrected frames additionally bind the full contract.
-    let contract = pins.root.require("action_contract")?;
+    let contract = pins.require("action_contract")?;
     for key in ["input_recipe", "policy_input_version"] {
         fields.insert(key.into(), json::copy(contract.require(key)?, control)?);
     }
@@ -1707,6 +1736,22 @@ mod tests {
             columns(&bytes, &descriptor, &original, 18, &b, &c).unwrap();
         }
     }
+    #[test]
+    fn rollout_frame_reuses_only_embedded_pins() {
+        let (budget, control) = owners();
+        let original = fixture(&[("bronze-club", None)], 0, &budget, &control);
+        assert_eq!(embedded_pins(), &pins(&budget, &control).unwrap().root);
+        for reuse in [false, true] {
+            frame_with_pins(&original, &budget, &control, reuse).unwrap();
+        }
+        let mut altered = original;
+        altered["payload"]["catalog"]["bronze-club"]["attack"] = json::integer(999);
+        seal(&mut altered, &budget, &control);
+        let baseline = frame_with_pins(&altered, &budget, &control, false).unwrap_err();
+        let reused = frame_with_pins(&altered, &budget, &control, true).unwrap_err();
+        assert_eq!(baseline, reused);
+    }
+
     #[test]
     fn original_frame_rejects_foreign_stale_hints_fog_and_perceived_values() {
         let (b, c) = owners();

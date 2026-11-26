@@ -25,12 +25,22 @@ pub struct History {
 }
 impl History {
     pub fn new(actor: u8, episode: String) -> Result<Self> {
+        Self::new_with_pins(actor, episode, false)
+    }
+
+    pub(super) fn new_with_pins(actor: u8, episode: String, native_rollout: bool) -> Result<Self> {
         let budget = Budget::new(12usize << 30);
         let c = Control::new(f64::MAX)?;
-        let pins: Value = serde_json::from_slice(include_bytes!(
-            "../../assets/card-instance-validation-pins-v2.json"
-        ))
-        .unwrap();
+        let parsed;
+        let pins = if native_rollout {
+            card_instance::embedded_pins()
+        } else {
+            parsed = serde_json::from_slice::<Value>(include_bytes!(
+                "../../assets/card-instance-validation-pins-v2.json"
+            ))
+            .unwrap();
+            &parsed
+        };
         let initial = structured_journal::event_prefix_initial(
             actor as i128,
             &json!(episode),
@@ -54,6 +64,10 @@ impl History {
             recipe,
         })
     }
+    pub(super) fn event_recipe(&self) -> &crate::structured_tokens::Recipe {
+        &self.recipe
+    }
+
     pub fn append(
         &mut self,
         events: Vec<Value>,

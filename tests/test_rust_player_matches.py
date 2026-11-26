@@ -16,7 +16,8 @@ class Controls:
     value: int
 
 
-def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_diagnostics=None):
+def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_diagnostics=None,
+                 native_rollout=False, player_worker_threads=None):
     from gf_training import rust_player_matches as module
     events, servers = [], []
     execution, cleanup = time.monotonic()+30, time.monotonic()+40
@@ -84,7 +85,7 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_dia
             servers.append(self); events.append(('acquire', self.index))
         async def start(self):
             assert self in pump.servers.values()
-            assert pump.server_history[-1] == {'server': self, 'runtime_evidence': None}
+            assert pump.server_history[self.index] == {'server': self, 'runtime_evidence': None}
             if failure == 'start': raise OSError('original server start failure')
             return {'base_url': 'http://actual', 'test_server_info': {'seed_fingerprint': 'fingerprint'},
                 'test_server_config': self.expected}
@@ -98,16 +99,36 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_dia
             return {'status': 'archived'}
     class Evidence:
         def preflight(self): raise AssertionError('preflight belongs to caller before try')
+        def read_receipt(self, index):
+            events.append(('receipt', index))
+            if failure == 'receipt': raise OSError('original receipt failure')
+            return {'executed': {'pid': 100+index}}
         def verify_executed(self, process):
             server = next(server for server in servers if server.process is process)
-            events.append(('receipt', server.index))
-            if failure == 'receipt': raise OSError('original receipt failure')
-            return {'executed': {'pid': 100+server.index}}
+            return self.read_receipt(server.index)
+        def prepare_executed_read(self, process, *, deadline):
+            assert deadline == execution
+            server = next(server for server in servers if server.process is process)
+            return ExecutedRead(server.index, self)
+        def confirm_executed_read(self, process, original):
+            assert process is servers[original.index].process
+    class ExecutedRead:
+        def __init__(self, index, evidence):
+            self.index = index
+            self.evidence = evidence
+        def read(self):
+            return self.evidence.read_receipt(self.index)
     class Writer:
-        def __init__(self): self.contexts = []
+        def __init__(self):
+            self.contexts = []
+            self._rollout = object() if native_rollout else None
+        def _finish_rollout_registration(self):
+            pass
+        def _begin_rollout_read(self):
+            return self._rollout
         def bind_contexts(self, actual):
             self.contexts.append(actual); events.append(('bind', actual[0].episode_id))
-            assert pump.server_history[-1]['runtime_evidence'] is actual[0].runtime_evidence
+            assert any(row['runtime_evidence'] is actual[0].runtime_evidence for row in pump.server_history)
             if failure == 'bind': raise OSError('original bind failure')
         def accept(self, bundle):
             events.append(('write', bundle.id))
@@ -122,8 +143,165 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_dia
         return pump.execute(groups, contexts, writer, server=server_config, actions=actions,
             max_decisions=11, output=output, execution_deadline=execution, cleanup_deadline=cleanup,
             game_concurrency=concurrency, run_id='run', batch_id=batch_id, evidence=Evidence(),
+            **({} if player_worker_threads is None else {'player_worker_threads': player_worker_threads}),
             **({} if http_diagnostics is None else {'http_diagnostics': http_diagnostics}))
     return pump, runtime, writer, contexts, servers, events, execute
+
+
+def test_parallel_native_startup_joins_bounded_groups_before_planned_bind_and_wave(tmp_path, monkeypatch):
+    from gf_training import rust_player_matches as module
+
+    pump, runtime, writer, _, servers, events, execute = pump_fixture(
+        tmp_path, monkeypatch, concurrency=6, native_rollout=True, player_worker_threads=2,
+    )
+    original_start = module.ManagedServer.start
+    running = set()
+
+    class WaveAdmitted(Exception):
+        pass
+
+    async def start(server):
+        if server.index < 2:
+            assert set(pump.servers) == {0, 1}
+        running.add(server.index)
+        try:
+            if server.index == 0:
+                async with asyncio.timeout(1):
+                    while pump.server_history[1]['runtime_evidence'] is None:
+                        await asyncio.sleep(0)
+            elif server.index == 1:
+                assert running == {0, 1}
+            else:
+                assert running == {2}
+                assert all(row['runtime_evidence'] for row in pump.server_history[:2])
+            return await original_start(server)
+        finally:
+            running.remove(server.index)
+
+    def launch(specs):
+        assert not running
+        assert [pair[0].episode_id for pair in writer.contexts] == ['e00', 'e10', 'e20']
+        assert all(row['runtime_evidence'] for row in pump.server_history)
+        assert tuple(spec['episode'] for spec in specs) == ('e00', 'e01', 'e10', 'e11', 'e20', 'e21')
+        raise WaveAdmitted
+
+    async def inline(call, *args):
+        return call(*args)
+
+    monkeypatch.setattr(module.ManagedServer, 'start', start)
+    monkeypatch.setattr(runtime, 'start', launch)
+    monkeypatch.setattr(module.asyncio, 'to_thread', inline)
+    with pytest.raises(WaveAdmitted):
+        asyncio.run(execute())
+    assert len(servers) == 3 and not running
+    assert [i for kind, i in events if kind == 'receipt'] == [1, 0, 2]
+    assert events.index(('receipt', 2)) < events.index(('bind', 'e00'))
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_parallel_native_startup_keeps_same_cleanup_owners_and_primary_failure(tmp_path, monkeypatch, cancel):
+    from gf_common.hpo_storage import HPODiagnosticsConfig
+    from gf_training import rust_player_matches as module
+
+    config = HPODiagnosticsConfig(str(tmp_path / 'ram'), str(tmp_path / 'archive'))
+    pump, runtime, writer, _, servers, _, execute = pump_fixture(
+        tmp_path, monkeypatch, concurrency=6, native_rollout=True,
+        player_worker_threads=2, http_diagnostics=config,
+    )
+    original_start = module.ManagedServer.start
+    owned = asyncio.Event()
+    finished = set()
+    error = OSError('original parallel startup failure')
+    cause = ValueError('simulator rejected startup')
+
+    async def start(server):
+        assert set(pump.servers) == {0, 1}
+        assert all(owner in pump._pending_http for owner in pump.servers.values())
+        try:
+            if server.index == 0:
+                return await original_start(server)
+            async with asyncio.timeout(1):
+                while pump.server_history[0]['runtime_evidence'] is None:
+                    await asyncio.sleep(0)
+            owned.set()
+            if cancel:
+                await asyncio.Future()
+            raise error from cause
+        finally:
+            finished.add(server.index)
+
+    async def run():
+        task = asyncio.create_task(execute())
+        if cancel:
+            await asyncio.wait_for(owned.wait(), 1)
+            task.cancel('original parallel startup cancellation')
+            with pytest.raises(asyncio.CancelledError, match='original parallel startup cancellation'):
+                await task
+        else:
+            with pytest.raises(OSError, match='original parallel startup failure') as caught:
+                await task
+            assert caught.value is error
+            assert caught.value.__cause__ is cause
+
+    monkeypatch.setattr(module.ManagedServer, 'start', start)
+    async def inline(call, *args):
+        return call(*args)
+    monkeypatch.setattr(module.asyncio, 'to_thread', inline)
+    asyncio.run(run())
+    assert finished == {0, 1}
+    assert list(pump.servers.values()) == servers
+    assert set(pump._pending_http) == set(servers)
+    assert [row['server'] for row in pump.server_history] == servers
+    assert pump.server_history[0]['runtime_evidence'] == {'executed': {'pid': 100}}
+    assert pump.server_history[1]['runtime_evidence'] is None
+    assert not runtime.started and not writer.contexts
+
+
+@pytest.mark.parametrize('failure', [False, True])
+def test_parallel_native_attestation_drains_original_readers_through_repeat_cancellation(tmp_path, monkeypatch, failure):
+    from gf_training import rust_player_matches as module
+
+    pump, runtime, writer, _, _, _, execute = pump_fixture(
+        tmp_path, monkeypatch, concurrency=6, native_rollout=True, player_worker_threads=2,
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    readers, retired = set(), set()
+
+    async def read(call, *args):
+        index = call.__self__.index
+        readers.add(index)
+        if readers == {0, 1}:
+            entered.set()
+        try:
+            await release.wait()
+            if failure and index == 1:
+                raise OSError('original executable read failure')
+            return call(*args)
+        finally:
+            retired.add(index)
+
+    async def run():
+        task = asyncio.create_task(execute())
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            task.cancel('first startup cancellation')
+            await asyncio.sleep(0)
+            task.cancel('repeated startup cancellation')
+            await asyncio.sleep(0)
+            assert not task.done() and not retired
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError, match='first startup cancellation'):
+            await task
+
+    monkeypatch.setattr(module.asyncio, 'to_thread', read)
+    asyncio.run(run())
+    assert retired == {0, 1}
+    assert set(pump.servers) == {0, 1}
+    assert pump.server_history[0]['runtime_evidence'] == {'executed': {'pid': 100}}
+    second = None if failure else {'executed': {'pid': 101}}
+    assert pump.server_history[1]['runtime_evidence'] == second
+    assert not runtime.started and not writer.contexts
 
 
 def test_match_pump_preserves_slots_write_ack_arrival_and_plan_report_order(tmp_path, monkeypatch):
@@ -402,13 +580,13 @@ def test_collector_keeps_original_preflight_try_cleanup_order_aliases_and_loans(
     collector.writer_history, collector.current = [], None
     collector.mode = None
     collector.settings, collector.cleanup_deadline = StorageSettings(), deadline+10
-    collector.declaration = {'game_concurrency': 1, 'max_batch_size': 1}
+    collector.declaration = {'game_concurrency': 1, 'max_batch_size': 1, 'player_worker_threads': 1}
     collector.config = SimpleNamespace(storage=SimpleNamespace(db_root=str(tmp_path/'db')),
         server=SimpleNamespace(binary='binary', source_dir='source'), actions=SimpleNamespace(action_contract='contract'),
         run=SimpleNamespace(max_decisions=10))
     collector.registry = SimpleNamespace(require=lambda: None, budget=budget, state={'updates': 0, 'run_id': 'run'},
         current=SimpleNamespace(files={'inference.json': 'current'}),
-        service=SimpleNamespace(bind_collection=lambda *args, **kwargs: None),
+        service=SimpleNamespace(bind_collection=lambda *args, **kwargs: None, sequence_enabled=False),
         admission=SimpleNamespace(observation={'deadlines': {'execution_bits': deadline_bits(deadline)}}))
     monkeypatch.setattr(collector, '_contexts', lambda plan: {})
     monkeypatch.setattr(collector, '_counters', dict)

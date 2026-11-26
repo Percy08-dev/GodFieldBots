@@ -95,6 +95,89 @@ pub struct Terminal<'a> {
     pub banks: [Bank<'a>; 2],
 }
 
+// The actor owns these observations and search results until mailbox acceptance.
+// The mailbox can keep a weak reference to this exact input to serialization.
+pub(super) enum OwnedAction {
+    Pending(OwnedPending),
+    Ack(OwnedAck),
+}
+
+pub(super) struct OwnedPending {
+    pub schema: &'static str,
+    pub run: String,
+    pub trial: String,
+    pub game: String,
+    pub episode: String,
+    pub actor: u8,
+    pub frame: Value,
+    pub delta: Value,
+    pub generated: Generated,
+    pub selected: usize,
+    pub scores: Option<Scores>,
+    pub command: Value,
+    pub search_rng_before: Value,
+    pub search_rng_after: Value,
+    pub policy_state_before: Value,
+    pub policy_state_after: Value,
+    pub sampling_seed: u64,
+    pub policy: PolicySpec,
+}
+
+pub(super) struct OwnedAck {
+    pub schema: &'static str,
+    pub game: String,
+    pub episode: String,
+    pub actor: u8,
+    pub command: Value,
+    pub acknowledgement: Value,
+}
+
+impl OwnedAction {
+    pub(super) fn routing(&self) -> (&'static str, &str, &str) {
+        match self {
+            Self::Pending(pending) => ("pending", &pending.episode, &pending.game),
+            Self::Ack(ack) => ("ack", &ack.episode, &ack.game),
+        }
+    }
+}
+
+impl Serialize for OwnedAction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Pending(pending) => Pending {
+                schema: pending.schema,
+                run: &pending.run,
+                trial: &pending.trial,
+                game: &pending.game,
+                episode: &pending.episode,
+                actor: pending.actor,
+                frame: &pending.frame,
+                delta: &pending.delta,
+                generated: (&pending.generated).into(),
+                selected: pending.selected,
+                scores: pending.scores.as_ref(),
+                command: &pending.command,
+                search_rng_before: &pending.search_rng_before,
+                search_rng_after: &pending.search_rng_after,
+                policy_state_before: &pending.policy_state_before,
+                policy_state_after: &pending.policy_state_after,
+                sampling_seed: pending.sampling_seed,
+                policy: &pending.policy,
+            }
+            .serialize(serializer),
+            Self::Ack(ack) => Ack {
+                schema: ack.schema,
+                game: &ack.game,
+                episode: &ack.episode,
+                actor: ack.actor,
+                command: &ack.command,
+                acknowledgement: &ack.acknowledgement,
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,8 +284,8 @@ mod tests {
         };
         let policies = [policy.clone(), policy];
         let seats = [
-            Participant::new(1, "planned".into(), policies[0].clone()).unwrap(),
-            Participant::new(2, "planned".into(), policies[1].clone()).unwrap(),
+            Participant::new(1, "planned".into(), policies[0].clone(), false).unwrap(),
+            Participant::new(2, "planned".into(), policies[1].clone(), false).unwrap(),
         ];
         let report = GameReport {
             episode: "planned".into(),

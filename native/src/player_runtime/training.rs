@@ -415,7 +415,50 @@ impl Episode {
     fn count(&self) -> usize {
         self.rows.data.len()
     }
+
+    pub(crate) fn require_identity(
+        &self, run: &str, trial: &str, episode: &str, game: &str,
+        viewer: u8, checkpoint: &str, epoch: u64, decisions: usize, winner: Option<u8>,
+    ) -> Result<()> {
+        wait_duration(self.deadline)?;
+        let actual_winner = match self.outcome {
+            Outcome::Draw => None,
+            Outcome::Win(winner) => Some(winner),
+        };
+        ensure(
+            self.run == run
+                && self.trial == trial
+                && self.episode == episode
+                && self.game == game
+                && self.viewer == viewer
+                && self.checkpoint == checkpoint
+                && self.epoch == epoch
+                && self.count() == decisions
+                && actual_winner == winner,
+            "native learner/Journal trajectory identity differs",
+        )
+    }
+
+    pub(crate) fn require_row(
+        &self, decision: usize, revision: u64, frame_hash: &str, table_hash: &str,
+        candidates: usize, selected: i64, old_logprob: f64, old_value: f64,
+    ) -> Result<()> {
+        wait_duration(self.deadline)?;
+        let row = self.rows.data.get(decision)
+            .ok_or_else(|| error("native learner/Journal decision missing"))?;
+        ensure(
+            row.revision == revision
+                && row.frame_hash == frame_hash.as_bytes()
+                && row.table_hash == table_hash.as_bytes()
+                && row.count == candidates
+                && self.selected[decision] == selected
+                && f64::from(self.old_logprob[decision]).to_bits() == old_logprob.to_bits()
+                && f64::from(self.old_value[decision]).to_bits() == old_value.to_bits(),
+            "native learner/Journal decision differs",
+        )
+    }
 }
+
 #[pyclass(frozen)]
 pub struct PlayerPpoEpisode {
     inner: Arc<Episode>,
@@ -429,67 +472,19 @@ impl PlayerPpoEpisode {
 impl PlayerPpoEpisode {
     #[pyo3(signature = (run, trial, episode, game, viewer, checkpoint, epoch, decisions, winner))]
     fn require_identity(
-        &self,
-        run: &str,
-        trial: &str,
-        episode: &str,
-        game: &str,
-        viewer: u8,
-        checkpoint: &str,
-        epoch: u64,
-        decisions: usize,
-        winner: Option<u8>,
+        &self, run: &str, trial: &str, episode: &str, game: &str,
+        viewer: u8, checkpoint: &str, epoch: u64, decisions: usize, winner: Option<u8>,
     ) -> PyResult<()> {
-        let source = &self.inner;
-        wait_duration(source.deadline).map_err(python_error)?;
-        let actual_winner = match source.outcome {
-            Outcome::Draw => None,
-            Outcome::Win(winner) => Some(winner),
-        };
-        ensure(
-            source.run == run
-                && source.trial == trial
-                && source.episode == episode
-                && source.game == game
-                && source.viewer == viewer
-                && source.checkpoint == checkpoint
-                && source.epoch == epoch
-                && source.count() == decisions
-                && actual_winner == winner,
-            "native learner/Journal trajectory identity differs",
-        )
-        .map_err(python_error)
+        self.inner.require_identity(run, trial, episode, game, viewer, checkpoint, epoch, decisions, winner)
+            .map_err(python_error)
     }
 
     fn require_row(
-        &self,
-        decision: usize,
-        revision: u64,
-        frame_hash: &str,
-        table_hash: &str,
-        candidates: usize,
-        selected: i64,
-        old_logprob: f64,
-        old_value: f64,
+        &self, decision: usize, revision: u64, frame_hash: &str, table_hash: &str,
+        candidates: usize, selected: i64, old_logprob: f64, old_value: f64,
     ) -> PyResult<()> {
-        let source = &self.inner;
-        wait_duration(source.deadline).map_err(python_error)?;
-        let row = source
-            .rows
-            .data
-            .get(decision)
-            .ok_or_else(|| python_error(error("native learner/Journal decision missing")))?;
-        ensure(
-            row.revision == revision
-                && row.frame_hash == frame_hash.as_bytes()
-                && row.table_hash == table_hash.as_bytes()
-                && row.count == candidates
-                && source.selected[decision] == selected
-                && f64::from(source.old_logprob[decision]).to_bits() == old_logprob.to_bits()
-                && f64::from(source.old_value[decision]).to_bits() == old_value.to_bits(),
-            "native learner/Journal decision differs",
-        )
-        .map_err(python_error)
+        self.inner.require_row(decision, revision, frame_hash, table_hash, candidates, selected, old_logprob, old_value)
+            .map_err(python_error)
     }
 }
 

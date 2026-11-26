@@ -1,4 +1,4 @@
-"""Same-host original custody and Python Journal6 content encoding.
+"""Same-host original custody, Journal6 encoding and Pack publication.
 
 These owners issue no collection/Source/learning authority. The dedicated thread
 owns SQLite and the unchanged Pack business operations; native captures retain
@@ -61,6 +61,7 @@ from gf_common.structured_wire import (
     parse_frame,
     parse_game_generated_v3,
     parse_report_v3,
+    parse_selection,
 )
 from gf_training.candidate_storage import candidate_basename
 from gf_training.card_instance_journal import CardInstanceJournal
@@ -494,6 +495,7 @@ class CanonicalEpisodeEncoder:
     ) -> None:
         self.context, self.sink = context, sink
         self._writer_workspace = _writer_workspace
+        self._rollout_packet = None
         self._native_candidates = is_shared_contract(context.actions.action_contract)
         self._action_contract = asdict(context.actions.action_contract)
         self.game: str | None = None
@@ -808,7 +810,64 @@ class CanonicalEpisodeEncoder:
         self.seen.add(bundle.id)
         self.originals.append(bundle)  # SAME capability/reservation; custody before ACK
 
+    def adopt_rollout(self, bundle: Any, packet: Any) -> None:
+        if self.game is not None or self.terminal is not None or self._writer_workspace is None:
+            raise ContractError("rollout requires new bound episode")
+        if not packet.same_original(bundle) or bundle.episode != self.context.episode_id:
+            raise ContractError("rollout terminal differs from original")
+        from gf_training.structured_rollout import _owned_bytes
+        training = self.training
+        if training is None:
+            raise ContractError("native Journal writer requires staged learner context")
+        proof = None
+        if packet.has_evidence():
+            transferred = packet.evidence_bytes()
+            training.grow(transferred)
+            encoded, events, payloads = packet.copy_evidence()
+            proof = json.loads(encoded)
+            report = proof["report"]
+        else:
+            report = json.loads(packet.report_json())
+        self.game = bundle.game or None
+        self._rollout_packet = packet
+        self.originals.append(bundle)
+        for index, (name, length) in enumerate(packet.members()):
+            lease = self.sink.budget.reserve(length)
+            try:
+                member = packet.copy_member(index)
+                self.sink.write(self.context.episode_id + "/" + name, member, lease)
+            except BaseException as error:
+                _retain_failure(self.sink, error, clear_frames=True)
+                lease.close()
+                raise
+        packet.release_members()
+        self.terminal = report
+        if proof is None:
+            return
+
+        data = proof["facts"]
+        viewer = data["viewer"]
+        if (viewer != self.context.learner_viewer or data["episode_id"] != bundle.episode
+                or data["game_id"] != bundle.game or data["decisions"] != len(payloads)):
+            raise ContractError("completed rollout numeric facts differ")
+        training.boundary = EventBoundary(**proof["boundary"])
+        training.outcome = proof["outcome"]
+        training.events = tuple(events)
+        training.facts = data
+        for (row, candidates), payload in zip(proof["rows"], payloads, strict=True):
+            frame = _VerifiedJournalFrame(
+                viewer, data["episode_id"], row["revision"], row["interval_start"],
+                EventBoundary(**row["boundary"]), row["interval_start_hash"], payload, row["frame_hash"])
+            training.rows.append(_AcceptedTrainingRow(frame, parse_selection(row["selection"]), candidates))
+        training.grow(_owned_bytes((training.events, training.rows, training.boundary,
+                                    training.outcome, training.facts)) - transferred)
+        training.native = bundle._training_episode()
+        if type(training.native) is not gf_native.PlayerPpoEpisode:
+            raise ContractError("completed rollout returned no original numeric Episode")
+        packet.release_evidence()
+
     def retire(self) -> None:
+        self._rollout_packet = None
         self._writer_workspace = None
         self.originals.clear()
         self.journals.clear()
@@ -944,14 +1003,14 @@ class _Command:
 
 
 class _WriterWorkspace:
-    """The existing grant shared only by its original writer and inventory."""
+    """The existing grant retained by its writer and concrete borrowers."""
 
     def __init__(self, reservation: Any, *, frame_scratch_bytes: int = 0) -> None:
         self.reservation = reservation
         self._frame_scratch_bytes = frame_scratch_bytes
         self._frame_scratch: gf_native._JournalFrameScratch | None = None
         self.writer_live = True
-        self.inventories = 0
+        self.borrowers = 0
         self.lock = threading.Lock()
 
     @property
@@ -962,7 +1021,7 @@ class _WriterWorkspace:
         return self._frame_scratch
 
     def _retire(self) -> None:
-        if not self.writer_live and not self.inventories and self.reservation is not None:
+        if not self.writer_live and not self.borrowers and self.reservation is not None:
             self._frame_scratch = None
             self.reservation.close()
             self.reservation = None
@@ -973,27 +1032,27 @@ class _WriterWorkspace:
             self._retire()
 
 
-class _InventoryLoan:
+class _WriterWorkspaceLoan:
     def __init__(self, workspace: _WriterWorkspace) -> None:
         self.workspace = workspace
         self.released = False
         with workspace.lock:
             if not workspace.writer_live:
                 raise RuntimeError("writer workspace already retired")
-            workspace.inventories += 1
+            workspace.borrowers += 1
 
     def close(self) -> None:
         with self.workspace.lock:
             if not self.released:
-                self.workspace.inventories -= 1
+                self.workspace.borrowers -= 1
                 self.released = True
             self.workspace._retire()
 
 
-_UNCERTAIN_INVENTORY_LOANS: list[_InventoryLoan] = []
+_UNCERTAIN_INVENTORY_LOANS: list[_WriterWorkspaceLoan] = []
 
 
-def _finalize_inventory(loan: _InventoryLoan) -> None:
+def _finalize_inventory(loan: _WriterWorkspaceLoan) -> None:
     try:
         loan.close()
     except BaseException:  # noqa: BLE001 -- actual grant remains reachable after uncertain close
@@ -1010,7 +1069,7 @@ class RustWriterInventory:
 
     def __init__(self, rows: tuple[tuple[str, int, str], ...], workspace: _WriterWorkspace) -> None:
         self._rows = rows
-        self._loan = _InventoryLoan(workspace)
+        self._loan = _WriterWorkspaceLoan(workspace)
         self._closed = False
         self._finalizer = weakref.finalize(self, _finalize_inventory, self._loan)
 
@@ -1059,6 +1118,7 @@ class RustPlayerStorage:
         training: bool = False,
         work_directory: Path | None = None,
         durable_mount: tuple[Path, int] | None = None,
+        native_rollout: bool = False,
     ) -> None:
         if (work_directory is None) != (durable_mount is None):
             raise ValueError("staged writer requires both work and durable mount ownership")
@@ -1092,6 +1152,14 @@ class RustPlayerStorage:
         self.runtime, self.directory, self.run_id = runtime, directory, run_id
         self._work_directory = directory if work_directory is None else work_directory
         self._durable_mount = durable_mount
+        if native_rollout and (not training or not deferred_contexts or durable_mount is None or contexts):
+            raise ContractError("native Journal writer requires deferred staged training")
+        self._native_rollout = native_rollout
+        self._rollout = None
+        self._rollout_loan: _WriterWorkspaceLoan | None = None
+        self._rollout_reader_live = False
+        self._rollout_reader_retired = False
+        self._rollout_templates: dict[tuple[int, int, str], tuple[ActionConfigV3, CardInstanceRules, int]] = {}
         self.settings, self.deadline, self.cleanup_deadline = settings, deadline, cleanup_deadline
         self.budget = RecordingBudget(runtime.recording_account(), deadline)
         if self.budget.limit != settings.budget_bytes:
@@ -1167,6 +1235,43 @@ class RustPlayerStorage:
                 )
             raise
 
+    def _begin_rollout_read(self) -> Any:
+        if not self._native_rollout:
+            return None
+        with self._condition:
+            self._check()
+            if self._closing or self._rollout is None or self._rollout_reader_live or self._rollout_reader_retired:
+                raise ContractError("native Journal reader admission closed")
+            self._rollout_reader_live = True
+            return self._rollout
+
+    def _finish_rollout_read(self, *, failed: bool) -> None:
+        """Called by the original reader after its last native dequeue returns."""
+        with self._condition:
+            assert self._rollout is not None and self._rollout_reader_live
+            try:
+                if failed:
+                    self._rollout.retire_failed_drain()
+                else:
+                    self._rollout.finish()
+                self._rollout_reader_retired = True
+            finally:
+                self._rollout_reader_live = False
+
+    def _retire_joined_rollout(self) -> None:
+        with self._condition:
+            if self._rollout_reader_live:
+                raise RuntimeError("original native Journal reader retirement unconfirmed")
+            if self._rollout is not None:
+                if not self._rollout_reader_retired:
+                    # Includes failure before the reader started during context binding.
+                    self._rollout.retire_failed_drain()
+                self._rollout = None
+            self._rollout_templates.clear()
+            if self._rollout_loan is not None:
+                self._rollout_loan.close()
+                self._rollout_loan = None
+
     def _check(self) -> None:
         if self._failure is not None:
             error = RuntimeError(self._failure)
@@ -1176,7 +1281,7 @@ class RustPlayerStorage:
     def _rpc(self, kind: str, value: Any = None) -> Any:
         command = _Command(kind, value, threading.Event())
         try:
-            size = value.reserved_bytes if kind == "bundle" else 0
+            size = value.reserved_bytes if kind == "bundle" else value[0].reserved_bytes if kind == "rollout" else 0
             if size > self.settings.queue_bytes:
                 self.cancel("native record exceeds storage queue byte bound")
                 raise ValueError("native record exceeds storage queue byte bound")
@@ -1184,7 +1289,7 @@ class RustPlayerStorage:
                 command.diagnostic_ticket = self._performance_queue.attempt(time.monotonic_ns())
             with self._condition:
                 self._check()
-                while kind == "bundle" and self._queued_bytes + size > self.settings.queue_bytes:
+                while kind in ("bundle", "rollout") and self._queued_bytes + size > self.settings.queue_bytes:
                     self._condition.wait(remaining(self.deadline))
                     self._check()
                     if self._closing:
@@ -1215,11 +1320,27 @@ class RustPlayerStorage:
             raise ContractError("storage custody requires original SAME-account native capability")
         self._rpc("bundle", bundle)
 
-    def store_control(self, name: str, data: bytes) -> None:
+    def accept_rollout(self, bundle: Any, packet: Any) -> None:
+        if (self._rollout is None or type(bundle) is not gf_native.StorageBundle
+                or not self.budget.account.owns(bundle) or not packet.same_original(bundle)):
+            self.cancel("foreign rollout capture")
+            raise ContractError("rollout requires original SAME-account terminal capability")
+        self._rpc("rollout", (bundle, packet))
+
+    def _check_control(self, name: str, data: bytes) -> None:
         safe_name(name)
         if type(data) is not bytes or len(data) > min(self.settings.max_pack_bytes, 64 * MIB):
             raise ValueError("invalid control bytes")
+
+    def store_control(self, name: str, data: bytes) -> None:
+        self._check_control(name, data)
         self._rpc("control", (name, data))
+
+    def store_controls(self, values: tuple[tuple[str, bytes], ...]) -> None:
+        for name, data in values:
+            self._check_control(name, data)
+        if values:
+            self._rpc("controls", values)
 
     def inventory(self) -> RustWriterInventory:
         """Ordered raw-member index; partial groups cannot issue a snapshot."""
@@ -1270,7 +1391,55 @@ class RustPlayerStorage:
                 raise ContractError("executed receipt differs from planned participant profile")
             staged[context.episode_id] = CanonicalEpisodeEncoder(
                 context, self.sinks[group.group_id], _writer_workspace=self._workspace_lease)
+        if self._rollout is not None:
+            from gf_training.structured_rollout import _record_binding
+
+            for encoder in staged.values():
+                context = encoder.context
+                self._rollout.bind(canonical({
+                    "episode": context.episode_id, "trial": context.trial,
+                    "policies": [policy.native for policy in context.policies],
+                    "numeric_costs": context.numeric_costs, "clock": context.clock,
+                    "learner_viewer": context.learner_viewer, "deadline": context.deadline,
+                    "rules": asdict(context.rules),
+                    "classification": _record_binding(context.actions.action_contract, "qualified_game", False),
+                    "template_ids": self._rollout_header_ids(context),
+                    "run": context.run_id, "runtime_evidence": context.runtime_evidence,
+                }).encode())
         self.encoders.update(staged)
+
+    def _rollout_header_ids(self, context: EpisodeEncodingContext) -> list[int]:
+        cache = self._rollout_templates
+        assert self._rollout is not None
+        result = []
+        for viewer, policy in enumerate(context.policies, 1):
+            static = dict(policy.journal)
+            seed = integer(static.pop("sampling_seed"), 0, 2**64-1)
+            if seed != integer(policy.native["seed"], 0, 2**64-1):
+                raise ContractError("rollout planned Journal seed differs")
+            key = id(context.actions), id(context.rules), canonical(static)
+            found = cache.get(key)
+            if found is None:
+                templates = RecordingArtifacts(self.budget)
+                try:
+                    journal = _Journal(Path(context.episode_id), context.episode_id, viewer,
+                        run_id=context.run_id, game_id="rollout-registered-game",
+                        actions=context.actions, rules=context.rules, bank_episode=context.episode_id,
+                        runtime_evidence=context.runtime_evidence, sink=templates,
+                        sampling_seed=seed, **static)
+                    header_id = self._rollout.add_header_template(canonical(journal.header).encode())
+                finally:
+                    templates.close()
+                cache[key] = context.actions, context.rules, header_id
+            else:
+                header_id = found[2]
+            result.append(header_id)
+        return result
+
+    def _finish_rollout_registration(self) -> None:
+        if self._rollout is not None:
+            self._rollout.finish_header_templates()
+            self._rollout_templates.clear()
 
     def seal(self) -> CollectionLocator:
         return self._rpc("seal")
@@ -1311,7 +1480,8 @@ class RustPlayerStorage:
 
     def staging_input_retired(self) -> bool:
         return (self._thread.ident is not None and not self._thread.is_alive()
-                and not self.cleanup_errors and self._publication_database is None)
+                and not self.cleanup_errors and self._publication_database is None
+                and self._rollout_loan is None)
 
     def cancel(self, reason: str) -> None:
         with self._condition:
@@ -1334,6 +1504,8 @@ class RustPlayerStorage:
         self._thread.join(remaining(self.cleanup_deadline))
         if self._thread.is_alive():
             raise TimeoutError("original storage thread join unconfirmed")
+        if self._native_rollout:
+            self._retire_joined_rollout()
         if self._performance_queue is not None and not getattr(self, '_performance_flushed', False):
             if self._failure is not None or self.cleanup_errors:
                 self._performance_queue.metrics.error('writer_retirement_incomplete')
@@ -1371,17 +1543,27 @@ class RustPlayerStorage:
             return
         sink = self.sinks[group.group_id]
         members = sink.members()
-        index = canonical_json({"format": "group-pack-v1", "files": member_index(members)})
-        raw_size = 16 + len(index) + sum(len(member.data) for member in members)
-        if raw_size > self.settings.max_pack_bytes:
-            raise ValueError("canonical group exceeds Pack byte bound")
-        # Existing compressor returns chunks plus their final joined backing.
-        # The format's output bound is raw_size+MIB, not max-Pack/game preallocation.
-        compressed = self.budget.reserve(2 * (raw_size + MIB))
+        prepared = index = None
+        if self._rollout is None:
+            index = canonical_json({"format": "group-pack-v1", "files": member_index(members)})
+            raw_size = 16 + len(index) + sum(len(member.data) for member in members)
+            if raw_size > self.settings.max_pack_bytes:
+                raise ValueError("canonical group exceeds Pack byte bound")
+            compressed = self.budget.reserve(2 * (raw_size + MIB))
+        else:
+            prepared = self._rollout.pack([(m.kind, m.name, m.data) for m in members],
+                                          self.settings.max_pack_bytes, self.deadline)
+            raw_size = prepared.raw_bytes
+            compressed = self.budget.reserve(prepared.size)
         pack = None
+        submit_workspace = None
         try:
-            pack = encode_pack(members, max_uncompressed_bytes=raw_size)
-            compressed.resize(len(pack))
+            if prepared is None:
+                pack = encode_pack(members, max_uncompressed_bytes=raw_size)
+                compressed.resize(len(pack))
+            else:
+                pack = prepared.copy()
+                prepared = None
             episodes = [
                 {
                     "episode_id": e,
@@ -1390,6 +1572,8 @@ class RustPlayerStorage:
                 }
                 for e in group.episodes
             ]
+            if self._rollout is not None:
+                submit_workspace = self._rollout.reserve_submit_workspace(raw_size)
             self._db(
                 "submit",
                 pack,
@@ -1405,6 +1589,8 @@ class RustPlayerStorage:
             raise
         finally:
             pack = None
+            if submit_workspace is not None:
+                submit_workspace.close()
             compressed.close()
         del members, index
         self.committed.add(group.group_id)
@@ -1436,7 +1622,7 @@ class RustPlayerStorage:
             mount_root, mount_device = self._durable_mount
             pending = promote_collection(database, directory=self.directory, descriptor=descriptor, raw=raw,
                 settings=self.settings, deadline=self.deadline, max_owned_bytes=self.workspace_bytes,
-                mount_root=mount_root, mount_device=mount_device)
+                mount_root=mount_root, mount_device=mount_device, overlap_file_sync=self._native_rollout)
             self._pending_owner = RustPendingDescriptor(pending, self._publication_lease)
             self._publication_lease = None
             database.close()
@@ -1560,6 +1746,9 @@ class RustPlayerStorage:
             self._workspace_lease = _WriterWorkspace(
                 self.workspace.reserve(self.workspace_bytes), frame_scratch_bytes=self.workspace_bytes,
             )
+            if self._native_rollout:
+                self._rollout_loan = _WriterWorkspaceLoan(self._workspace_lease)
+                self._rollout = self.runtime._native._rollout_writer(self.workspace_bytes)
             for initial_encoder in self.encoders.values():
                 initial_encoder._writer_workspace = self._workspace_lease
             self._work_directory.mkdir(parents=True, exist_ok=False)
@@ -1589,24 +1778,37 @@ class RustPlayerStorage:
                     self._active = command
                     if command.diagnostic_ticket is not None:
                         self._performance_queue.dispatch(command.diagnostic_ticket, time.monotonic_ns())
-                if command.kind == "bundle":
-                    bundle = command.value
+                if command.kind in ("bundle", "rollout"):
+                    if command.kind == "rollout":
+                        bundle, packet = command.value
+                    else:
+                        bundle, packet = command.value, None
+                    episode = bundle.episode
                     encoder = self.encoders.get(bundle.episode)
                     if encoder is None:
                         raise ContractError("unplanned native episode")
-                    encoder.consume(bundle)
-                    del bundle
+                    if packet is None:
+                        encoder.consume(bundle)
+                    else:
+                        encoder.adopt_rollout(bundle, packet)
+                    del bundle, packet
                     # Cancellation before custody acceptance cannot become a
                     # successful command merely because encoding just returned.
                     self._check()
                     # Custody acceptance is published BEFORE complete-group SQL.
                     command.accepted = True
                     command.done.set()
-                    self._commit(self.group_for[command.value.episode])
+                    self._commit(self.group_for[episode])
                 elif command.kind == "control":
                     name, data = command.value
                     self._db("control", data, name=name)
                     del data
+                    command.accepted = True
+                    command.done.set()
+                elif command.kind == "controls":
+                    assert self._database is not None
+                    self._database.execute_controls(self._request, command.value)
+                    self._request += 1
                     command.accepted = True
                     command.done.set()
                 elif command.kind == "contexts":
@@ -1649,6 +1851,8 @@ class RustPlayerStorage:
                 with self._condition:
                     if command.kind == "bundle":
                         self._queued_bytes -= command.value.reserved_bytes
+                    elif command.kind == "rollout":
+                        self._queued_bytes -= command.value[0].reserved_bytes
                     if command.diagnostic_ticket is not None:
                         self._performance_queue.release(command.diagnostic_ticket)
                     self._active = None

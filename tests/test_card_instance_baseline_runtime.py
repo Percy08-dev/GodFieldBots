@@ -600,14 +600,19 @@ def test_runtime_receipt_approval_is_closed(field):
         validate_runtime_receipt(raw, require_executed=True)
 
 
-def test_exec_swap_cannot_be_hidden_by_restored_path_receipt(tmp_path):
+@pytest.mark.parametrize("detached", [False, True])
+def test_exec_swap_cannot_be_hidden_by_restored_path_receipt(tmp_path, detached):
     # Even a previously validated/restored pathname cannot vouch for this live Python child.
     owner = CardInstanceRuntimeEvidence(tmp_path / "restored-approved-path", tmp_path)
     owner._receipt = receipt()
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
     try:
         with pytest.raises(ContractError, match="executed binary"):
-            owner.verify_executed(process)
+            if detached:
+                owner.prepare_executed_read(process, deadline=time.monotonic() + 2).read()
+            else:
+                owner.verify_executed(process)
+        assert owner._receipt == receipt()
     finally:
         process.kill()
         process.wait()

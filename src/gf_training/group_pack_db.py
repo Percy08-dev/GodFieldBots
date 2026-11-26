@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from collections.abc import Iterable
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -17,10 +18,10 @@ from gf_common.group_pack import (
     canonical_json,
     decode_pack,
     digest,
+    inspect_pack,
     member_index,
     parse_json,
     safe_name,
-    unpack_raw,
 )
 from gf_training.group_pack_resources import OwnedDescriptor, remaining, retain_cleanup
 
@@ -157,9 +158,9 @@ def submit_group(
     identity_text(group_id)
     if type(raw_bytes) is not int or raw_bytes < 16 or raw_bytes > max_pack_bytes:
         raise ValueError("invalid uncompressed size")
-    if len(unpack_raw(pack, raw_bytes)) != raw_bytes:
+    actual_size, members = inspect_pack(pack, raw_bytes)
+    if actual_size != raw_bytes:
         raise ValueError("Pack size mismatch")
-    members = member_index(decode_pack(pack, raw_bytes))
     record_bytes = canonical_json(record, limit=1024 * 1024)
     rows = []
     if not isinstance(episodes, list):
@@ -217,19 +218,39 @@ def submit_group(
         db.executemany("INSERT INTO episodes VALUES (?,?,?,?,?)", rows)
 
 
-def store_control(db: sqlite3.Connection, name: str, data: bytes) -> None:
+def _control_values(name: str, data: bytes) -> tuple[str, bytes, str, int]:
     safe_name(name)
-    proposed = (name, data, digest(data), len(data))
+    return name, data, digest(data), len(data)
+
+
+def _insert_control(db: sqlite3.Connection, proposed: tuple[str, bytes, str, int]) -> None:
+    name = proposed[0]
+    if db.execute("SELECT 1 FROM members WHERE name=?", (name,)).fetchone():
+        raise ValueError("duplicate logical name")
+    old = db.execute("SELECT * FROM controls WHERE name=?", (name,)).fetchone()
+    if old is not None:
+        if old != proposed:
+            raise ValueError("conflicting control resend")
+        return
+    db.execute("INSERT INTO controls VALUES (?,?,?,?)", proposed)
+
+
+def store_control(db: sqlite3.Connection, name: str, data: bytes) -> None:
+    proposed = _control_values(name, data)
     with db:
         metadata(db, sealed=False)
-        if db.execute("SELECT 1 FROM members WHERE name=?", (name,)).fetchone():
-            raise ValueError("duplicate logical name")
-        old = db.execute("SELECT * FROM controls WHERE name=?", (name,)).fetchone()
-        if old is not None:
-            if old != proposed:
-                raise ValueError("conflicting control resend")
-            return
-        db.execute("INSERT INTO controls VALUES (?,?,?,?)", proposed)
+        _insert_control(db, proposed)
+
+
+def store_controls(
+    db: sqlite3.Connection, values: tuple[tuple[str, bytes], ...], *, deadline: float
+) -> None:
+    with db:
+        metadata(db, sealed=False)
+        for name, data in values:
+            remaining(deadline)
+            _insert_control(db, _control_values(name, data))
+        remaining(deadline)
 
 
 def logical_index(db: sqlite3.Connection, run_id: str) -> dict[str, Json]:
@@ -398,22 +419,34 @@ def admit_database(
             "metadata_charge": metadata_charge, "compressed_sizes": compressed}
 
 
-def verified_pack(db: sqlite3.Connection, run_id: str, group: Json, index: Json,
-                  compressed_size: int) -> tuple:
-    """Fetch a single admitted Pack and decode it once, checking the complete index."""
-    from gf_common.group_pack import PACK_FORMAT
-
+def _verified_pack_blob(
+    db: sqlite3.Connection, run_id: str, group: Json, compressed_size: int
+) -> bytes:
     row = db.execute("SELECT pack FROM groups WHERE run_id=? AND group_id=?",
                      (run_id, group['group_id'])).fetchone()
     if (row is None or type(row[0]) is not bytes or len(row[0]) != compressed_size
             or digest(row[0]) != group['sha256']):
         raise ValueError("group BLOB mismatch")
-    members = decode_pack(row[0], group['raw_bytes'])
-    actual = member_index(members)
+    return row[0]
+
+
+def _check_pack_index(
+    actual: list[dict[str, Json]], indexed_members: Iterable[dict[str, Json]]
+) -> None:
     expected = [{k: m[k] for k in ('name', 'kind', 'offset', 'length', 'sha256')}
-                for m in index['members'] if m['group_id'] == group['group_id']]
+                for m in indexed_members]
     if actual != expected:
         raise ValueError("member lookup mismatch")
+
+
+def verified_pack(db: sqlite3.Connection, run_id: str, group: Json, index: Json,
+                  compressed_size: int) -> tuple:
+    """Fetch a single admitted Pack and decode it once, checking the complete index."""
+    from gf_common.group_pack import PACK_FORMAT
+
+    members = decode_pack(_verified_pack_blob(db, run_id, group, compressed_size), group['raw_bytes'])
+    actual = member_index(members)
+    _check_pack_index(actual, (m for m in index['members'] if m['group_id'] == group['group_id']))
     raw_size = 16 + len(canonical_json({'format': PACK_FORMAT, 'files': actual})) + sum(len(m.data) for m in members)
     if raw_size != group['raw_bytes']:
         raise ValueError("group uncompressed size mismatch")
@@ -430,11 +463,22 @@ def validate_database(
         raise ValueError("database integrity failure")
     if db.execute("PRAGMA foreign_key_check").fetchall():
         raise ValueError("database foreign key failure")
-    for group in admitted['index']['groups']:
+    groups = admitted['index']['groups']
+    indexed_members: dict[str, list[dict[str, Json]]] = {group['group_id']: [] for group in groups}
+    # Partition references without copying rows or changing the name order.
+    for member in admitted['index']['members']:
+        indexed_members[member['group_id']].append(member)
+    for group in groups:
         remaining(deadline)
-        members = verified_pack(db, admitted['seal']['run_id'], group, admitted['index'],
-                                admitted['compressed_sizes'][group['group_id']])
-        del members
+        group_id = group['group_id']
+        raw_size, actual = inspect_pack(
+            _verified_pack_blob(db, admitted['seal']['run_id'], group,
+                                admitted['compressed_sizes'][group_id]),
+            group['raw_bytes'],
+        )
+        _check_pack_index(actual, indexed_members[group_id])
+        if raw_size != group['raw_bytes']:
+            raise ValueError("group uncompressed size mismatch")
     remaining(deadline)
     return admitted
 

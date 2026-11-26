@@ -510,3 +510,42 @@ def test_hpo6_sequence_recipe_has_matching_base_and_canonical_python_source(tmp_
         campaign_config(oversized, origin=tmp_path, _pinned_base=base)
     with pytest.raises(ContractError):
         load_config(NORMAL_BASE, {"run": {"player_runtime": raw["runtime"]}})
+
+
+@pytest.mark.parametrize(
+    "hpo,source,model,profile,games,opponent,expected",
+    [
+        (True, True, "mlp", "current", 256, "heuristic_refresh", True),
+        (False, True, "mlp", "current", 256, "heuristic", False),
+        (True, False, "mlp", "current", 256, "heuristic", False),
+        (True, True, "gru", "current", 256, "heuristic", False),
+        (True, True, "mlp", "historical", 256, "heuristic", False),
+        (True, True, "mlp", "current", 257, "heuristic", False),
+        (True, True, "mlp", "current", 256, "transformer", False),
+    ],
+)
+def test_native_journal_is_default_only_for_supported_hpo_collection(
+    hpo, source, model, profile, games, opponent, expected
+):
+    from types import SimpleNamespace
+
+    from gf_common.card_instance import (
+        sacrifice_card_instance_contract,
+        shared_card_instance_contract,
+    )
+    from gf_training.rust_player_collection import RustPlayerCollector
+
+    contract = (
+        sacrifice_card_instance_contract() if profile == "current" else shared_card_instance_contract()
+    )
+    collector = SimpleNamespace(
+        registry=SimpleNamespace(hpo=hpo, state={"model_id": model}),
+        mode={} if source else None,
+        config=SimpleNamespace(actions=SimpleNamespace(action_contract=contract)),
+        declaration={"game_concurrency": 256},
+    )
+    plan = SimpleNamespace(
+        groups=(SimpleNamespace(episodes=range(games)),),
+        bindings={"learner": SimpleNamespace(model_id=model), "opponent": SimpleNamespace(model_id=opponent)},
+    )
+    assert RustPlayerCollector._uses_native_journal(collector, plan) is expected

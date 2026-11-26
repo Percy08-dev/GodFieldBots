@@ -136,6 +136,39 @@ retain independent verification. The
 [verification record](verification/owned-event-prefix.md) includes collection
 A/B, resume, phase load, and the isolated Eager experiments.
 
+[ADR0075](adr/0075-rust-rollout-journal.md) selects the Rust Journal writer
+for the current staged-HDD Sacrifice MLP HPO6 full-wave collection. Rust
+validates and acknowledges the original records, generates Journal and Replay
+members, and compresses the existing GroupPack. The configured play worker
+count also sets the native Journal pool size. The mailbox first attempts to
+encode original records once within the recording budget. Native pending
+and ACK validation borrow the actor-owned data that produced those bytes.
+Collection plan creation validates worker caps and numeric costs once per
+used policy label and creates each seat's context with its own sampling seed.
+The live native writer holds the exclusive mailbox lease for this path and
+can fall back to strict validation of the original JSON when the actor has
+retired. Validation and Journal line admission precede the ACK. Episodes in a
+collection share the immutable event recipe and codebook digest from the
+writer workspace. Native validation also borrows the embedded frame pins and
+corrected ACK recipe. SQLite submit and the independent HDD audit inspect each
+decompressed Pack once and hash member slices in place. Full-wave Simulator
+startup and executable attestation use the configured worker count as the
+parallel limit. The match pump settles those tasks before binding the
+writer contexts and starts games once in planned order. Two adjacent games
+with the same complete Simulator startup and execution receipt in that wave
+share one successful validation of the pinned public catalog. Each game
+attests its own connection and waits within its own execution deadline.
+Failed fetches leave the catalog available for the other game to fetch.
+The match pump acknowledges each native terminal bundle before deferring
+its checkpoint release. After the final terminal acknowledgement and
+retirement of the corresponding inference routes, it releases the wave's references under the
+shared Torch lock within the existing execution deadline. Release failure
+blocks Source publication, and joined cleanup owns the remaining references.
+The SQLite writer commits the final result controls in one transaction.
+HDD promotion runs the independent audit alongside file sync on the private
+files, then rechecks their identity and metadata before publication. The existing
+durable publication and Source owners issue the verified collection.
+
 [ADR0073](adr/0073-rust-live-journal-frame-validation.md) uses the original
 native pending bundle to verify shared CardInstance frames on the existing
 writer thread. Journal and the persisted raw frame data use the same

@@ -24,6 +24,7 @@ pub mod parallel;
 pub mod pipeline;
 pub mod projection;
 pub mod player_runtime;
+mod rollout_group_pack;
 pub mod retirement;
 pub mod session;
 pub mod source;

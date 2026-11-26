@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from pathlib import Path
 from uuid import uuid4
@@ -19,7 +20,7 @@ from gf_training.group_pack_db import (
     validate_database,
 )
 from gf_training.group_pack_resources import OwnedDescriptor, remaining
-from gf_training.group_pack_source import OriginalFile
+from gf_training.group_pack_source import OriginalFile, _stat_key
 from gf_training.group_pack_writer import PendingDescriptorOwner
 
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -80,6 +81,11 @@ def _copy(source: OriginalFile, fd: int, deadline: float) -> None:
     source.recheck()
 
 
+def _sync_staged_files(database_fd: int, descriptor_fd: int) -> None:
+    os.fsync(database_fd)
+    os.fsync(descriptor_fd)
+
+
 def _remove_owned_directory(parent_fd: int, name: str, staged: OwnedDescriptor,
                             files: dict[str, OwnedDescriptor]) -> None:
     """Retire only the directory and files this attempt still holds."""
@@ -100,7 +106,7 @@ def _remove_owned_directory(parent_fd: int, name: str, staged: OwnedDescriptor,
 def promote_collection(
     source: OriginalFile, *, directory: Path, descriptor: Json, raw: bytes,
     settings: StorageSettings, deadline: float, max_owned_bytes: int,
-    mount_root: Path, mount_device: int | None = None,
+    mount_root: Path, mount_device: int | None = None, overlap_file_sync: bool = False,
 ) -> PendingDescriptorOwner:
     """Return the existing pending owner bound to the verified HDD inodes."""
     if source.mutable or source.identity.st_size != descriptor["database_bytes"] or source.sha256 != descriptor["database_sha256"]:
@@ -132,30 +138,61 @@ def promote_collection(
             outgoing.callback(desc_file.close)
             _copy(source, db_file.fd, deadline)
             _write(desc_file.fd, raw, deadline)
+            # Both the auditor and the sync worker must observe the same private bytes.
+            staged_keys = (
+                _stat_key(os.fstat(db_file.fd)),
+                _stat_key(os.fstat(desc_file.fd)),
+            ) if overlap_file_sync else None
 
             expected = descriptor["database_sha256"]
-            audit = OriginalFile(stage_path / DATABASE, deadline, database_expected_sha256=expected,
-                                 max_bytes=source.identity.st_size)
-            pins.callback(audit.close)
-            if (_location(audit.identity) != _location(os.fstat(db_file.fd))
-                    or audit.identity.st_size != source.identity.st_size or audit.hash() != expected):
-                raise ValueError("staged HDD database SHA-256 differs from sealed original")
-            with closing(sqlite3.connect(f"file:/proc/self/fd/{audit.fd}?mode=ro", uri=True)) as db:
-                db.execute("PRAGMA query_only=ON")
-                db.execute("PRAGMA cache_size=-32768")
-                facts = validate_database(db, deadline=deadline,
-                    max_pack_bytes=settings.max_pack_bytes, max_owned_bytes=max_owned_bytes)
-            if (facts["seal"]["run_id"] != descriptor["run_id"] or facts["seal"]["seal_id"] != descriptor["seal_id"]
-                    or facts["index"]["controls"] != descriptor["controls"]
-                    or os.pread(desc_file.fd, len(raw) + 1, 0) != raw):
-                raise ValueError("HDD collection does not match the exact pending seal")
-            audit.recheck()
-            os.fsync(db_file.fd)
-            os.fsync(desc_file.fd)
+
+            def audit_staged() -> OriginalFile:
+                checked = OriginalFile(stage_path / DATABASE, deadline, database_expected_sha256=expected,
+                                       max_bytes=source.identity.st_size)
+                pins.callback(checked.close)
+                if (_location(checked.identity) != _location(os.fstat(db_file.fd))
+                        or checked.identity.st_size != source.identity.st_size or checked.hash() != expected):
+                    raise ValueError("staged HDD database SHA-256 differs from sealed original")
+                with closing(sqlite3.connect(f"file:/proc/self/fd/{checked.fd}?mode=ro", uri=True)) as db:
+                    db.execute("PRAGMA query_only=ON")
+                    db.execute("PRAGMA cache_size=-32768")
+                    facts = validate_database(db, deadline=deadline,
+                        max_pack_bytes=settings.max_pack_bytes, max_owned_bytes=max_owned_bytes)
+                if (facts["seal"]["run_id"] != descriptor["run_id"] or facts["seal"]["seal_id"] != descriptor["seal_id"]
+                        or facts["index"]["controls"] != descriptor["controls"]
+                        or os.pread(desc_file.fd, len(raw) + 1, 0) != raw):
+                    raise ValueError("HDD collection does not match the exact pending seal")
+                checked.recheck()
+                return checked
+
+            if overlap_file_sync:
+                # The worker must retire while both private files are still pinned.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    remaining(deadline)
+                    synced = executor.submit(_sync_staged_files, db_file.fd, desc_file.fd)
+                    try:
+                        audit = audit_staged()
+                    except BaseException as failure:
+                        try:
+                            synced.result()
+                        except BaseException as sync_failure:  # noqa: BLE001 -- retain the audit failure as primary.
+                            failure.add_note(f"concurrent staged HDD file sync failed: {sync_failure}")
+                        raise
+                    synced.result()
+                audit.recheck()
+            else:
+                audit = audit_staged()
+                _sync_staged_files(db_file.fd, desc_file.fd)
+
             os.fsync(staged.fd)
             _checked_directory(directory.parent, parent, device)
             _checked_directory(stage_path, staged, device)
             remaining(deadline)
+            if staged_keys is not None and staged_keys != (
+                _stat_key(os.fstat(db_file.fd)),
+                _stat_key(os.fstat(desc_file.fd)),
+            ):
+                raise ValueError("staged HDD files changed during sync or audit")
             os.mkdir(directory.name, mode=0o700, dir_fd=parent.fd)
             final = OwnedDescriptor(os.open(directory.name, _DIRECTORY, dir_fd=parent.fd))
             pins.callback(final.close)
