@@ -101,6 +101,35 @@ the no-change control and 7.00 s for the both-changes candidate. This
 startup difference preceded writer construction. Both Journal changes
 operate after collection starts.
 
+### Direct 256-game retest of both Journal changes
+
+The direct CUDA retest compares the Rust MLP route at `7a9e081` with frame
+validation detached on `7831755` and the archived neural header patch
+applied. The same host, seed 17, resource limits, pinned Simulator, and
+256-slot batch settings apply to all runs. The release wheels match their
+source inventories and use the same allocator, Torch and NumPy versions.
+Configurations match after normalization of trial output paths. All ten
+runs verified 256 natural games, 5,081 actions, and identical initial weights
+and semantic Journal hashes. [Build provenance](../../runs/rust-sequence-hpo/mlp-journal-direct-provenance.json)
+
+| Pair | Order | Observed overlap lower bound, control / both | Control actions/s | Both actions/s |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Control then both | 256 / 256 | 176.07 | 197.14 |
+| 2 | Both then control | 256 / 255 | 181.00 | 205.12 |
+| 3 | Control then both | 255 / 256 | 180.36 | 207.48 |
+| 2 repeat | Both then control | 256 / 256 | 181.53 | 210.32 |
+| 3 repeat | Control then both | 255 / 256 | 179.98 | 205.21 |
+
+These rates cover batch preparation through durable seal. The initial three
+pairs give median rates of 180.36 and 205.12 actions/s. Across all five pairs,
+the medians are 180.36 and 205.21 actions/s, a 13.8% improvement. The gain of
+24.85 actions/s exceeds the control range of 5.46 actions/s, and both arms
+were observed to reach 256 simultaneous games in pairs 1 and 2 repeat.
+The median inference round-trip p95 bin moves from 3,087–3,154 ms to
+2,147–2,215 ms. Maximum Torch reserved memory is 474 MiB in each arm.
+These runs measure the combined effect. The header-only comparison above
+provides the evidence on the incremental change. [Direct retest results](../../runs/rust-sequence-hpo/mlp-journal-direct-comparison.json)
+
 ## Reference capacity
 
 The existing Model4 Python resident path used HPO4, `canonical-python`, the
