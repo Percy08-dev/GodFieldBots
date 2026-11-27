@@ -9,7 +9,7 @@ use crate::{
     budget::{Budget, BudgetVec, Control, monotonic},
     error::{Error, Result},
     json::{self, ValueExt},
-    structured_journal::card_instance,
+    structured_journal::card_instance::{self, WireProfile},
 };
 use ndarray::Array1;
 use numpy::PyArray1;
@@ -826,17 +826,24 @@ fn capture_frame<'a>(raw: &'a [u8], control: &Control) -> Result<&'a [u8]> {
     }
 }
 
-pub(super) fn checked_journal_frame(
+#[cfg(test)]
+fn checked_journal_frame(
     raw: &[u8],
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<(FrameMetadata, BudgetVec<u8>)> {
+    checked_journal_frame_for_profile(raw, budget, control, WireProfile::V2)
+}
+
+fn checked_journal_frame_for_profile(
+    raw: &[u8],
+    budget: &Arc<Budget>,
+    control: &Control,
+    profile: WireProfile,
+) -> Result<(FrameMetadata, BudgetVec<u8>)> {
     let document = json::parse(capture_frame(raw, control)?, budget, control)?;
     let frame = &document.root;
-    // This verifier uses the historical corrected frame layout pin. The
-    // operational Sacrifice (or earlier shared) action contract belongs to
-    // the candidate table, not the unchanged frame hash binding.
-    card_instance::frame(frame, budget, control)?;
+    card_instance::frame_for_profile(frame, budget, control, profile, false)?;
     let boundary = frame.require("boundary")?;
     let meta = (
         frame.require("actor")?.integer(1, 2)? as u8,
@@ -914,11 +921,13 @@ impl StorageBundle {
             budget: Budget::new(workspace_bytes),
         }
     }
+    #[pyo3(signature = (scratch, deadline, action_contract=None))]
     fn _journal_frame<'py>(
         &self,
         py: Python<'py>,
         scratch: &JournalFrameScratch,
         deadline: f64,
+        action_contract: Option<&[u8]>,
     ) -> PyResult<(FrameMetadata, Bound<'py, PyBytes>)> {
         self.record._reservation.account.metrics.increment("pyo3_other", 1);
         ensure(self.record.kind == "pending", "writer frame requires pending")
@@ -928,7 +937,13 @@ impl StorageBundle {
         let budget = &scratch.budget;
         let (meta, payload, copy) = py
             .detach(|| {
-                let (meta, payload) = checked_journal_frame(original, budget, &control)?;
+                let profile = if let Some(encoded) = action_contract {
+                    let contract = json::parse(encoded, budget, &control)?;
+                    WireProfile::expected(&contract.root)?
+                } else {
+                    WireProfile::V2
+                };
+                let (meta, payload) = checked_journal_frame_for_profile(original, budget, &control, profile)?;
                 let copy = budget.reserve(payload.len())?;
                 control.check()?;
                 Ok((meta, payload, copy))

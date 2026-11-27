@@ -11,6 +11,9 @@
 - LightGBM の [v1 観測版](lightgbm-v1-observation.md)、[v1 履歴版](lightgbm-v1-history.md)、[Tree2](lightgbm-v2.md)、[Tree3](lightgbm-v3.md)
 - [Random](random-v1.md)、[Heuristic](heuristic-v1.md)、[Heuristic Refresh](heuristic-refresh-v1.md)
 
+[MLP4 の収束診断](mlp-v4-event-gru.md)では、Simulator v3 の公開防御候補とイベント契約を使用します。
+入力レシピは `participant-structured-v2` です。 [Action profile の設計](../adr/0079-simulator-v3-direct-defense.md)
+
 ## ページの書き方
 
 1. `model_id`、モデル版、入力レシピ、対応する構成・実行経路を記載する。文書名は `<モデル種別>-v<版>` を起点に、同じ系列を区別できる構造名を必要に応じて加える。Model2〜4 の `event-gru` は意思決定部分の方式と独立した区間イベントエンコーダーを表す。

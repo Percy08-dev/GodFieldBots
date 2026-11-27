@@ -13,6 +13,20 @@ from gf_cli.config import load_config
 from gf_common.domain import ContractError, EpisodeSpec, RuntimePolicyBinding
 
 
+def stub_draw_replay(monkeypatch, expected_contract):
+    def reconcile(value, viewer, accepted, outcome, *, action_contract):
+        assert action_contract == expected_contract
+        assert value == {"viewer": viewer} and accepted == [] and outcome == "draw"
+
+    def closure(value, game, viewer, *, action_contract):
+        assert action_contract == expected_contract
+        assert value == {"viewer": viewer} and game == "game"
+        return {"type": "terminal", "result": "draw"}
+
+    monkeypatch.setattr(cli, "reconcile_replay", reconcile)
+    monkeypatch.setattr(cli, "replay_closure", closure)
+
+
 @pytest.mark.parametrize("mutation", [None, "runtime", "sampling_seed", "policy"])
 def test_persisted_journal_must_match_owned_runtime_and_planned_viewer_even_without_decisions(
     tmp_path, monkeypatch, mutation
@@ -42,8 +56,7 @@ def test_persisted_journal_must_match_owned_runtime_and_planned_viewer_even_with
         return SimpleNamespace(header=header, end={"end_kind": "natural", "outcome": "draw"}, decisions=(), accepted=())
 
     monkeypatch.setattr(cli, "read_card_instance_journal", read)
-    monkeypatch.setattr(cli, "reconcile_replay", lambda *args: None)
-    monkeypatch.setattr(cli, "replay_closure", lambda *args: {"type": "terminal", "result": "draw"})
+    stub_draw_replay(monkeypatch, loaded.config.actions.action_contract)
     if mutation is None:
         cli._validate_recorded_episodes(tmp_path, [episode], loaded.config.actions, "run", float("inf"),
                                         {"episode": (spec, runtime)})
@@ -160,8 +173,7 @@ def test_neural_journal_matches_retained_input_metadata(tmp_path, monkeypatch, c
         return SimpleNamespace(header=header, end={"end_kind": "natural", "outcome": "draw"}, decisions=(), accepted=())
 
     monkeypatch.setattr(cli, "read_card_instance_journal", read)
-    monkeypatch.setattr(cli, "reconcile_replay", lambda *args: None)
-    monkeypatch.setattr(cli, "replay_closure", lambda *args: {"type": "terminal", "result": "draw"})
+    stub_draw_replay(monkeypatch, loaded.config.actions.action_contract)
     args = (tmp_path, [episode], loaded.config.actions, "run", float("inf"), {"episode": (spec, runtime)})
     if changed:
         with pytest.raises(ContractError, match="retained artifact"):

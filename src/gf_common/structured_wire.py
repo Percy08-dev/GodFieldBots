@@ -23,7 +23,8 @@ from gf_common.structured import (
     EventBoundary,
     EventDelta,
     Selection,
-    _frame_type,
+    _new_frame,
+    _raw_action_contract,
     _validate_purpose,
     _VerifiedJournalFrame,
     event_delta,
@@ -36,37 +37,52 @@ from gf_common.structured_layout import (
 )
 
 
-def frame_dict(frame: DecisionFrame, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
-    return _frame_dict(frame, layout=layout)
+def frame_dict(
+    frame: DecisionFrame, *, layout: StructuredLayout = LEGACY_LAYOUT,
+    action_contract: ActionContract | CardInstanceContract | None = None,
+) -> Json:
+    return _frame_dict(frame, layout=layout, action_contract=action_contract)
 
 
-def _frame_dict(frame: DecisionFrame | _VerifiedJournalFrame, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
-    if frame.layout is not require_layout(layout):
-        raise ContractError("frame wire layout mismatch")
+def _frame_dict(
+    frame: DecisionFrame | _VerifiedJournalFrame, *, layout: StructuredLayout = LEGACY_LAYOUT,
+    action_contract: ActionContract | CardInstanceContract | None = None,
+) -> Json:
+    if frame.layout is not layout or frame.raw_action_contract != _raw_action_contract(layout, action_contract):
+        raise ContractError("frame wire layout/action contract mismatch")
     return {"actor": frame.actor, "episode": frame.episode, "revision": frame.revision,
             "interval_start": frame.interval_start, "boundary": asdict(frame.boundary),
             "interval_start_hash": frame.interval_start_hash, "payload": frame.raw, "frame_hash": frame.frame_hash}
 
 
-def parse_frame(raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> DecisionFrame:
-    require_layout(layout)
+def parse_frame(
+    raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT,
+    action_contract: ActionContract | CardInstanceContract | None = None,
+) -> DecisionFrame:
+    expected = _raw_action_contract(layout, action_contract)
     closed(raw, {"actor", "episode", "revision", "interval_start", "boundary", "interval_start_hash", "payload", "frame_hash"})
     boundary = EventBoundary(**closed(raw["boundary"], {"end", "prefix_hash"}))
-    frame_type = _frame_type(layout)
-    return frame_type(raw["actor"], raw["episode"], raw["revision"], raw["interval_start"], boundary,
-                         raw["interval_start_hash"], canonical(raw["payload"]).encode(), raw["frame_hash"])
+    return _new_frame(raw["actor"], raw["episode"], raw["revision"], raw["interval_start"], boundary,
+                      raw["interval_start_hash"], canonical(raw["payload"]).encode(), raw["frame_hash"],
+                      layout=layout, action_contract=expected)
 
 
-def delta_dict(delta: EventDelta, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
-    if delta.layout is not require_layout(layout):
-        raise ContractError("delta wire layout mismatch")
+def delta_dict(
+    delta: EventDelta, *, layout: StructuredLayout = LEGACY_LAYOUT,
+    action_contract: ActionContract | CardInstanceContract | None = None,
+) -> Json:
+    if delta.layout is not layout or delta.raw_action_contract != _raw_action_contract(layout, action_contract):
+        raise ContractError("delta wire layout/action contract mismatch")
     return {"actor": delta.actor, "episode": delta.episode, "start": delta.start,
             "previous_hash": delta.previous_hash, "events": delta.events}
 
 
-def parse_delta(raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> EventDelta:
+def parse_delta(
+    raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT,
+    action_contract: ActionContract | CardInstanceContract | None = None,
+) -> EventDelta:
     closed(raw, {"actor", "episode", "start", "previous_hash", "events"})
-    return event_delta(**raw, layout=layout)
+    return event_delta(**raw, layout=layout, action_contract=action_contract)
 
 
 def parse_table(raw: Json, *, action_contract: ActionContract | CardInstanceContract, purpose: str,

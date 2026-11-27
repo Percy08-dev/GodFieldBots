@@ -178,8 +178,8 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
             else:
                 raw = (folder / f"replay-player-{viewer}.json").read_bytes()
             value = json.loads(raw)
-            reconcile_replay(value, viewer, accepted, episode.outcome)
-            closures.append(replay_closure(value, episode.game_id, viewer))
+            reconcile_replay(value, viewer, accepted, episode.outcome, action_contract=actions.action_contract)
+            closures.append(replay_closure(value, episode.game_id, viewer, action_contract=actions.action_contract))
         if closures[0] != closures[1]:
             raise ContractError("persisted corrected participant Replay closures disagree")
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
+from importlib.resources import files
 from types import MappingProxyType
 from typing import Any
 
@@ -42,6 +44,11 @@ PESTLE_MIRAGE_REVIEWED_SPEC_CHANGES = MappingProxyType({
         "5a5269fcb62acbd1dd1507c38d9a65d29228cf9266929af4a84b82e10f6274b5",
 })
 SACRIFICE_PROFILE = "card-instance-simulator-v2-shared-20261125-sacrifice"
+DEFENSE_V3_PROFILE = "card-instance-simulator-v3-shared-20261127-defense"
+_DEFENSE_V3_RELEASE = json.loads(
+    files("gf_common").joinpath("contracts", "simulator-defense-v3.json").read_text(encoding="utf-8")
+)
+_DEFENSE_V3_INFO = _DEFENSE_V3_RELEASE["contract"]
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -83,16 +90,24 @@ class CardInstanceContract:
     def requires_powder_weapon(self) -> bool:
         return self.profile_id in (
             STRENGTH_POWDER_PROFILE, DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE,
-            SACRIFICE_PROFILE,
+            SACRIFICE_PROFILE, DEFENSE_V3_PROFILE,
         )
 
     @property
     def mirage_danger_requires_opponent(self) -> bool:
-        return self.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE)
+        return self.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE, DEFENSE_V3_PROFILE)
 
     @property
     def protects_sacrifice_artifacts(self) -> bool:
-        return self.profile_id == SACRIFICE_PROFILE
+        return self.profile_id in (SACRIFICE_PROFILE, DEFENSE_V3_PROFILE)
+
+    @property
+    def requires_direct_defense(self) -> bool:
+        return self.profile_id == DEFENSE_V3_PROFILE
+
+    @property
+    def public_event_schema_version(self) -> str:
+        return "3" if self.requires_direct_defense else "2"
 
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
@@ -149,6 +164,20 @@ _SACRIFICE_PIN: tuple[Any, ...] = tuple(
     SACRIFICE_PROFILE if name == "profile_id" else pin
     for name, pin in zip(_CONTRACT_FIELD_NAMES, _PESTLE_MIRAGE_PIN, strict=True)
 )
+_DEFENSE_V3_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": DEFENSE_V3_PROFILE,
+        "simulator_revision": _DEFENSE_V3_RELEASE["simulator_revision"],
+        "rule_set_version": _DEFENSE_V3_INFO["rule_set_version"],
+        "gameplay_api": _DEFENSE_V3_INFO["api_version"],
+        "card_ref_scheme": _DEFENSE_V3_INFO["card_ref_scheme"],
+        "catalog_schema_version": _DEFENSE_V3_INFO["card_catalog"]["catalog_schema_version"],
+        "catalog_version": _DEFENSE_V3_INFO["card_catalog"]["catalog_version"],
+        "catalog_sha256": _DEFENSE_V3_INFO["card_catalog"]["content_sha256"],
+        "spec_inventory_sha256": _DEFENSE_V3_RELEASE["spec_inventory_sha256"],
+    }.get(name, pin)
+    for name, pin in zip(_CONTRACT_FIELD_NAMES, _SACRIFICE_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
@@ -159,6 +188,7 @@ _CONTRACT_PINS = MappingProxyType(
         MOON_DREAM_PROFILE: _MOON_DREAM_PIN,
         PESTLE_MIRAGE_PROFILE: _PESTLE_MIRAGE_PIN,
         SACRIFICE_PROFILE: _SACRIFICE_PIN,
+        DEFENSE_V3_PROFILE: _DEFENSE_V3_PIN,
     }
 )
 
@@ -195,6 +225,15 @@ def sacrifice_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _SACRIFICE_PIN, strict=True)))
 
 
+def defense_v3_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _DEFENSE_V3_PIN, strict=True)))
+
+
+def catalog_metadata(action_contract: CardInstanceContract | None = None) -> Json:
+    return dict(_DEFENSE_V3_INFO["card_catalog"]
+                if action_contract is not None and action_contract.requires_direct_defense else CATALOG_META)
+
+
 def is_shared_contract(contract: object) -> bool:
     return type(contract) is CardInstanceContract and contract.profile_id in (
         "card-instance-simulator-v2-shared-20261118",
@@ -203,6 +242,7 @@ def is_shared_contract(contract: object) -> bool:
         MOON_DREAM_PROFILE,
         PESTLE_MIRAGE_PROFILE,
         SACRIFICE_PROFILE,
+        DEFENSE_V3_PROFILE,
     )
 
 
@@ -215,6 +255,8 @@ def is_corrected_contract(contract: object) -> bool:
 
 def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
     parse_card_instance_contract(asdict(contract))
+    if contract.requires_direct_defense:
+        return dict(_DEFENSE_V3_RELEASE["spec_files"])
     if is_shared_contract(contract):
         specs = {
             **CORRECTED_REVIEWED_SPEC_HASHES,

@@ -30,10 +30,15 @@ from gf_common.candidate_columns import (
     column_layout,
     encode_candidate_columns_v2,
 )
-from gf_common.card_instance import ActionConfigV3, is_shared_contract
+from gf_common.card_instance import ActionConfigV3, CardInstanceContract, is_shared_contract
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.card_instance_runtime import validate_runtime_receipt
-from gf_common.card_instance_validation import act_response, reconcile_replay, validate_events
+from gf_common.card_instance_validation import (
+    act_response,
+    reconcile_replay,
+    replay,
+    validate_events,
+)
 from gf_common.diverse_actions import SearchReportV3
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.group_pack import (
@@ -447,7 +452,8 @@ class WriterTrainingEpisode:
         if set(viewers) != {1, 2} or len(replays) != 2 or any(replay['game_id'] != game for replay in replays):
             raise ContractError("training capture requires both exact participant Replays")
         for viewer, actions in enumerate(self.actions, 1):
-            reconcile_replay(viewers[viewer], viewer, actions, outcome)
+            reconcile_replay(viewers[viewer], viewer, actions, outcome,
+                             action_contract=context.actions.action_contract)
         del actions
         if journal.count != len(self.rows):
             raise ContractError("accepted learner count differs from actual Journal")
@@ -597,16 +603,16 @@ class CanonicalEpisodeEncoder:
             if self._native_candidates and self._writer_workspace is not None:
                 scratch = self._writer_workspace.frame_scratch
                 try:
-                    frame = _verified_pending_frame(bundle, scratch, c.deadline)
+                    frame = _verified_pending_frame(bundle, scratch, c.deadline, action_contract=c.actions.action_contract)
                 except MemoryError:
                     # The existing workspace is a soft loan. A conservative
                     # native JSON estimate can exceed it for an admissible frame.
                     remaining(c.deadline)
-                    frame = parse_frame(data["frame"], layout=LAYOUT)
+                    frame = parse_frame(data["frame"], layout=LAYOUT, action_contract=c.actions.action_contract)
                     remaining(c.deadline)
             else:
-                frame = parse_frame(data["frame"], layout=LAYOUT)
-            delta = parse_delta(data["delta"], layout=LAYOUT)
+                frame = parse_frame(data["frame"], layout=LAYOUT, action_contract=c.actions.action_contract)
+            delta = parse_delta(data["delta"], layout=LAYOUT, action_contract=c.actions.action_contract)
             if self._native_candidates:
                 raw = closed(data["generated"], {"table", "report"})
                 generated = None
@@ -705,7 +711,8 @@ class CanonicalEpisodeEncoder:
             index = journal.count - 1
             if data["command"] != journal.commands[index]:
                 raise ContractError("ACK command differs from pending original")
-            response = act_response(data["acknowledgement"], data["command"], viewer)
+            response = act_response(data["acknowledgement"], data["command"], viewer,
+                                    action_contract=c.actions.action_contract)
             journal.acknowledge(
                 index,
                 {
@@ -776,7 +783,7 @@ class CanonicalEpisodeEncoder:
                     # A failure between draining Events and publishing pending
                     # has no J6 decision. Preserve/validate that actual tail below;
                     # never manufacture its frame, ACK or transition.
-                    validate_events(bank["events"])
+                    validate_events(bank["events"], action_contract=c.actions.action_contract, viewer=viewer)
                     del prefix
                     final_journal.finish(
                         report["end_kind"],
@@ -786,14 +793,18 @@ class CanonicalEpisodeEncoder:
                     )
                 elif bank["events"]:
                     raise ContractError("events without a created participant journal")
-            if (self.training is not None and report["end_kind"] == "natural"
-                    and report["error"] is None and not report["cleanup_errors"] and report["inference_released"]):
+            reconciled = (self.training is not None and report["end_kind"] == "natural"
+                          and report["error"] is None and not report["cleanup_errors"] and report["inference_released"])
+            if reconciled:
+                assert self.training is not None
                 self.training.seal(bundle, c, bundle.game,
                     self.journals[integer(c.learner_viewer, 1, 2)], report["outcome"], data["replays"])
-            for replay in data["replays"]:
-                viewer = replay.get("viewer_player_id", replay.get("viewer"))
+            for original_replay in data["replays"]:
+                viewer = original_replay.get("viewer_player_id", original_replay.get("viewer"))
                 integer(viewer, 1, 2)
-                self.sink.json(f"{c.episode_id}/replay-player-{viewer}.json", replay)
+                if c.actions.action_contract.requires_direct_defense and not reconciled:
+                    replay(original_replay, bundle.game, viewer, action_contract=c.actions.action_contract)
+                self.sink.json(f"{c.episode_id}/replay-player-{viewer}.json", original_replay)
             self.sink.json(
                 f"{c.episode_id}/native-terminal.json",
                 {key: data[key] for key in ("report", "banks", "terminal_observations")},
@@ -857,7 +868,9 @@ class CanonicalEpisodeEncoder:
         for (row, candidates), payload in zip(proof["rows"], payloads, strict=True):
             frame = _VerifiedJournalFrame(
                 viewer, data["episode_id"], row["revision"], row["interval_start"],
-                EventBoundary(**row["boundary"]), row["interval_start_hash"], payload, row["frame_hash"])
+                EventBoundary(**row["boundary"]), row["interval_start_hash"], payload, row["frame_hash"],
+                action_contract=self.context.actions.action_contract
+                if self.context.actions.action_contract.requires_direct_defense else None)
             training.rows.append(_AcceptedTrainingRow(frame, parse_selection(row["selection"]), candidates))
         training.grow(_owned_bytes((training.events, training.rows, training.boundary,
                                     training.outcome, training.facts)) - transferred)
@@ -880,14 +893,19 @@ class CanonicalEpisodeEncoder:
 
 def _verified_pending_frame(
     bundle: gf_native.StorageBundle, scratch: gf_native._JournalFrameScratch, deadline: float,
+    *, action_contract: CardInstanceContract | None = None,
 ) -> _VerifiedJournalFrame:
     try:
-        metadata, payload = bundle._journal_frame(scratch, deadline)
+        if action_contract is not None and action_contract.requires_direct_defense:
+            metadata, payload = bundle._journal_frame(scratch, deadline, canonical(asdict(action_contract)).encode())
+        else:
+            metadata, payload = bundle._journal_frame(scratch, deadline)
     except ValueError as error:
         raise ContractError(str(error)) from error
     actor, episode, revision, start, boundary, start_hash, frame_hash = metadata
     return _VerifiedJournalFrame(
         actor, episode, revision, start, EventBoundary(*boundary), start_hash, payload, frame_hash,
+        action_contract=action_contract if action_contract is not None and action_contract.requires_direct_defense else None,
     )
 
 

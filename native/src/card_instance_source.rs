@@ -46,6 +46,10 @@ pub(super) fn manifest(
     let cfg = m.require("config")?;
     let actions = cfg.require("actions")?;
     controls::actions3(actions, b, c)?;
+    require(
+        m.require("action_contract")? == actions.require("action_contract")?,
+        "corrected collection action contract mismatch",
+    )?;
     for (key, expected) in [
         ("input_recipe", "participant-structured-v2"),
         ("model_version", if role.hpo() { "4" } else { "3" }),
@@ -79,6 +83,7 @@ pub(super) fn manifest(
         .ok_or_else(|| Error::contract("corrected PPO Source requires its original parent"))?;
     require(
         (role.final64() || cfg == state.require("effective_config")?)
+            && m.require("action_contract")? == state.require("action_contract")?
             && m.require("inputs")? == state.require("config_inputs")?
             && m.require("code")? == state.require("identity")?.require("code")?,
         "corrected collection differs from frozen parent",
@@ -166,6 +171,7 @@ pub(super) fn manifest(
                 .get("runtime_evidence_failure")
                 .is_none_or(|v| !json::truthy(v))
                 && group.require("runtime_evidence")? == receipt
+                && receipt.require("action_contract")? == m.require("action_contract")?
                 && receipt.require("binary")?.require("sha256")?
                     == state
                         .require("identity")?

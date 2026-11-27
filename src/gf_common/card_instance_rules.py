@@ -122,7 +122,7 @@ def defense_context(frame: DecisionFrame, bank_view: EventBankView) -> DefenseCo
         return unknown
     use, attack = block[1], block[-1]
     if (use["type"] != "artifact_used" or use["player"] != 3 - frame.actor
-            or attack["type"] != "attack_declared" or attack["attacker"] != 3 - frame.actor
+            or attack["type"] != "attack_declared" or attack.get("attacker") != 3 - frame.actor
             or attack["target"] != frame.actor):
         return unknown
     if len(block) == 4:
@@ -222,6 +222,7 @@ def analyze_sequence(
     context: DefenseContext = UNKNOWN_DEFENSE_CONTEXT,
     requires_powder_weapon: bool = False,
     mirage_danger_requires_opponent: bool = False,
+    direct_defense: frozenset[int] | None = None,
 ) -> SequenceAnalysis:
     """Separate extendable prefixes from completed affordable public proposals.
 
@@ -273,7 +274,12 @@ def analyze_sequence(
         if any(card.ability == "filterAtkElement" and index != 0
                for index, card in enumerate(selected)):
             return SequenceAnalysis()
+        rainbow = (direct_defense is not None and selected[0].ability == "filterAtkElement"
+                   and selected[0].slot in direct_defense)
         for index, card in enumerate(effective):
+            if (direct_defense is not None and card.ability == "cutCost"
+                    and card.slot not in direct_defense and not rainbow):
+                return SequenceAnalysis()
             if card.definition.get("defense", 0) > 0 and card.ability in (
                 "blockMiracle", "bounceMiracle", "reflectMiracle"
             ):

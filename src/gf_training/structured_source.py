@@ -666,8 +666,14 @@ def _inspect_collection_content(owner: Any, actions: Any, manifest: Json,
             replay_path = owner.root / name / f'replay-player-{viewer}.json'
             if (cast(PackedSourceOwner, owner).contains(replay_path) if packed else replay_path.exists() or replay_path.is_symlink()):
                 replay = owner.object(replay_path)
-                (game_reconcile if _game else reconcile_replay)(replay, viewer, [item.command['action'] for item in decisions], episode.get('outcome'))
-                closure = (game_closure if _game else replay_closure)(replay, header['game_id'], viewer)
+                accepted_actions = [item.command['action'] for item in decisions]
+                if _game:
+                    game_reconcile(replay, viewer, accepted_actions, episode.get('outcome'),
+                                   action_contract=actions.action_contract)
+                    closure = game_closure(replay, header['game_id'], viewer, action_contract=actions.action_contract)
+                else:
+                    reconcile_replay(replay, viewer, accepted_actions, episode.get('outcome'))
+                    closure = replay_closure(replay, header['game_id'], viewer)
                 if closure is not None and closure['type'] == 'terminal' and episode.get('outcome') is None:
                     raise ContractError('Replay cannot invent unknown natural outcome')
                 closures.append((True, closure))

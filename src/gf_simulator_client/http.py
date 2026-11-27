@@ -104,7 +104,7 @@ class AttestedClient:
             from dataclasses import asdict
             parse_card_instance_contract(asdict(contract))
         self.contract = contract
-        self._gameplay_api = "v1" if contract is None else "v2"
+        self._gameplay_api = "v1" if contract is None else contract.gameplay_api
         self.http_facts = http_facts
         self.http = httpx.AsyncClient(base_url=base_url, timeout=request_seconds, transport=transport,
                                      follow_redirects=False, trust_env=False,
@@ -219,8 +219,10 @@ class AttestedClient:
 
     async def public_catalog(self) -> Json:
         if self.contract is not None:
-            card_v2.public_info(await self._request("GET", "/v2/info"))
-            return card_v2.catalog(await self._request("GET", f"/v2/card-catalogs/{self.contract.catalog_version}"))
+            api = self._gameplay_api
+            card_v2.public_info(await self._request("GET", f"/{api}/info"), action_contract=self.contract)
+            return card_v2.catalog(await self._request("GET", f"/{api}/card-catalogs/{self.contract.catalog_version}"),
+                                   action_contract=self.contract)
         info = await self._request("GET", "/v1/info")
         if info.get("api_version") != "v1" or info.get("rule_set_version") != RULE_SET or info.get("card_catalog") != CATALOG_META:
             raise UnsupportedContract("server/catalog version mismatch")
@@ -257,18 +259,21 @@ class AttestedClient:
     async def observe(self, game: str, viewer: int) -> Json:
         if self.contract is not None:
             integer(viewer, 1, 2)
-        validator = observation if self.contract is None else card_v2.observation
-        return validator(await self._request("GET", f"/{self._gameplay_api}/games/{game}/observations/{viewer}"), viewer)
+        value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/observations/{viewer}")
+        if self.contract is None:
+            return observation(value, viewer)
+        return card_v2.observation(value, viewer, action_contract=self.contract)
 
     async def actor_options(self, game: str, viewer: int, obs: Json) -> Json:
         integer(viewer, 1, 2)
-        validator = observation if self.contract is None else card_v2.observation
-        obs = validator(obs, viewer)
+        obs = (observation(obs, viewer) if self.contract is None
+               else card_v2.observation(obs, viewer, action_contract=self.contract))
         if not obs["actionable"] or obs["current_player"] != viewer:
             raise ContractError("ActionOptions request requires current actor")
         value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/action-options/{viewer}")
-        options_validator = actor_action_options if self.contract is None else card_v2.actor_action_options
-        return options_validator(value, obs, raw=True)
+        if self.contract is None:
+            return actor_action_options(value, obs, raw=True)
+        return card_v2.actor_action_options(value, obs, raw=True, action_contract=self.contract)
 
     async def events(self, game: str, viewer: int, after: str | None) -> tuple[list[Json], str | None]:
         from urllib.parse import urlencode
@@ -285,7 +290,7 @@ class AttestedClient:
                     closed(value, {"events", "next_cursor", "has_more"})
                     validate_events(value["events"])
                 else:
-                    card_v2.event_feed(value)
+                    card_v2.event_feed(value, action_contract=self.contract, viewer=viewer)
                 if type(value["has_more"]) is not bool or value["next_cursor"] is not None and not isinstance(value["next_cursor"], str):
                     raise ContractError("invalid event pagination")
                 accumulated.extend(value["events"])
@@ -310,7 +315,7 @@ class AttestedClient:
             payload = card_v2.action_command(payload)
         value = await self._request("POST", f"/{self._gameplay_api}/games/{game}/players/{viewer}/actions", payload, retry=True)
         if self.contract is not None:
-            card_v2.act_response(value, payload, viewer)
+            card_v2.act_response(value, payload, viewer, action_contract=self.contract)
             return {key: clone(value[key]) for key in ("command_id", "previous_revision", "state_revision", "status", "result")}
         closed(value, {"command_id", "previous_revision", "state_revision", "status", "events", "result", "next_observation", "action_options"})
         if value["command_id"] != payload["command_id"] or value["previous_revision"] != payload["expected_revision"]:
@@ -329,7 +334,7 @@ class AttestedClient:
         if self.contract is None:
             replay_closure(value, game, viewer)
         else:
-            card_v2.replay(value, game, viewer)
+            card_v2.replay(value, game, viewer, action_contract=self.contract)
         return value
 
     async def delete(self, game: str) -> None:

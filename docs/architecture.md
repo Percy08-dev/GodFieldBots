@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0079](adr/0079-simulator-v3-direct-defense.md) binds the Simulator v3 release
+for new HPO6 convergence runs. The acting player's `defense:direct` group
+distinguishes direct response from CostCut support. The v3 event bank and
+Journal bind the full Action profile, including the Fogged target's raw events,
+and use the existing numerical layout.
+
 [ADR0078](adr/0078-model-documentation.md) defines the [model catalog](models/README.md).
 The documentation tool reads existing CPU model factories and representative
 synthetic inputs. An opt-in `model-docs` uv group provides torchview and its

@@ -199,7 +199,7 @@ class StorageBundle:
     @staticmethod
     def _journal_frame_scratch(workspace_bytes: int) -> _JournalFrameScratch: ...
     def _journal_frame(
-        self, scratch: _JournalFrameScratch, deadline: float
+        self, scratch: _JournalFrameScratch, deadline: float, action_contract: bytes | None = None
     ) -> tuple[tuple[int, str, int, int, tuple[int, str], str, str], bytes]: ...
     def _journal_candidates(
         self, max_positions: int, output_bytes: int

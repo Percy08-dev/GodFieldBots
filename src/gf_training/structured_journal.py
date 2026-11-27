@@ -209,7 +209,9 @@ class StructuredJournal(ParticipantJournal):
             self.write({"kind": "transition", "decision": self.last_accepted, "next_decision": index,
                         "reward": 0, "terminal": False})
             self.last_accepted = None
-        active_layout = {} if self._context is None else {"layout": self._context.layout}
+        active_layout = ({} if self._context is None else {
+            "layout": self._context.layout, "action_contract": self.bank.raw_action_contract,
+        })
         self.write({"kind": "events", "delta": delta_dict(delta, **active_layout), "boundary": {"end": frame.boundary.end,
                     "prefix_hash": frame.boundary.prefix_hash}})
         self.write({"kind": "decision", "decision": index, "frame": _frame_dict(frame, **active_layout),
@@ -465,6 +467,9 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
         bank = EventBank(header["viewer"], header["bank_episode"], caps.max_episode_events)
     else:
         caps, bank = _context.validate_header(header)
+    active_layout = ({} if _context is None else {
+        "layout": _context.layout, "action_contract": bank.raw_action_contract,
+    })
     search_seed = int(digest({"recipe": "structured-search-stream-v1", "sampling_seed": header["sampling_seed"]})[:16], 16)
     expected_search_state = random.Random(search_seed).getstate()
     decisions: list[StructuredDecision] = []
@@ -487,7 +492,7 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
             closed(row, {"kind", "delta", "boundary"})
             if pending is not None or delta_pending or lifecycle is not None:
                 raise ContractError("journal5 event delta ordering mismatch")
-            delta = parse_delta(row["delta"], **({} if _context is None else {"layout": _context.layout}))
+            delta = parse_delta(row["delta"], **active_layout)
             if len(delta._events) > caps.max_interval_events:
                 raise ContractError("journal5 event interval cap exceeded")
             boundary = bank.append(delta)
@@ -513,7 +518,7 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
             if awaiting_next is not None and awaiting_next != index:
                 raise ContractError("journal5 transition/next mismatch")
             awaiting_next = None
-            frame = parse_frame(row["frame"], **({} if _context is None else {"layout": _context.layout}))
+            frame = parse_frame(row["frame"], **active_layout)
             integer(frame.boundary.end, 0, caps.max_episode_events)
             integer(frame.boundary.end - frame.interval_start, 0, caps.max_interval_events)
             if frame.boundary != bank.boundary:

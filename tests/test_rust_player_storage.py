@@ -288,23 +288,25 @@ def test_live_sacrifice_writer_uses_native_frame_and_preserves_original_bytes(
             native_calls = 0
             fallback_calls = 0
 
-            def verify(actual_bundle, scratch, actual_deadline):
+            def verify(actual_bundle, scratch, actual_deadline, *, action_contract):
                 nonlocal native_calls
                 assert actual_bundle is bundle
                 assert scratch is workspace_owner._frame_scratch
                 assert actual_deadline == context.deadline
+                assert action_contract == context.actions.action_contract == sacrifice_release["contract"]
                 if native_calls == 0:
                     with pytest.raises(TimeoutError, match="deadline"):
                         actual_bundle._journal_frame(scratch, time.monotonic() - 1)
                 native_calls += 1
-                frame = original_verify(actual_bundle, scratch, actual_deadline)
+                frame = original_verify(actual_bundle, scratch, actual_deadline, action_contract=action_contract)
                 assert frame.payload == reference.journals[frame.actor].last_frame.payload
                 return frame
 
-            def fallback(*args, **kwargs):
+            def fallback(raw_frame, *, layout, action_contract):
                 nonlocal fallback_calls
                 fallback_calls += 1
-                return original_parse(*args, **kwargs)
+                assert action_contract == context.actions.action_contract
+                return original_parse(raw_frame, layout=layout, action_contract=action_contract)
 
             def chunks(sink):
                 return {name: b"".join(raw for raw, _ in value) for name, value in sink.chunks.items()}
@@ -741,10 +743,11 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
 
         monkeypatch.setattr(storage_module._Journal, "_begin_native_frame", wrong_prefix)
     elif failure == "foreign-frame-proof":
-        def wrong_proof(bundle, scratch, deadline):
+        def wrong_proof(bundle, scratch, deadline, *, action_contract):
             assert other is not None
-            genuine = real_proof(bundle, scratch, deadline)
-            foreign = real_proof(other, scratch, deadline)
+            assert action_contract == release["contract"]
+            genuine = real_proof(bundle, scratch, deadline, action_contract=action_contract)
+            foreign = real_proof(other, scratch, deadline, action_contract=action_contract)
             assert (
                 foreign.actor, foreign.revision, foreign.interval_start, foreign.boundary.end,
             ) == (genuine.actor, genuine.revision, genuine.interval_start, genuine.boundary.end)

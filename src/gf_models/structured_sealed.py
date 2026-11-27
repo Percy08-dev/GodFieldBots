@@ -347,17 +347,16 @@ def static_semantics_v3(model: Any, *, layout: StructuredLayout, action_contract
                         rules: CardInstanceRules) -> Json:
     from dataclasses import asdict
 
-    from gf_common.card_instance import CATALOG_META as CARD_CATALOG
+    from gf_common.card_instance import catalog_metadata, reviewed_specs
     from gf_common.card_instance_rules import rule_signature
     model_config_v3(asdict(model), layout=layout)
     if layout is not layout_for_contract(action_contract):
         raise ContractError("recorded model3 profile/layout mismatch")
-    from gf_common.card_instance import reviewed_specs
     specs = reviewed_specs(action_contract)
     return {"input_recipe": layout.input_recipe, "generator_version": layout.generator,
         "policy_input_version": layout.policy_input_version, "end_projection_version": END_PROJECTION_VERSION,
         "reward_policy_version": "natural-terminal-v1", "reviewed_spec_hashes": specs,
-        "simulator_revision": action_contract.simulator_revision, "catalog": CARD_CATALOG,
+        "simulator_revision": action_contract.simulator_revision, "catalog": catalog_metadata(action_contract),
         "token_signature": recorded_token_signature(model, layout=layout), "numeric_transform": "signed-log1p-fp32-v1",
         "numerics": NUMERICS, "rule_signature": rule_signature(action_contract, rules),
         "spec_inventory_sha256": action_contract.spec_inventory_sha256}

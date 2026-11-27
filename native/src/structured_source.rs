@@ -1412,7 +1412,8 @@ fn inspect_collection_inner(
             if replays.contains(&replay_name) {
                 let replay = sources.json(&root.join(&replay_name))?;
                 let closure = if corrected {
-                    crate::structured_journal::card_instance::reconcile_replay2(
+                    use crate::structured_journal::card_instance::{self, WireProfile};
+                    card_instance::reconcile_replay_for_profile(
                         &replay.root,
                         field(ep, "game_id")?,
                         viewer,
@@ -1420,6 +1421,7 @@ fn inspect_collection_inner(
                         nullable(ep, "outcome"),
                         &budget,
                         &control,
+                        WireProfile::expected(cfg.require("actions")?.require("action_contract")?)?,
                     )?
                 } else {
                     validation::reconcile_replay_controlled(

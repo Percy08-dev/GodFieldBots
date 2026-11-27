@@ -16,7 +16,7 @@ use crate::{
     json::{self as wire, Value, ValueExt},
     structured_controls::{SourceFormat, digest},
     structured_journal::{
-        self as journal, card_instance, event_prefix_initial, event_prefix_next, event_prefix_text,
+        self as journal, card_instance::{self, WireProfile}, event_prefix_initial, event_prefix_next, event_prefix_text,
     },
     structured_source::episode_digest_context,
 };
@@ -251,6 +251,7 @@ mod tests {
             "bank_episode":frame["episode"],"episode_id":frame["episode"],"run_id":"run",
             "game_id":"registered-context","policy":"mlp-fixture","actions":episode["actions"],
             "runtime_evidence":null,"action_contract":report["action_contract"],"layout_signature":"c".repeat(64),
+            "catalog":WireProfile::V2.catalog_metadata(),
             "sampling_seed":seed,"numeric_costs":episode["numeric_costs"],"generator_version":report["generator_version"],
             "action_config_hash":report["config_hash"],"rule_signature":report["rule_signature"],
             "caps":{"max_positions":18,"max_interval_events":128,"max_episode_events":10000,
@@ -918,6 +919,7 @@ struct Pending {
 
 pub(super) struct EpisodeWriter {
     validation: Arc<JournalValidation>,
+    profile: WireProfile,
     seats: [Seat; 2],
     trial: String,
     policies: [Value; 2],
@@ -1047,6 +1049,7 @@ impl EpisodeWriter {
             "synthetic_capacity",
         ];
         classification.closed(CLASSIFICATION, &[])?;
+        let profile = super::super::wire_profile_for_runtime(classification.require("action_contract")?)?;
         ensure(
             matches!(learner_viewer, 1 | 2) && !trial.is_empty(),
             "invalid rollout writer context",
@@ -1080,6 +1083,8 @@ impl EpisodeWriter {
                     && header["episode_id"] == headers[0]["episode_id"]
                     && header["run_id"] == headers[0]["run_id"]
                     && header["actions"] == headers[0]["actions"]
+                    && header["actions"]["action_contract"] == header["action_contract"]
+                    && header["catalog"] == profile.catalog_metadata()
                     && header["runtime_evidence"] == headers[0]["runtime_evidence"]
                     && super::super::is_shared_card_instance_contract(&header["action_contract"])
                     && CLASSIFICATION
@@ -1101,6 +1106,7 @@ impl EpisodeWriter {
         let [first, second] = headers;
         Ok(Self {
             validation,
+            profile,
             seats: [Seat::new(first)?, Seat::new(second)?],
             trial,
             policies,
@@ -1272,7 +1278,7 @@ impl EpisodeWriter {
             seat.prefix = event_prefix_initial(
                 (index + 1) as i128,
                 seat.header.require("bank_episode")?,
-                Some(pinned_frame_contract()),
+                Some(self.profile.frame_contract()),
                 budget,
                 control,
             )?;
@@ -1304,7 +1310,7 @@ impl EpisodeWriter {
             "rollout pending chronology or context differs",
         )?;
         let frame = data.frame;
-        card_instance::frame_for_rollout(frame, budget, control)?;
+        card_instance::frame_for_rollout(frame, budget, control, self.profile)?;
         let revision = frame.require("revision")?.integer(0, u64::MAX as i128)? as u64;
         ensure(
             self.revision.is_none_or(|previous| previous == revision)
@@ -1328,7 +1334,7 @@ impl EpisodeWriter {
             event_prefix_initial(
                 actor as i128,
                 seat.header.require("bank_episode")?,
-                Some(pinned_frame_contract()),
+                Some(self.profile.frame_contract()),
                 budget,
                 control,
             )?
@@ -1349,7 +1355,7 @@ impl EpisodeWriter {
         )?;
         let mut prefix = original_prefix;
         for event in events {
-            card_instance::event(event, &self.validation.recipe, budget, control)?;
+            card_instance::event_for_profile(event, &self.validation.recipe, budget, control, self.profile, Some(actor as i128))?;
             prefix = event_prefix_next(&prefix, event, budget, control)?;
         }
         ensure(
@@ -1561,11 +1567,12 @@ impl EpisodeWriter {
             actor == viewer + 1 && command == &pending.command,
             "rollout ACK command/actor differs",
         )?;
-        Http::validate_act_ack_with_recipe(
+        Http::validate_act_ack_for_profile(
             actual,
             (viewer + 1) as u8,
             &pending.command,
             Some(&self.validation.recipe),
+            self.profile,
         )?;
         let ack = pick(
             actual,
@@ -1739,7 +1746,7 @@ impl EpisodeWriter {
                 continue;
             }
             for event in events {
-                card_instance::event(event, &self.validation.recipe, budget, control)?;
+                card_instance::event_for_profile(event, &self.validation.recipe, budget, control, self.profile, Some(actor as i128))?;
             }
             if let Some(ack) = &seat.lifecycle_ack {
                 let (expected, ack_outcome) = match ack {
@@ -1757,7 +1764,7 @@ impl EpisodeWriter {
                     .iter()
                     .rfind(|v| v["viewer_player_id"] == actor)
                     .ok_or_else(|| error("missing own terminal observation"))?;
-                card_instance::observation(observation, Some(actor as i128), budget, control)?;
+                card_instance::observation_for_profile(observation, Some(actor as i128), budget, control, false, self.profile)?;
                 ensure(
                     observation["phase"] == "terminal" && observation["result"] == *outcome,
                     "rollout final observation/outcome differs",
@@ -1806,7 +1813,7 @@ impl EpisodeWriter {
             replay_members[viewer - 1] = true;
             if healthy {
                 let accepted: Vec<_> = self.seats[viewer - 1].accepted.iter().collect();
-                let closure = card_instance::reconcile_replay2(
+                let closure = card_instance::reconcile_replay_for_profile(
                     replay,
                     game.expect("natural rollout game checked"),
                     viewer as i128,
@@ -1814,6 +1821,7 @@ impl EpisodeWriter {
                     outcome,
                     budget,
                     control,
+                    self.profile,
                 )?;
                 ensure(
                     closure.is_some_and(|v| v["type"] == "terminal" && v["result"] == *outcome),

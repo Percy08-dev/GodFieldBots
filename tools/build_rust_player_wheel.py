@@ -17,6 +17,7 @@ ASSETS = (
     "structured-token-recipe-public-exact-v2.json",
     "card-instance-token-recipe-corrected-v2.json",
     "card-instance-validation-pins-v2.json",
+    "card-instance-defense-v3-release.json",
     "card-instance-formal-ppo-v1.json",
     "card-instance-formal-ppo-group-pack-v1.json",
     "card-instance-tree3-layout-recipe-v1.json",

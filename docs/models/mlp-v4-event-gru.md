@@ -33,7 +33,9 @@ flowchart LR
 
 ## 設定・互換性・検証
 
-[機能確認用 HPO 設定](../../configs/hpo/owned-mlp-smoke.toml) · [Model4 の設定と互換性](../design/ppo-hpo.md) · [PPO 更新の検証](../verification/ppo-update-adoption.md) · [Sacrifice ベース設定](../../configs/experiments/hpo-rust-mlp-sacrifice-base.toml)。 TBPTT は学習レシピに所属し、推論グラフの文脈上限とは独立。 [共通ネットワーク実装](../../src/gf_models/structured_network.py)。
+新規の収束診断は Simulator v3 の Action profile を使う。霧中に攻撃者が伏せられたイベントは、既存の欠損表現と公開された対象・攻撃力で符号化する。Journal は当該対局の Action profile に結び付く。 [収束診断の設定](../../configs/hpo/mlp-256-convergence-1000.toml) · [v3 の互換性](../adr/0079-simulator-v3-direct-defense.md)
+
+TBPTT は学習レシピに所属し、推論グラフの文脈上限とは独立。 [機能確認用 HPO 設定](../../configs/hpo/owned-mlp-smoke.toml) · [Model4 の設定と互換性](../design/ppo-hpo.md) · [PPO 更新の検証](../verification/ppo-update-adoption.md) · [共通ネットワーク実装](../../src/gf_models/structured_network.py)
 
 ## 代表実行の図
 

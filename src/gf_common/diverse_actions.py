@@ -33,6 +33,7 @@ from gf_common.card_instance_rules import (
     defense_kind,
     rule_signature,
 )
+from gf_common.card_instance_validation import DIRECT_DEFENSE_GROUP
 from gf_common.domain import ContractError, EmptyCandidates, Json, digest, integer
 from gf_common.structured import (
     GENERATOR_V2,
@@ -616,7 +617,7 @@ class _Space:
 class _CardInstanceSpace:
     def __init__(self, frame: DecisionFrame, config: ActionConfigV3, rules: CardInstanceRules,
                  bank_view: EventBankView) -> None:
-        if frame.layout is not layout_for_contract(config.action_contract):
+        if not frame.matches_action_contract(config.action_contract):
             raise ContractError("candidate configuration/frame contract mismatch")
         self.frame, self.config, self.rules = frame, config, rules
         self.requires_powder_weapon = config.action_contract.requires_powder_weapon
@@ -630,6 +631,11 @@ class _CardInstanceSpace:
         self.by_slot = {card.slot: card for card in self.cards}
         refs = {card["card_ref"]: index for index, card in enumerate(self.obs["own"]["cards"])}
         self.usable = frozenset(refs[row["card_ref"]] for row in self.options["usable_cards"])
+        self.direct_defense = (
+            frozenset(refs[row["card_ref"]] for row in self.options["candidate_groups"][DIRECT_DEFENSE_GROUP])
+            if config.action_contract.requires_direct_defense and self.obs["required_choice"] == "defense"
+            else None
+        )
         self.targets = tuple(name for name in config.targets if (frame.actor if name == "self" else 3 - frame.actor) in self.options["valid_targets"])
         self.hand = [card for card in self.cards if card.hand]
         self.trade = {name: [refs[row["card_ref"]] for row in self.options[name + "_cards"]]
@@ -673,7 +679,8 @@ class _CardInstanceSpace:
             flash=self.obs["own"]["status"]["flash"], maximum=self.config.max_sequence_length, usable=self.usable,
             rules=self.rules, context=self.context,
             requires_powder_weapon=self.requires_powder_weapon,
-            mirage_danger_requires_opponent=self.mirage_danger_requires_opponent)
+            mirage_danger_requires_opponent=self.mirage_danger_requires_opponent,
+            direct_defense=self.direct_defense)
 
     def valid(self, family: str, refs: tuple[int, ...]) -> bool:
         if family == "discard":

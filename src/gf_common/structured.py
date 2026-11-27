@@ -54,16 +54,42 @@ def layout_for_actions(actions: ActionConfigV2 | ActionConfigV3) -> StructuredLa
     return layout
 
 
-def _validate_events(events: list[Json], layout: StructuredLayout) -> None:
+def _defense_v3_contract(
+    action_contract: ActionContract | CardInstanceContract | None,
+) -> CardInstanceContract | None:
+    if type(action_contract) is CardInstanceContract and action_contract.requires_direct_defense:
+        return action_contract
+    return None
+
+
+def _raw_action_contract(
+    layout: StructuredLayout, action_contract: ActionContract | CardInstanceContract | None = None,
+) -> ActionContract | CardInstanceContract:
+    require_layout(layout)
+    if action_contract is not None and layout_for_contract(action_contract) is not layout:
+        raise ContractError("raw action contract/layout mismatch")
+    # Historical profiles used the layout's original hash preimage.
+    return _defense_v3_contract(action_contract) or layout.action_contract
+
+
+def _validate_events(
+    events: list[Json], layout: StructuredLayout, action_contract: ActionContract | CardInstanceContract,
+    viewer: int,
+) -> None:
     require_layout(layout)
     if layout is LEGACY_LAYOUT:
         validate_events(events)
     else:
-        card_v2.validate_events(events, corrected=layout is CORRECTED_CARD_INSTANCE_LAYOUT)
+        card_v2.validate_events(events, corrected=layout is CORRECTED_CARD_INSTANCE_LAYOUT,
+                                action_contract=_defense_v3_contract(action_contract), viewer=viewer)
 
 
-def _validate_input(value: DecisionInput, layout: StructuredLayout) -> DecisionInput:
-    return validate_worker_input(value, True) if layout is LEGACY_LAYOUT else card_v2.own_visible_input(value)
+def _validate_input(
+    value: DecisionInput, layout: StructuredLayout, action_contract: ActionContract | CardInstanceContract,
+) -> DecisionInput:
+    if layout is LEGACY_LAYOUT:
+        return validate_worker_input(value, True)
+    return card_v2.own_visible_input(value, action_contract=_defense_v3_contract(action_contract))
 
 
 def _validate_purpose(purpose: str, contract: ActionContract | CardInstanceContract) -> None:
@@ -159,6 +185,10 @@ class EventDelta:
     def layout(self) -> StructuredLayout:
         return LEGACY_LAYOUT
 
+    @property
+    def raw_action_contract(self) -> ActionContract | CardInstanceContract:
+        return self.layout.action_contract
+
     def __init__(self, actor: int, episode: str, start: int, previous_hash: str,
                  events: tuple[Json, ...] | list[Json]) -> None:
         _owner(actor, episode)
@@ -166,7 +196,7 @@ class EventDelta:
         _hash(previous_hash)
         if not isinstance(events, (list, tuple)):
             raise ContractError("event array required")
-        _validate_events(list(events), self.layout)
+        _validate_events(list(events), self.layout, self.raw_action_contract, actor)
         for key, value in (("actor", actor), ("episode", episode), ("start", start),
                            ("previous_hash", previous_hash),
                            ("_events", tuple(_bytes(event) for event in events))):
@@ -177,11 +207,13 @@ class EventDelta:
         return tuple(json.loads(event) for event in self._events)
 
 
-def _initial(actor: int, episode: str, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+def _initial(
+    actor: int, episode: str, layout: StructuredLayout, action_contract: ActionContract | CardInstanceContract,
+) -> str:
     require_layout(layout)
     binding: list[Any] = [layout.input_recipe, "event-bank", actor, episode]
     if layout is CORRECTED_CARD_INSTANCE_LAYOUT:
-        binding.append(asdict(layout.action_contract))
+        binding.append(asdict(action_contract))
     return digest(binding)
 
 
@@ -200,18 +232,22 @@ class EventBankView:
     def layout(self) -> StructuredLayout:
         return LEGACY_LAYOUT
 
+    @property
+    def raw_action_contract(self) -> ActionContract | CardInstanceContract:
+        return self.layout.action_contract
+
     def __post_init__(self) -> None:
         _owner(self.actor, self.episode)
         if (not isinstance(self._events, tuple) or not isinstance(self._prefixes, tuple)
                 or len(self._events) > 2**31 - 1 or len(self._prefixes) != len(self._events) + 1
-                or self._prefixes[0] != _initial(self.actor, self.episode, self.layout)):
+                or self._prefixes[0] != _initial(self.actor, self.episode, self.layout, self.raw_action_contract)):
             raise ContractError("invalid bank view")
         previous = self._prefixes[0]
         for raw, expected in zip(self._events, self._prefixes[1:], strict=True):
             if type(raw) is not bytes:
                 raise ContractError("bank events must be owned bytes")
             event = json.loads(raw)
-            _validate_events([event], self.layout)
+            _validate_events([event], self.layout, self.raw_action_contract, self.actor)
             if _bytes(event) != raw or _next(previous, raw) != expected:
                 raise ContractError("event prefix hash mismatch")
             previous = expected
@@ -230,24 +266,30 @@ class EventBankView:
         integer(boundary.end, 0, len(self._events))
         if self._prefixes[boundary.end] != boundary.prefix_hash:
             raise ContractError("bank boundary mismatch")
-        return type(self)(self.actor, self.episode, self._events[:boundary.end],
-                             self._prefixes[:boundary.end + 1])
+        return _bank_view(self.actor, self.episode, self._events[:boundary.end],
+                          self._prefixes[:boundary.end + 1], self.layout, self.raw_action_contract)
 
 
 class EventBank:
     def __init__(self, actor: int, episode: str, max_events: int = 262144, *,
-                 layout: StructuredLayout = LEGACY_LAYOUT) -> None:
+                 layout: StructuredLayout = LEGACY_LAYOUT,
+                 action_contract: ActionContract | CardInstanceContract | None = None) -> None:
         _owner(actor, episode)
         integer(max_events, 1, 2**31 - 1)
         self._layout = require_layout(layout)
+        self._action_contract = _raw_action_contract(layout, action_contract)
         self._actor, self._episode, self._max_events = actor, episode, max_events
         self._events: list[bytes] = []
-        self._prefixes = [_initial(actor, episode, layout)]
+        self._prefixes = [_initial(actor, episode, layout, self._action_contract)]
         self._last_frame: DecisionFrame | None = None
 
     @property
     def layout(self) -> StructuredLayout:
         return self._layout
+
+    @property
+    def raw_action_contract(self) -> ActionContract | CardInstanceContract:
+        return self._action_contract
 
     @property
     def actor(self) -> int:
@@ -266,7 +308,8 @@ class EventBank:
         return EventBoundary(len(self._events), self._prefixes[-1])
 
     def append(self, delta: EventDelta) -> EventBoundary:
-        if (delta.layout is not self.layout or (delta.actor, delta.episode) != (self.actor, self.episode)
+        if (delta.layout is not self.layout or delta.raw_action_contract != self.raw_action_contract
+                or (delta.actor, delta.episode) != (self.actor, self.episode)
                 or delta.start != len(self._events) or delta.previous_hash != self._prefixes[-1]):
             raise ContractError("event delta owner/continuity mismatch")
         if len(self._events) + len(delta._events) > self.max_events:
@@ -278,7 +321,7 @@ class EventBank:
 
     def _require_frame_prefix(self, frame: DecisionFrame | _VerifiedJournalFrame) -> None:
         # The live writer has appended the validated delta and matched the end boundary.
-        if (self.layout is not frame.layout
+        if (self.layout is not frame.layout or self.raw_action_contract != frame.raw_action_contract
                 or (self.actor, self.episode) != (frame.actor, frame.episode)):
             raise ContractError("foreign event viewer/episode")
         if self._prefixes[frame.interval_start] != frame.interval_start_hash:
@@ -289,10 +332,8 @@ class EventBank:
         integer(boundary.end, 0, len(self._events))
         if self._prefixes[boundary.end] != boundary.prefix_hash:
             raise ContractError("bank boundary mismatch")
-        view_type = (EventBankView if self.layout is LEGACY_LAYOUT else
-                     _CardInstanceEventBankView if self.layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventBankView)
-        return view_type(self.actor, self.episode, tuple(self._events[:boundary.end]),
-                             tuple(self._prefixes[:boundary.end + 1]))
+        return _bank_view(self.actor, self.episode, tuple(self._events[:boundary.end]),
+                          tuple(self._prefixes[:boundary.end + 1]), self.layout, self.raw_action_contract)
 
 
 @dataclass(frozen=True)
@@ -307,10 +348,15 @@ class _VerifiedJournalFrame:
     interval_start_hash: str
     payload: bytes = field(repr=False)
     frame_hash: str
+    action_contract: CardInstanceContract | None = field(default=None, kw_only=True)
 
     @property
     def layout(self) -> StructuredLayout:
         return CORRECTED_CARD_INSTANCE_LAYOUT
+
+    @property
+    def raw_action_contract(self) -> ActionContract | CardInstanceContract:
+        return _defense_v3_contract(self.action_contract) or self.layout.action_contract
 
     @property
     def raw(self) -> Json:
@@ -332,6 +378,14 @@ class DecisionFrame:
     def layout(self) -> StructuredLayout:
         return LEGACY_LAYOUT
 
+    @property
+    def raw_action_contract(self) -> ActionContract | CardInstanceContract:
+        return self.layout.action_contract
+
+    def matches_action_contract(self, action_contract: ActionContract | CardInstanceContract) -> bool:
+        return (self.layout is layout_for_contract(action_contract)
+                and self.raw_action_contract == (_defense_v3_contract(action_contract) or self.layout.action_contract))
+
     def __post_init__(self) -> None:
         _owner(self.actor, self.episode)
         integer(self.revision)
@@ -346,7 +400,7 @@ class DecisionFrame:
         closed(value, {"observation", "typed_metadata", "catalog", "action_options", "history_end"})
         rebuilt = _validate_input(DecisionInput(value["observation"], (), value["history_end"],
                                                      tuple(value["typed_metadata"]), value["catalog"],
-                                                     value["action_options"]), self.layout)
+                                                     value["action_options"]), self.layout, self.raw_action_contract)
         own = rebuilt.observation["own"]
         if (rebuilt.observation["viewer_player_id"] != self.actor
                 or rebuilt.observation["current_player"] != self.actor
@@ -378,7 +432,7 @@ class DecisionFrame:
         if is_card_instance_layout(self.layout):
             binding.update(input_recipe=self.layout.input_recipe, policy_input_version=self.layout.policy_input_version)
         if self.layout is CORRECTED_CARD_INSTANCE_LAYOUT:
-            binding["action_contract"] = asdict(self.layout.action_contract)
+            binding["action_contract"] = asdict(self.raw_action_contract)
         return binding
 
     @property
@@ -400,7 +454,8 @@ class DecisionFrame:
                         for name in own["learned_miracles"]])
 
     def bank_view(self, bank: EventBankView) -> EventBankView:
-        if bank.layout is not self.layout or (bank.actor, bank.episode) != (self.actor, self.episode):
+        if (bank.layout is not self.layout or bank.raw_action_contract != self.raw_action_contract
+                or (bank.actor, bank.episode) != (self.actor, self.episode)):
             raise ContractError("foreign event viewer/episode")
         view = bank.prefix(self.boundary)
         if view._prefixes[self.interval_start] != self.interval_start_hash:
@@ -413,7 +468,7 @@ class DecisionFrame:
         require_layout(layout)
         if bank.layout is not layout:
             raise ContractError("frame/input bank layout mismatch")
-        value = _validate_input(value, layout)
+        value = _validate_input(value, layout, bank.raw_action_contract)
         obs = value.observation
         if obs["viewer_player_id"] != bank.actor:
             raise ContractError("foreign input viewer")
@@ -433,10 +488,10 @@ class DecisionFrame:
         if is_card_instance_layout(layout):
             binding.update(input_recipe=layout.input_recipe, policy_input_version=layout.policy_input_version)
         if layout is CORRECTED_CARD_INSTANCE_LAYOUT:
-            binding["action_contract"] = asdict(layout.action_contract)
-        frame_type = _frame_type(layout)
-        frame = frame_type(bank.actor, bank.episode, obs["state_revision"], interval_start, bank.boundary,
-                    bank._prefixes[interval_start], _bytes(raw), digest(binding))
+            binding["action_contract"] = asdict(bank.raw_action_contract)
+        frame = _new_frame(bank.actor, bank.episode, obs["state_revision"], interval_start, bank.boundary,
+                           bank._prefixes[interval_start], _bytes(raw), digest(binding),
+                           layout=layout, action_contract=bank.raw_action_contract)
         bank._last_frame = frame
         return frame
 
@@ -483,6 +538,50 @@ class _CorrectedCardInstanceDecisionFrame(DecisionFrame):
         return CORRECTED_CARD_INSTANCE_LAYOUT
 
 
+@dataclass(frozen=True, init=False)
+class _DefenseV3EventDelta(_CorrectedCardInstanceEventDelta):
+    action_contract: CardInstanceContract = field(kw_only=True)
+
+    def __init__(self, actor: int, episode: str, start: int, previous_hash: str,
+                 events: tuple[Json, ...] | list[Json], *, action_contract: CardInstanceContract) -> None:
+        object.__setattr__(self, "action_contract", action_contract)
+        super().__init__(actor, episode, start, previous_hash, events)
+
+    @property
+    def raw_action_contract(self) -> CardInstanceContract:
+        return self.action_contract
+
+
+@dataclass(frozen=True)
+class _DefenseV3EventBankView(_CorrectedCardInstanceEventBankView):
+    action_contract: CardInstanceContract = field(kw_only=True)
+
+    @property
+    def raw_action_contract(self) -> CardInstanceContract:
+        return self.action_contract
+
+
+@dataclass(frozen=True)
+class _DefenseV3DecisionFrame(_CorrectedCardInstanceDecisionFrame):
+    action_contract: CardInstanceContract = field(kw_only=True)
+
+    @property
+    def raw_action_contract(self) -> CardInstanceContract:
+        return self.action_contract
+
+
+def _bank_view(
+    actor: int, episode: str, events: tuple[bytes, ...], prefixes: tuple[str, ...],
+    layout: StructuredLayout, action_contract: ActionContract | CardInstanceContract,
+) -> EventBankView:
+    defense_v3 = _defense_v3_contract(action_contract)
+    if defense_v3 is not None:
+        return _DefenseV3EventBankView(actor, episode, events, prefixes, action_contract=defense_v3)
+    view_type = (EventBankView if layout is LEGACY_LAYOUT else
+                 _CardInstanceEventBankView if layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventBankView)
+    return view_type(actor, episode, events, prefixes)
+
+
 def _frame_type(layout: StructuredLayout) -> type[DecisionFrame]:
     require_layout(layout)
     if layout is LEGACY_LAYOUT:
@@ -490,9 +589,24 @@ def _frame_type(layout: StructuredLayout) -> type[DecisionFrame]:
     return _CardInstanceDecisionFrame if layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceDecisionFrame
 
 
+def _new_frame(
+    actor: int, episode: str, revision: int, interval_start: int, boundary: EventBoundary,
+    interval_start_hash: str, payload: bytes, frame_hash: str, *, layout: StructuredLayout,
+    action_contract: ActionContract | CardInstanceContract,
+) -> DecisionFrame:
+    args = actor, episode, revision, interval_start, boundary, interval_start_hash, payload, frame_hash
+    defense_v3 = _defense_v3_contract(action_contract)
+    if defense_v3 is not None:
+        return _DefenseV3DecisionFrame(*args, action_contract=defense_v3)
+    return _frame_type(layout)(*args)
+
+
 def event_delta(actor: int, episode: str, start: int, previous_hash: str,
-                events: tuple[Json, ...] | list[Json], *, layout: StructuredLayout = LEGACY_LAYOUT) -> EventDelta:
-    require_layout(layout)
+                events: tuple[Json, ...] | list[Json], *, layout: StructuredLayout = LEGACY_LAYOUT,
+                action_contract: ActionContract | CardInstanceContract | None = None) -> EventDelta:
+    defense_v3 = _defense_v3_contract(_raw_action_contract(layout, action_contract))
+    if defense_v3 is not None:
+        return _DefenseV3EventDelta(actor, episode, start, previous_hash, events, action_contract=defense_v3)
     delta_type = (EventDelta if layout is LEGACY_LAYOUT else
                   _CardInstanceEventDelta if layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventDelta)
     return delta_type(actor, episode, start, previous_hash, events)
@@ -576,7 +690,7 @@ class CandidateTable:
                      max_positions: int = 128, *, action_contract: ActionContract | CardInstanceContract, purpose: str,
                      synthetic_capacity: bool) -> CandidateTable:
         _validate_purpose(purpose, action_contract)
-        if frame.layout is not layout_for_contract(action_contract):
+        if not frame.matches_action_contract(action_contract):
             raise ContractError("candidate contract/frame layout mismatch")
         integer(max_positions, 1, 128)
         context = _ActionContext.from_frame(frame)
@@ -614,7 +728,7 @@ class CandidateTable:
         return result
 
     def validate(self, frame: DecisionFrame) -> None:
-        if frame.layout is not self.layout or self.frame_hash != frame.frame_hash:
+        if not frame.matches_action_contract(self.action_contract) or self.frame_hash != frame.frame_hash:
             raise ContractError("candidate frame mismatch")
         self._validate_context(_ActionContext.from_frame(frame))
 
@@ -633,7 +747,7 @@ class CandidateTable:
         layout = self.layout
         if is_card_instance_layout(layout) and self.synthetic_capacity:
             raise ContractError("synthetic card-instance table cannot reconstruct a submit-ready Action")
-        if original_frame.layout is not layout or original_frame.frame_hash != self.frame_hash:
+        if not original_frame.matches_action_contract(self.action_contract) or original_frame.frame_hash != self.frame_hash:
             raise ContractError("selection original frame mismatch")
         context = _ActionContext.from_frame(original_frame)
         action = self._to_action(index, context.actor, context.references, layout)

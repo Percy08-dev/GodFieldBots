@@ -119,6 +119,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         self._initialize(settings, _unused_factory, journal_factory)
         self._include_input_time = True
         self.ledger, self.runtime_evidence = ledger, runtime_evidence
+        self.action_contract = settings.actions.action_contract
         self.artifact_inputs = artifact_inputs
         self.resident_pool = resident_pool
         self.capture = capture
@@ -289,16 +290,19 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         if self.artifact_sink is not None:
             self.artifact_sink.hold_graph(f"participant-{obs['viewer_player_id']}",
                 32 * (json_bound(obs) + json_bound(events) + json_bound(options)) + 65536)
-        return decision_input(obs, events, cursor, definitions, options)
+        return decision_input(obs, events, cursor, definitions, options,
+                              action_contract=self.action_contract)
 
     def _reconcile_replay(
         self, replay: Json, viewer: int, accepted: list[Json], outcome: Any
     ) -> None:
         if getattr(self,'capture',None) is None:
-            reconcile_replay(replay, viewer, accepted, outcome)
+            reconcile_replay(replay, viewer, accepted, outcome, action_contract=self.action_contract)
 
     def _replay_closure(self, replay: Json, game: str, viewer: int) -> Json | None:
-        return replay["episode_end"] if getattr(self,'capture',None) is not None else replay_closure(replay, game, viewer)
+        if getattr(self, 'capture', None) is not None:
+            return replay["episode_end"]
+        return replay_closure(replay, game, viewer, action_contract=self.action_contract)
 
     def _replay_was_reconciled(self) -> bool:
         return getattr(self,'capture',None) is None
@@ -365,6 +369,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             str(uuid.uuid4()),
             worker.caps.max_episode_events,
             layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+            action_contract=self.action_contract,
         )
         contexts[viewer] = bank
         journals[viewer] = self.journal_factory(
@@ -428,6 +433,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             before.prefix_hash,
             value.events[before.end :],
             layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+            action_contract=context.raw_action_contract,
         )
         context.append(delta)
         frame = DecisionFrame.from_input(

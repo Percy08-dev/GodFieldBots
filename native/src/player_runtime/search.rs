@@ -348,6 +348,7 @@ impl<'a> Space<'a> {
             self.input.flash,
             self.config.max_sequence_length,
             &self.input.usable,
+            self.input.defense_direct,
             self.input.context,
             self.config.requires_powder_weapon,
             self.config.mirage_danger_requires_opponent,

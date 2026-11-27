@@ -30,7 +30,8 @@ from gf_common.structured import (
     EventBoundary,
     Selection,
     _CorrectedCardInstanceEventBankView,
-    _frame_type,
+    _DefenseV3EventBankView,
+    _new_frame,
     _VerifiedJournalFrame,
     event_delta,
 )
@@ -178,7 +179,15 @@ class EpisodeRecords:
         return json.loads(self._outcome)
 
     def __post_init__(self) -> None:
-        if type(self.bank) is not (_CorrectedCardInstanceEventBankView if type(self.action_contract) is CardInstanceContract else EventBankView):
+        expected_bank: type[EventBankView]
+        if type(self.action_contract) is CardInstanceContract:
+            if self.action_contract.requires_direct_defense:
+                expected_bank = _DefenseV3EventBankView
+            else:
+                expected_bank = _CorrectedCardInstanceEventBankView
+        else:
+            expected_bank = EventBankView
+        if type(self.bank) is not expected_bank:
             raise ContractError("owned participant event bank required")
         if not (type(self.frames) is type(self.tables) is type(self.selections) is tuple
                 and len(self.frames) == len(self.tables) == len(self.selections)):
@@ -1032,7 +1041,8 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
         poll()
         closed(metadata, {"actor", "episode", "boundary", "raw_blocks", "frames", "end_kind", "outcome", "reason", "selections", "has_targets"} | set(classification))
         boundary = EventBoundary(**closed(metadata["boundary"], {"end", "prefix_hash"}))
-        bank = EventBank(metadata["actor"], metadata["episode"], max_events=max(1, boundary.end), layout=layout)
+        bank = EventBank(metadata["actor"], metadata["episode"], max_events=max(1, boundary.end), layout=layout,
+                         action_contract=action_contract)
         prefix = f"e.{episode_index}"
         for block in metadata["raw_blocks"]:
             poll()
@@ -1045,7 +1055,8 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
             events = json.loads(raw.tobytes())
             if canonical(events).encode() != raw.tobytes() or len(events) != block["end"] - block["start"]:
                 raise ContractError("raw event block shape/canonical mismatch")
-            bank.append(event_delta(bank.actor, bank.episode, block["start"], bank.boundary.prefix_hash, events, layout=layout))
+            bank.append(event_delta(bank.actor, bank.episode, block["start"], bank.boundary.prefix_hash, events,
+                                    layout=layout, action_contract=bank.raw_action_contract))
         if bank.boundary != boundary:
             raise ContractError("complete episode bank hash mismatch")
         frames, tables = [], []
@@ -1062,9 +1073,10 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
             payload = get(frame_meta["payload_key"], np.uint8)
             if payload.ndim != 1:
                 raise ContractError("frame payload must be byte vector")
-            frame = _frame_type(layout)(frame_meta["actor"], frame_meta["episode"], frame_meta["revision"],
+            frame = _new_frame(frame_meta["actor"], frame_meta["episode"], frame_meta["revision"],
                                   frame_meta["interval_start"], EventBoundary(**frame_meta["boundary"]),
-                                  frame_meta["interval_start_hash"], payload.tobytes(), frame_meta["frame_hash"])
+                                  frame_meta["interval_start_hash"], payload.tobytes(), frame_meta["frame_hash"],
+                                  layout=layout, action_contract=bank.raw_action_contract)
             frame_arrays = {name: get(frame_prefix + "." + name, _token_dtype(name)) for name in FRAME_FIELDS}
             event_arrays = {name: get(event_prefix + "." + name, _token_dtype(name)) for name in EVENT_FIELDS}
             candidate_arrays = {name: get(frame_prefix + ".candidate." + name, _token_dtype(name)) for name in CANDIDATE_FIELDS}

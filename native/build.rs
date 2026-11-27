@@ -24,6 +24,7 @@ fn main() {
     files.push(root.join("assets/structured-token-recipe-public-exact-v2.json"));
     files.push(root.join("assets/card-instance-token-recipe-corrected-v2.json"));
     files.push(root.join("assets/card-instance-validation-pins-v2.json"));
+    files.push(root.join("assets/card-instance-defense-v3-release.json"));
     files.push(root.join("assets/card-instance-formal-ppo-v1.json"));
     files.push(root.join("assets/card-instance-formal-ppo-group-pack-v1.json"));
     files.push(root.join("assets/card-instance-tree3-layout-recipe-v1.json"));

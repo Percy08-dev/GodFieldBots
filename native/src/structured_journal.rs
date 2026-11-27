@@ -18,6 +18,7 @@ pub(crate) mod card_instance;
 enum ColumnContext {
     Engineering,
     Corrected,
+    DefenseV3,
     CorrectedComponent,
 }
 
@@ -391,7 +392,7 @@ fn columns_context(
                 "candidate-columns-v1"
             }
         || descriptor.require("purpose")?.string()?
-            != if matches!(context, ColumnContext::Corrected) {
+            != if matches!(context, ColumnContext::Corrected | ColumnContext::DefenseV3) {
                 "qualified_game"
             } else {
                 "component"
@@ -408,7 +409,12 @@ fn columns_context(
         if synthetic {
             return fail("codec2 diagnostic requires real18 references");
         }
-        card_instance::column_binding(descriptor, budget, control)?;
+        let profile = if matches!(context, ColumnContext::DefenseV3) {
+            card_instance::WireProfile::DefenseV3
+        } else {
+            card_instance::WireProfile::V2
+        };
+        card_instance::column_binding(descriptor, budget, control, profile)?;
     } else {
         crate::structured_controls::contract(descriptor.require("action_contract")?)?;
     }
@@ -585,7 +591,7 @@ fn columns_context(
         ),
         (
             "purpose",
-            json::text(if matches!(context, ColumnContext::Corrected) {
+            json::text(if matches!(context, ColumnContext::Corrected | ColumnContext::DefenseV3) {
                 "qualified_game"
             } else {
                 "component"
@@ -1828,6 +1834,9 @@ impl Journal {
             )?;
         }
         let viewer = documents[0].root.require("viewer")?.integer(1, 2)?;
+        let profile = corrected.then(|| {
+            card_instance::WireProfile::expected(documents[0].root.require("action_contract")?)
+        }).transpose()?.unwrap_or_default();
         if journal_file != format!("player-{viewer}.jsonl") {
             return fail("journal filename/viewer mismatch");
         }
@@ -1835,7 +1844,7 @@ impl Journal {
             viewer,
             documents[0].root.require("bank_episode")?,
             if corrected {
-                Some(documents[0].root.require("action_contract")?)
+                Some(profile.frame_contract())
             } else {
                 None
             },
@@ -1926,7 +1935,7 @@ impl Journal {
                 }
                 if corrected {
                     for event in events {
-                        card_instance::event(event, recipe.as_ref().unwrap(), &budget, &control)?;
+                        card_instance::event_for_profile(event, recipe.as_ref().unwrap(), &budget, &control, profile, Some(viewer))?;
                     }
                 } else {
                     validation::validate_events_controlled(delta.require("events")?, &control)?;
@@ -1999,7 +2008,7 @@ impl Journal {
                     awaiting_next = None;
                     let f = row.require("frame")?;
                     if corrected {
-                        card_instance::frame(f, &budget, &control)?;
+                        card_instance::frame_for_profile(f, &budget, &control, profile, false)?;
                     } else {
                         frame(f, &budget, &control)?;
                     }
@@ -2052,7 +2061,9 @@ impl Journal {
                         false,
                         &budget,
                         &control,
-                        if corrected {
+                        if profile == card_instance::WireProfile::DefenseV3 {
+                            ColumnContext::DefenseV3
+                        } else if corrected {
                             ColumnContext::Corrected
                         } else {
                             ColumnContext::Engineering
@@ -2121,8 +2132,8 @@ impl Journal {
                     let (frame_tokens, candidate_tokens) = if diagnostic {
                         let recipe = recipe.as_ref().unwrap();
                         (
-                            Some(crate::structured_tokens::frame_tokens(
-                                f, &bank, recipe, &budget, &control,
+                            Some(crate::structured_tokens::frame_tokens_for_profile(
+                                f, &bank, recipe, &budget, &control, profile,
                             )?),
                             Some(crate::structured_tokens::candidate_tokens(
                                 &table.value,
@@ -2345,7 +2356,7 @@ impl Journal {
                         }
                         let final_obs = row.require("final_observation")?;
                         if corrected {
-                            card_instance::observation(final_obs, Some(viewer), &budget, &control)?;
+                            card_instance::observation_for_profile(final_obs, Some(viewer), &budget, &control, false, profile)?;
                         } else {
                             validation::observation_controlled(final_obs, Some(viewer), &control)?;
                         }

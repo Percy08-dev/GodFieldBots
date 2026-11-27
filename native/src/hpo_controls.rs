@@ -388,6 +388,11 @@ pub(crate) fn run(state: &Value, b: &Arc<Budget>, c: &Control) -> Result<Value> 
     )?;
     actions3(cfg.require("actions")?, b, c)?;
     game_binding3(state, b, c)?;
+    eq(
+        state.require("action_contract")?,
+        cfg.require("actions")?.require("action_contract")?,
+        "HPO state/config action contract mismatch",
+    )?;
     let train = cfg.require("training")?;
     train.closed(
         &[
@@ -493,8 +498,11 @@ pub(crate) fn run(state: &Value, b: &Arc<Budget>, c: &Control) -> Result<Value> 
             "source_revision",
             "source_spec_sha256",
         ],
-        &["binary_build_revision"],
+        &["binary_build_revision", "source_dirty"],
     )?;
+    if state.require("action_contract")? == crate::structured_journal::card_instance::defense_v3_card_instance_contract() {
+        eq(integration.require("source_dirty")?, &Value::Bool(false), "HPO v3 requires clean source")?;
+    }
     let server = cfg.require("server")?;
     server.object()?;
     if server
@@ -793,6 +801,7 @@ pub(crate) fn inference(
     n(value, "schema_version", 5, 5)?;
     is(value, "kind", "structured-inference")?;
     game_binding3(value, b, c)?;
+    eq(value.require("action_contract")?, actions.require("action_contract")?, "HPO inference action contract mismatch")?;
     producer(value.require("producer")?)?;
     let mut model = json::copy(value.require("model")?, c)?;
     if model.get("resources").is_some() {
@@ -1269,6 +1278,7 @@ fn resume_metadata(
     n(value, "schema_version", 5, 5)?;
     is(value, "kind", "structured-resume")?;
     game_binding3(value, b, c)?;
+    eq(value.require("action_contract")?, inference.require("action_contract")?, "HPO resume action contract mismatch")?;
     semantic_corrected(value, model, b, c, true)?;
     producer(value.require("producer")?)?;
     for key in semantic_keys() {
@@ -1919,8 +1929,10 @@ fn update_metadata(
         ));
     }
     let mut owners = std::collections::BTreeSet::new();
+    let action = state.require("action_contract")?;
     for (episode, count) in episodes.iter().zip(&counts) {
         game_binding3(episode, &b, &c)?;
+        eq(episode.require("action_contract")?, action, "HPO numeric episode action contract mismatch")?;
         is(episode, "end_kind", "natural")?;
         crate::validation::result(episode.require("outcome")?)?;
         if episode.require("outcome")?.is_null()
@@ -1936,6 +1948,7 @@ fn update_metadata(
         }
         for frame in episode.require("frames")?.array()? {
             game_binding3(frame, &b, &c)?;
+            eq(frame.require("action_contract")?, action, "HPO numeric frame action contract mismatch")?;
         }
     }
     let mut actual = raw.require("data")?.require("files")?.object()?.clone();
@@ -3009,6 +3022,35 @@ mod tests {
         }
         assert!(session.authorize_hpo(&request).is_err());
         session.close().unwrap();
+    }
+
+    #[test]
+    fn defense_v3_inference_requires_the_v3_rule_and_catalog_signatures() {
+        use crate::structured_journal::card_instance::{WireProfile, defense_v3_release};
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"), &b, &c).unwrap();
+        let case = &all.root["cases"][0];
+        let mut manifest = case["inference"].clone();
+        let legacy = manifest.clone();
+        let mut actions = case["state"]["effective_config"]["actions"].clone();
+        let profile = WireProfile::DefenseV3;
+        let action = profile.frame_contract();
+        actions["action_contract"] = action.clone();
+        manifest["action_contract"] = action.clone();
+        manifest["action_config_hash"] = json::text(&digest(&actions, &b, &c).unwrap());
+        manifest["catalog"] = profile.catalog_metadata();
+        manifest["rule_signature"] = profile.rule_signature().clone();
+        manifest["reviewed_spec_hashes"] = defense_v3_release()["spec_files"].clone();
+        for key in ["simulator_revision", "spec_inventory_sha256"] {
+            manifest[key] = action[key].clone();
+        }
+        inference(&manifest, &actions, &b, &c).unwrap();
+        for key in ["action_contract", "rule_signature", "catalog", "reviewed_spec_hashes"] {
+            let mut mixed = manifest.clone();
+            mixed[key] = legacy[key].clone();
+            assert!(inference(&mixed, &actions, &b, &c).is_err(), "{key}");
+        }
     }
 
     #[test]

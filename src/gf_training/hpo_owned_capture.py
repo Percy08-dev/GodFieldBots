@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
 from gf_common.artifacts import ArtifactAdmission, ArtifactReservation, json_bound
+from gf_common.card_instance import CardInstanceContract
 from gf_common.card_instance_validation import observation as validate_observation
 from gf_common.domain import (
     ContractError,
@@ -260,7 +261,7 @@ class _CaptureContext:
             if type(bank.episode) is not str or not bank.episode:
                 raise ContractError("capture original bank identity required")
             retention.reserve(65536 + 8 * len(bank.episode))
-            original = EventBank(viewer, bank.episode, layout=bank.layout)
+            original = EventBank(viewer, bank.episode, layout=bank.layout, action_contract=bank.raw_action_contract)
             if original.boundary != bank.boundary:
                 raise ContractError("capture participant initial prefix differs")
             episode.banks[viewer] = original
@@ -298,7 +299,7 @@ class _CaptureContext:
                 + 4096 * len(table.kinds) + 128 * len(table.slots) + 8 * json_bound(command))
             bank = episode.banks.get(viewer)
             if bank is None:
-                bank = EventBank(viewer, frame.episode, layout=frame.layout)
+                bank = EventBank(viewer, frame.episode, layout=frame.layout, action_contract=frame.raw_action_contract)
                 episode.banks[viewer] = bank
             bank.append(delta)
             frame.bank_view(bank.view())
@@ -349,7 +350,10 @@ class _CaptureContext:
                     or observation["state_revision"] < episode.revision):
                 raise ContractError("actual terminal participant observation required")
             self._check().reserve(65536 + 16 * json_bound(observation))
-            validated = validate_observation(observation, viewer)
+            bank = episode.banks.get(viewer)
+            action_contract = None if bank is None else bank.raw_action_contract
+            validated = validate_observation(observation, viewer,
+                action_contract=action_contract if type(action_contract) is CardInstanceContract else None)
             raw = canonical(validated).encode()
             if viewer in episode.terminals and episode.terminals[viewer] != raw:
                 raise ContractError("terminal observation changed")

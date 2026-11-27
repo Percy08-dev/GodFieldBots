@@ -284,8 +284,8 @@ mod tests {
         };
         let policies = [policy.clone(), policy];
         let seats = [
-            Participant::new(1, "planned".into(), policies[0].clone(), false).unwrap(),
-            Participant::new(2, "planned".into(), policies[1].clone(), false).unwrap(),
+            Participant::new(1, "planned".into(), policies[0].clone(), super::super::WireProfile::V2).unwrap(),
+            Participant::new(2, "planned".into(), policies[1].clone(), super::super::WireProfile::V2).unwrap(),
         ];
         let report = GameReport {
             episode: "planned".into(),

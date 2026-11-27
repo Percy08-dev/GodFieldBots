@@ -878,25 +878,31 @@ impl Stage {
                 "native gameplay payload rejects synthetic capacity",
             ));
         }
-        if recipe.is_corrected() {
+        let profile = if recipe.is_corrected() {
             crate::structured_controls::contract3(
                 table.require("action_contract")?,
                 &self.budget,
                 &self.control,
             )?;
-        }
+            crate::structured_journal::card_instance::WireProfile::expected(
+                table.require("action_contract")?,
+            )?
+        } else {
+            Default::default()
+        };
         let fp = format!("e.{episode_index}.f.{position}");
         let ep = format!("e.{episode_index}.event-tokens.{position}");
         if !component {
             let payload = json::canonical(frame.require("payload")?, &self.budget, &self.control)?;
             self.bytes(&(fp.clone() + ".payload"), &payload)?;
         }
-        let tokens = crate::structured_tokens::frame_tokens(
+        let tokens = crate::structured_tokens::frame_tokens_for_profile(
             frame,
             events,
             recipe,
             &self.budget,
             &self.control,
+            profile,
         )?;
         for name in [
             "state_numerics",
@@ -979,7 +985,7 @@ impl Stage {
         }
         if recipe.is_corrected() {
             let binding =
-                crate::structured_controls::corrected_game_binding(&self.budget, &self.control)?;
+                crate::structured_controls::corrected_game_binding(profile, &self.control)?;
             for key in ["rule_signature", "layout_signature"] {
                 result.as_object_mut().unwrap().insert(
                     key.into(),

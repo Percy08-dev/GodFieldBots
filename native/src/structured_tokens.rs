@@ -5,7 +5,7 @@ use crate::{
     error::{Error, Result},
     json::{self, Document, Value, ValueExt},
     structured_controls::{digest, token_signature},
-    structured_journal::card_instance::is_concealed_draw,
+    structured_journal::card_instance::{self, WireProfile, is_concealed_draw},
 };
 use std::sync::Arc;
 
@@ -206,7 +206,18 @@ pub fn frame_tokens(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<OwnedTokens> {
-    frame_tokens_context(frame, events, recipe, budget, control, false)
+    frame_tokens_for_profile(frame, events, recipe, budget, control, WireProfile::V2)
+}
+
+pub(crate) fn frame_tokens_for_profile(
+    frame: &Value,
+    events: &[Value],
+    recipe: &Recipe,
+    budget: &Arc<Budget>,
+    control: &Control,
+    profile: WireProfile,
+) -> Result<OwnedTokens> {
+    frame_tokens_context(frame, events, recipe, budget, control, Some(profile))
 }
 /// Rust-only live History owns validation of every appended event exactly once.
 /// The token/aggregation kernel below is identical to the validated DTO path.
@@ -217,7 +228,7 @@ pub(crate) fn frame_tokens_owned(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<OwnedTokens> {
-    frame_tokens_context(frame, events, recipe, budget, control, true)
+    frame_tokens_context(frame, events, recipe, budget, control, None)
 }
 fn frame_tokens_context(
     frame: &Value,
@@ -225,7 +236,7 @@ fn frame_tokens_context(
     recipe: &Recipe,
     budget: &Arc<Budget>,
     control: &Control,
-    owned: bool,
+    profile: Option<WireProfile>,
 ) -> Result<OwnedTokens> {
     control.check()?;
     let actor = frame.require("actor")?.integer(1, 2)?;
@@ -240,11 +251,11 @@ fn frame_tokens_context(
         return Err(Error::contract("structured interval token capacity"));
     }
     let corrected = recipe.is_corrected();
-    if corrected && !owned {
+    if let Some(profile) = profile.filter(|_| corrected) {
         // Validate only this participant's original prefix. A later tail is
         // never read to construct an earlier frame's tokens.
         for value in &events[..end] {
-            crate::structured_journal::card_instance::event(value, recipe, budget, control)?;
+            card_instance::event_for_profile(value, recipe, budget, control, profile, Some(actor))?;
         }
     }
     let scalar_count = (end - start)

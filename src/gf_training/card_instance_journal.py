@@ -13,11 +13,11 @@ from typing import Any
 
 from gf_common.artifacts import ArtifactReader
 from gf_common.card_instance import (
-    CATALOG_META,
     GENERATOR_VERSION,
     ActionConfigV3,
     CardInstanceContract,
     action_config_v3,
+    catalog_metadata,
 )
 from gf_common.card_instance_rules import CardInstanceRules, card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import (
@@ -61,7 +61,6 @@ CARD_INSTANCE_JOURNAL_SCHEMA = 6
 
 class _Context:
     layout = CORRECTED_CARD_INSTANCE_LAYOUT
-    observation = staticmethod(observation)
     publish_candidates = staticmethod(publish_candidates_v2)
     read_candidates = staticmethod(read_candidates_v2)
     sidecar_inventory = staticmethod(sidecar_inventory_v2)
@@ -76,6 +75,9 @@ class _Context:
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, rules)
         )
+
+    def observation(self, raw: Json, viewer: int) -> Json:
+        return observation(raw, viewer, action_contract=self.actions.action_contract)
 
     def check_binding(
         self, raw: Json, *, action_contract: Any, purpose: str, synthetic_capacity: bool
@@ -170,7 +172,7 @@ class _Context:
             or header["policy_input_version"] != self.actions.action_contract.policy_input_version
             or header["reward_version"] != REWARD_VERSION
             or header["end_projection_version"] != END_PROJECTION_VERSION
-            or header["catalog"] != CATALOG_META
+            or header["catalog"] != catalog_metadata(self.actions.action_contract)
             or header["generator_version"] != GENERATOR_VERSION
             or not learned and (header["model_id"] not in ("random", "heuristic", "heuristic_refresh") or header["model_version"] != "1")
             or header["generation_schema"] is not None
@@ -234,7 +236,8 @@ class _Context:
         if re.fullmatch(r"[0-9a-f]{64}", header["action_config_hash"]) is None:
             raise ContractError("journal6 config hash required")
         return caps, EventBank(
-            header["viewer"], header["bank_episode"], caps.max_episode_events, layout=self.layout
+            header["viewer"], header["bank_episode"], caps.max_episode_events, layout=self.layout,
+            action_contract=self.actions.action_contract,
         )
 
 
@@ -285,7 +288,7 @@ class CardInstanceJournal(StructuredJournal):
             "reward_version": REWARD_VERSION,
             "policy_input_version": actions.action_contract.policy_input_version,
             "end_projection_version": END_PROJECTION_VERSION,
-            "catalog": CATALOG_META,
+            "catalog": catalog_metadata(actions.action_contract),
             "episode_id": episode_id,
             "viewer": viewer,
             "policy": policy,

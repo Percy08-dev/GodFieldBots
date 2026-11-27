@@ -1,10 +1,10 @@
-//! Attested external HTTP v2. Management responses never enter policy input.
+//! Attested external gameplay HTTP. Management responses never enter policy input.
 use super::{ensure, error, requests::wait_duration};
 use crate::{
     budget::{Budget, Control},
     error::{Error, Result},
     json::{Value, ValueExt},
-    structured_journal::card_instance,
+    structured_journal::card_instance::{self, WireProfile},
     structured_tokens::Recipe,
 };
 use reqwest::{Client, Method};
@@ -38,6 +38,7 @@ pub(crate) struct HttpFacts {
 
 pub struct Http {
     client: Client,
+    profile: WireProfile,
     server: Server,
     cached: Option<Value>,
     poisoned: bool,
@@ -47,7 +48,7 @@ pub struct Http {
     pub metrics: Option<std::sync::Arc<super::metrics::Metrics>>,
 }
 impl Http {
-    pub fn new(client: Client, server: Server, deadline: f64) -> Result<Self> {
+    pub(super) fn new(client: Client, server: Server, deadline: f64, profile: WireProfile) -> Result<Self> {
         let url = reqwest::Url::parse(&server.base_url).map_err(|e| error(e.to_string()))?;
         ensure(
             url.scheme() == "http"
@@ -68,6 +69,7 @@ impl Http {
         super::requests::checked_duration(server.request_seconds)?;
         Ok(Self {
             client,
+            profile,
             server,
             metrics: None,
             cached: None,
@@ -248,7 +250,9 @@ impl Http {
     }
     pub async fn create(&mut self) -> Result<String> {
         self.attest().await?;
-        let info = self.request(Method::GET, "/v2/info", None, false).await?;
+        let profile = self.profile;
+        let api = profile.gameplay_api();
+        let info = self.request(Method::GET, &format!("/{api}/info"), None, false).await?;
         info.closed(
             &[
                 "name",
@@ -268,12 +272,12 @@ impl Http {
         )?;
         for (key, pin) in [
             ("name", "gf-simulator"),
-            ("api_version", "v2"),
+            ("api_version", api),
             ("observation_schema_version", "2"),
             ("action_options_schema_version", "2"),
-            ("public_event_schema_version", "2"),
+            ("public_event_schema_version", profile.event_schema()),
             ("card_ref_scheme", "aes256-card-ref-v1"),
-            ("rule_set_version", "true-match-1v1-v2"),
+            ("rule_set_version", profile.rule_set()),
             ("random_algorithm", "xoshiro256pp"),
             ("random_algorithm_version", "1"),
         ] {
@@ -281,15 +285,19 @@ impl Http {
         }
         ensure(
             info["action_schema_version"].as_u64() == Some(2)
-                && info["version"].as_str().is_some_and(|v| !v.is_empty()),
+                && if profile == WireProfile::DefenseV3 {
+                    info["version"] == "0.1.0"
+                } else {
+                    info["version"].as_str().is_some_and(|v| !v.is_empty())
+                },
             "unsupported public info scalar",
         )?;
         ensure(
             info["card_catalog"]
-                == json!({"catalog_schema_version":2,"catalog_version":"public-ja-v3","content_sha256":"f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6","definition_count":296,"locale":"ja","rule_set_version":"true-match-1v1-v2"}),
+                == profile.catalog_metadata(),
             "unsupported public catalog metadata",
         )?;
-        let value=self.request(Method::POST,"/v2/games",Some(&json!({"rule_set_version":"true-match-1v1-v2","random_algorithm":"xoshiro256pp","random_algorithm_version":"1"})),false).await?;
+        let value=self.request(Method::POST,&format!("/{api}/games"),Some(&json!({"rule_set_version":profile.rule_set(),"random_algorithm":"xoshiro256pp","random_algorithm_version":"1"})),false).await?;
         value.closed(
             &[
                 "game_id",
@@ -308,7 +316,7 @@ impl Http {
                 && value["required_players"].as_u64() == Some(2)
                 && value["joined_players"].as_u64() == Some(0)
                 && value["state_revision"].is_null()
-                && value["rule_set_version"] == "true-match-1v1-v2"
+                && value["rule_set_version"] == profile.rule_set()
                 && value["random_algorithm"] == "xoshiro256pp"
                 && value["random_algorithm_version"] == "1",
             "invalid Create acknowledgement",
@@ -325,21 +333,21 @@ impl Http {
         Ok(game)
     }
     pub async fn catalog(&mut self) -> Result<Value> {
+        let profile = self.profile;
+        let contract = profile.frame_contract();
+        let api = profile.gameplay_api();
+        let catalog_version = contract["catalog_version"].as_str().unwrap();
         let catalog = self
-            .request(Method::GET, "/v2/card-catalogs/public-ja-v3", None, false)
+            .request(Method::GET, &format!("/{api}/card-catalogs/{catalog_version}"), None, false)
             .await?;
-        let pins: Value = serde_json::from_slice(include_bytes!(
-            "../../assets/card-instance-validation-pins-v2.json"
-        ))
-        .unwrap();
         let mut content = catalog.clone();
         content
             .as_object_mut()
             .ok_or_else(|| error("catalog object required"))?
             .remove("content_sha256");
         ensure(
-            catalog["content_sha256"] == pins["action_contract"]["catalog_sha256"]
-                && super::hash(&content)? == pins["action_contract"]["catalog_sha256"],
+            catalog["content_sha256"] == contract["catalog_sha256"]
+                && super::hash(&content)? == contract["catalog_sha256"],
             "public catalog hash mismatch",
         )?;
         let definitions = catalog["definitions"]
@@ -356,7 +364,7 @@ impl Http {
         let v = self
             .request(
                 Method::POST,
-                &format!("/v2/games/{game}/players"),
+                &format!("/{}/games/{game}/players", self.profile.gameplay_api()),
                 Some(&json!({"command_id":command})),
                 true,
             )
@@ -395,16 +403,18 @@ impl Http {
         let v = self
             .request(
                 Method::GET,
-                &format!("/v2/games/{game}/observations/{viewer}"),
+                &format!("/{}/games/{game}/observations/{viewer}", self.profile.gameplay_api()),
                 None,
                 false,
             )
             .await?;
-        card_instance::observation(
+        card_instance::observation_for_profile(
             &v,
             Some(viewer as i128),
             &Budget::new(12usize << 30),
             &Control::new(f64::MAX)?,
+            false,
+            self.profile,
         )?;
         Ok(v)
     }
@@ -418,8 +428,8 @@ impl Http {
         let mut events = vec![];
         loop {
             let mut url = reqwest::Url::parse(&format!(
-                "{}/v2/games/{game}/events/{viewer}",
-                self.server.base_url
+                "{}/{}/games/{game}/events/{viewer}",
+                self.server.base_url, self.profile.gameplay_api()
             ))
             .map_err(|e| error(e.to_string()))?;
             url.query_pairs_mut().append_pair("limit", "1024");
@@ -441,8 +451,8 @@ impl Http {
                 &[],
             )?;
             ensure(
-                page["public_event_schema_version"] == "2"
-                    && page["rule_set_version"] == "true-match-1v1-v2",
+                page["public_event_schema_version"] == self.profile.event_schema()
+                    && page["rule_set_version"] == self.profile.rule_set(),
                 "unsupported event feed",
             )?;
             let rows = page["events"].array()?;
@@ -473,7 +483,7 @@ impl Http {
     pub async fn options(&mut self, game: &str, viewer: u8) -> Result<Value> {
         self.request(
             Method::GET,
-            &format!("/v2/games/{game}/action-options/{viewer}"),
+            &format!("/{}/games/{game}/action-options/{viewer}", self.profile.gameplay_api()),
             None,
             false,
         )
@@ -493,28 +503,36 @@ impl Http {
         let v = self
             .request(
                 Method::POST,
-                &format!("/v2/games/{game}/players/{viewer}/actions"),
+                &format!("/{}/games/{game}/players/{viewer}/actions", self.profile.gameplay_api()),
                 Some(pending),
                 true,
             )
             .await?;
-        if recipe.is_some() {
-            Self::validate_act_ack_with_recipe(&v, viewer, pending, recipe)?;
-        } else {
-            Self::validate_act_ack(&v, viewer, pending)?;
-        }
+        Self::validate_act_ack_for_profile(&v, viewer, pending, recipe, self.profile)?;
         // Validation only: ACK events/options/next_observation never enter history.
         Ok(v)
     }
+    #[cfg(test)]
     pub(crate) fn validate_act_ack(v: &Value, viewer: u8, pending: &Value) -> Result<()> {
         Self::validate_act_ack_with_recipe(v, viewer, pending, None)
     }
 
+    #[cfg(test)]
     pub(super) fn validate_act_ack_with_recipe(
         v: &Value,
         viewer: u8,
         pending: &Value,
         recipe: Option<&Recipe>,
+    ) -> Result<()> {
+        Self::validate_act_ack_for_profile(v, viewer, pending, recipe, WireProfile::V2)
+    }
+
+    pub(super) fn validate_act_ack_for_profile(
+        v: &Value,
+        viewer: u8,
+        pending: &Value,
+        recipe: Option<&Recipe>,
+        profile: WireProfile,
     ) -> Result<()> {
         v.closed(
             &[
@@ -533,8 +551,8 @@ impl Http {
             &[],
         )?;
         ensure(
-            v["public_event_schema_version"] == "2"
-                && v["rule_set_version"] == "true-match-1v1-v2"
+            v["public_event_schema_version"] == profile.event_schema()
+                && v["rule_set_version"] == profile.rule_set()
                 && v["card_ref_scheme"] == "aes256-card-ref-v1",
             "unsupported Act acknowledgement",
         )?;
@@ -567,16 +585,17 @@ impl Http {
             &local_recipe
         };
         for event in v["events"].array()? {
-            card_instance::event(event, recipe, &budget, &control)?;
+            card_instance::event_for_profile(event, recipe, &budget, &control, profile, Some(viewer as i128))?;
         }
         let obs = &v["next_observation"];
         if !obs.is_null() {
-            card_instance::observation_context(
+            card_instance::observation_for_profile(
                 obs,
                 Some(viewer as i128),
                 &budget,
                 &control,
                 v["status"] != "active",
+                profile,
             )?;
             ensure(
                 obs["state_revision"] == v["state_revision"] && obs["result"] == v["result"],
@@ -588,10 +607,11 @@ impl Http {
                 !obs.is_null() && v["status"] == "active" && obs["actionable"] == true,
                 "ACK hints require active own observation",
             )?;
-            card_instance::hints(
+            card_instance::hints_for_profile(
                 &json!({"state_revision":v["state_revision"],"viewer_player_id":viewer,"action_options":v["action_options"]}),
                 obs,
                 &control,
+                profile,
             )?;
         }
         Ok(())
@@ -599,14 +619,14 @@ impl Http {
     pub async fn replay(&mut self, game: &str, viewer: u8) -> Result<Value> {
         self.request(
             Method::GET,
-            &format!("/v2/games/{game}/replay/{viewer}"),
+            &format!("/{}/games/{game}/replay/{viewer}", self.profile.gameplay_api()),
             None,
             false,
         )
         .await
     }
     pub async fn delete(&mut self, game: &str) -> Result<()> {
-        self.request(Method::DELETE, &format!("/v2/games/{game}"), None, false)
+        self.request(Method::DELETE, &format!("/{}/games/{game}", self.profile.gameplay_api()), None, false)
             .await?;
         Ok(())
     }

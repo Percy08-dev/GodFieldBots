@@ -294,6 +294,7 @@ def card_instance_reader_settings(config: PreparationConfig, native: ModuleType 
 
 def recorded_card_instance_preprocessing(value: Json, *, binding: Json) -> None:
     """Validate recorded identity only; never import/load a historical extension."""
+    from gf_common.card_instance import parse_card_instance_contract
     from gf_common.domain import closed
     from gf_models.structured_sealed import checksum
     closed(value, {'backend', 'reader_contract', 'implementation', 'binary'} | set(binding))
@@ -308,6 +309,7 @@ def recorded_card_instance_preprocessing(value: Json, *, binding: Json) -> None:
         raise ContractError('recorded corrected native binary identity differs')
     checksum(binary['extension_sha256'])
     info = binary['build']
+    require_native_defense_v3(info, parse_card_instance_contract(binding['action_contract']))
     if (info.get('card_instance_contract') != CARD_INSTANCE_CONTRACT
             or info.get('card_instance_signature') != binding['layout_signature']
             or info.get('card_instance_models') != 'mlp,gru,transformer' or info.get('abi') != 'cp314-gil'):
@@ -315,3 +317,11 @@ def recorded_card_instance_preprocessing(value: Json, *, binding: Json) -> None:
     checksum(info.get('native_source_sha256'))
     if _CONCEALED_DRAW_KEY in info:
         require_native_concealed_draw(info)
+
+
+def require_native_defense_v3(build: Json, action_contract: Any) -> None:
+    from gf_common.card_instance import DEFENSE_V3_PROFILE, CardInstanceContract
+
+    if (type(action_contract) is CardInstanceContract and action_contract.requires_direct_defense
+            and build.get('card_instance_defense_v3') != DEFENSE_V3_PROFILE):
+        raise ContractError('Simulator v3 defense profile requires a matching native runtime wheel')

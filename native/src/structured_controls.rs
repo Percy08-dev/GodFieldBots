@@ -119,7 +119,8 @@ fn classification_context(
     c: &Control,
 ) -> Result<()> {
     if format.corrected() {
-        game_binding3(v, b, c)
+        game_binding3(v, b, c)?;
+        eq(v.require("action_contract")?, contract, "corrected enclosing action contract mismatch")
     } else {
         classification(v, contract)
     }
@@ -2980,6 +2981,9 @@ fn corrected_pins(budget: &Arc<Budget>, control: &Control) -> Result<Document> {
     )
 }
 pub(crate) fn contract3(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    if value == crate::structured_journal::card_instance::defense_v3_card_instance_contract() {
+        return control.check();
+    }
     let pins = corrected_pins(budget, control)?;
     let expected = pins.root.require("action_contract")?;
     value.closed(
@@ -2993,11 +2997,13 @@ pub(crate) fn contract3(value: &Value, budget: &Arc<Budget>, control: &Control) 
     eq(value, expected, "corrected contract mismatch")
 }
 pub(crate) fn game_binding3(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
-    let pins = corrected_pins(budget, control)?;
-    contract3(value.require("action_contract")?, budget, control)?;
+    use crate::structured_journal::card_instance::WireProfile;
+    let action = value.require("action_contract")?;
+    contract3(action, budget, control)?;
+    let profile = WireProfile::expected(action)?;
     eq(
         value.require("rule_signature")?,
-        pins.root.require("rule_signature")?,
+        profile.rule_signature(),
         "game rule signature mismatch",
     )?;
     is(value, "layout_signature", CARD_INSTANCE_SIGNATURE)?;
@@ -3114,44 +3120,28 @@ fn semantic_corrected(
         }
         is(value, key, expected)?;
     }
+    use crate::structured_journal::card_instance::{WireProfile, defense_v3_release};
+    let profile = WireProfile::expected(value.require("action_contract")?)?;
+    let contract = profile.frame_contract();
     for key in ["simulator_revision", "spec_inventory_sha256"] {
         eq(
             value.require(key)?,
-            pins.root.require("action_contract")?.require(key)?,
+            contract.require(key)?,
             "corrected semantic revision/spec mismatch",
         )?;
     }
     eq(
         value.require("reviewed_spec_hashes")?,
-        pins.root.require("reviewed_spec_hashes")?,
+        if profile == WireProfile::DefenseV3 {
+            defense_v3_release().require("spec_files")?
+        } else {
+            pins.root.require("reviewed_spec_hashes")?
+        },
         "corrected reviewed specs mismatch",
     )?;
-    let catalog = value.require("catalog")?;
-    catalog.closed(
-        &[
-            "catalog_schema_version",
-            "catalog_version",
-            "rule_set_version",
-            "locale",
-            "content_sha256",
-            "definition_count",
-        ],
-        &[],
-    )?;
-    n(catalog, "catalog_schema_version", 2, 2)?;
-    n(catalog, "definition_count", 296, 296)?;
-    for (key, expected) in [
-        ("catalog_version", "public-ja-v3"),
-        ("rule_set_version", "true-match-1v1-v2"),
-        ("locale", "ja"),
-    ] {
-        is(catalog, key, expected)?;
-    }
     eq(
-        catalog.require("content_sha256")?,
-        pins.root
-            .require("action_contract")?
-            .require("catalog_sha256")?,
+        value.require("catalog")?,
+        &profile.catalog_metadata(),
         "corrected catalog mismatch",
     )?;
     is(
@@ -3691,6 +3681,9 @@ fn neural_metadata_context(
 }
 
 fn validate_preprocessing3(state: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    use crate::structured_journal::card_instance::{WireProfile, defense_v3_release};
+    let action = state.require("action_contract")?;
+    let profile = WireProfile::expected(action)?;
     let identity = state.require("identity")?;
     let v = identity.require("preprocessing")?;
     let settings = state
@@ -3704,6 +3697,7 @@ fn validate_preprocessing3(state: &Value, b: &Arc<Budget>, c: &Control) -> Resul
     }
     v.closed(&keys, &[])?;
     game_binding3(v, b, c)?;
+    eq(v.require("action_contract")?, action, "preprocessing action contract mismatch")?;
     is(v, "reader_contract", "participant-structured-v2")?;
     is(settings, "reader", "participant-structured-v2")?;
     eq(
@@ -3746,6 +3740,9 @@ fn validate_preprocessing3(state: &Value, b: &Arc<Budget>, c: &Control) -> Resul
             is(build, "card_instance_signature", CARD_INSTANCE_SIGNATURE)?;
             is(build, "card_instance_models", "mlp,gru,transformer")?;
             is(build, "abi", "cp314-gil")?;
+            if profile == WireProfile::DefenseV3 {
+                is(build, "card_instance_defense_v3", crate::structured_journal::card_instance::DEFENSE_V3_PROFILE)?;
+            }
         }
         _ => {
             return Err(Error::contract(
@@ -3755,24 +3752,28 @@ fn validate_preprocessing3(state: &Value, b: &Arc<Budget>, c: &Control) -> Resul
     }
     let integration = identity.require("integration")?;
     let p = corrected_pins(b, c)?;
+    let (binary, specs) = if profile == WireProfile::DefenseV3 {
+        let release = defense_v3_release();
+        (release.require("binary_sha256")?, release.require("spec_files")?)
+    } else {
+        (p.root.require("approved_binary_sha256")?, p.root.require("approved_spec_files")?)
+    };
     eq(
         integration.require("binary_sha256")?,
-        p.root.require("approved_binary_sha256")?,
+        binary,
         "parent runtime binary mismatch",
     )?;
     for key in ["declared_simulator_revision", "source_revision"] {
         eq(
             integration.require(key)?,
-            p.root
-                .require("action_contract")?
-                .require("simulator_revision")?,
+            action.require("simulator_revision")?,
             "parent runtime source mismatch",
         )?;
     }
     checksum(integration.require("server_config_sha256")?)?;
     eq(
         integration.require("source_spec_sha256")?,
-        p.root.require("approved_spec_files")?,
+        specs,
         "parent runtime normative inventory mismatch",
     )
 }
@@ -3785,16 +3786,18 @@ pub(crate) fn semantic3_declaration(value: &Value, c: &Control) -> Result<Value>
 pub(crate) fn bundle_metadata(value: &Value) -> Result<BTreeMap<String, &Value>> {
     bundle(value)
 }
-pub(crate) fn corrected_game_binding(b: &Arc<Budget>, c: &Control) -> Result<Value> {
-    let pins = corrected_pins(b, c)?;
+pub(crate) fn corrected_game_binding(
+    profile: crate::structured_journal::card_instance::WireProfile,
+    c: &Control,
+) -> Result<Value> {
     Ok(json::object([
         (
             "action_contract",
-            json::copy(pins.root.require("action_contract")?, c)?,
+            json::copy(profile.frame_contract(), c)?,
         ),
         (
             "rule_signature",
-            json::copy(pins.root.require("rule_signature")?, c)?,
+            json::copy(profile.rule_signature(), c)?,
         ),
         ("layout_signature", json::text(CARD_INSTANCE_SIGNATURE)),
         ("purpose", json::text("qualified_game")),
@@ -3909,7 +3912,7 @@ mod defense_priority_tests {
     fn current_binding_accepts_defense_rules_and_rejects_superseded_rules() {
         let b = Budget::new(128 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
-        let mut binding = corrected_game_binding(&b, &c).unwrap();
+        let mut binding = corrected_game_binding(Default::default(), &c).unwrap();
         binding["rule_signature"] =
             json::text("081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6");
         game_binding3(&binding, &b, &c).unwrap();

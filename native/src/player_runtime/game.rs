@@ -19,7 +19,7 @@ use crate::{
     budget::{Budget, Control},
     error::{Error, Result},
     json::{Value, ValueExt},
-    structured_journal::card_instance,
+    structured_journal::card_instance::{self, WireProfile},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -247,7 +247,7 @@ impl Participant {
         actor: u8,
         episode: String,
         spec: PolicySpec,
-        native_rollout: bool,
+        profile: WireProfile,
     ) -> Result<Self> {
         let policy: Box<dyn OwnPolicy> = if spec.learned() {
             Box::new(Inference)
@@ -260,11 +260,7 @@ impl Participant {
             })
         };
         Ok(Self {
-            history: if native_rollout {
-                History::new_with_pins(actor, episode, true)?
-            } else {
-                History::new(actor, episode)?
-            },
+            history: History::new_for_profile(actor, episode, profile)?,
             search: PythonRng::seed(search_seed(spec.seed)?),
             policy,
             spec,
@@ -297,6 +293,7 @@ pub struct GameReport {
     pub inference_released: bool,
 }
 struct Actor {
+    profile: WireProfile,
     spec: GameSpec,
     http: Http,
     game: Option<String>,
@@ -379,15 +376,17 @@ pub(super) fn action_from_parts(
     Ok(a)
 }
 impl Actor {
-    fn new(spec: GameSpec, client: reqwest::Client, native_rollout: bool) -> Result<Self> {
+    fn new(spec: GameSpec, client: reqwest::Client) -> Result<Self> {
+        let profile = super::wire_profile_for_runtime(spec.actions.require("action_contract")?)?;
         let http = Http::new(
             client,
             serde_json::from_value(spec.server.clone()).map_err(|e| error(e.to_string()))?,
             spec.deadline,
+            profile,
         )?;
         let seats = [
-            Participant::new(1, spec.episode.clone(), spec.policies[0].clone(), native_rollout)?,
-            Participant::new(2, spec.episode.clone(), spec.policies[1].clone(), native_rollout)?,
+            Participant::new(1, spec.episode.clone(), spec.policies[0].clone(), profile)?,
+            Participant::new(2, spec.episode.clone(), spec.policies[1].clone(), profile)?,
         ];
         let report = GameReport {
             episode: spec.episode.clone(),
@@ -402,6 +401,7 @@ impl Actor {
             inference_released: false,
         };
         Ok(Self {
+            profile,
             spec,
             http,
             game: None,
@@ -725,7 +725,7 @@ impl Actor {
                 Ok(replay) => {
                     let accepted: Vec<_> =
                         self.seats[(viewer - 1) as usize].accepted.iter().collect();
-                    match card_instance::reconcile_replay2(
+                    match card_instance::reconcile_replay_for_profile(
                         &replay,
                         &game,
                         viewer as i128,
@@ -733,6 +733,7 @@ impl Actor {
                         &self.report.outcome,
                         &Budget::new(12usize << 30),
                         &Control::new(f64::MAX).unwrap(),
+                        self.profile,
                     ) {
                         Ok(closure) => {
                             closures.push(closure.cloned());
@@ -811,7 +812,7 @@ pub async fn run(
     cancel: Arc<super::scheduler::Cancellation>,
 ) -> GameReport {
     let episode = spec.episode.clone();
-    let mut actor = match Actor::new(spec, client, storage.native_rollout_active()) {
+    let mut actor = match Actor::new(spec, client) {
         Ok(v) => v,
         Err(e) => {
             return GameReport {

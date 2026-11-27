@@ -307,7 +307,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 if frame.interval_start:
                     raise ContractError("protocol3 first event prefix must start at zero")
                 self._parent_bank = EventBank(
-                    frame.actor, frame.episode, self.caps.max_episode_events, layout=layout
+                    frame.actor, frame.episode, self.caps.max_episode_events, layout=layout,
+                    action_contract=self.actions.action_contract,
                 )
             self._parent_bank.append(delta)
             if self._parent_bank.boundary != frame.boundary:
@@ -318,8 +319,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 {
                     "protocol_version": 3,
                     "kind": "select",
-                    "frame": frame_dict(frame, layout=layout),
-                    "delta": delta_dict(delta, layout=layout),
+                    "frame": frame_dict(frame, layout=layout, action_contract=self.actions.action_contract),
+                    "delta": delta_dict(delta, layout=layout, action_contract=self.actions.action_contract),
                     **self.binding,
                 }
             )

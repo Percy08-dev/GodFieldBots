@@ -19,6 +19,96 @@ pub(crate) fn embedded_pins() -> &'static Value {
     PIN.get_or_init(|| serde_json::from_slice(PINS).expect("built-in validation contract"))
 }
 
+pub(crate) fn defense_v3_release() -> &'static Value {
+    static RELEASE: OnceLock<Value> = OnceLock::new();
+    RELEASE.get_or_init(|| {
+        serde_json::from_slice(include_bytes!("../assets/card-instance-defense-v3-release.json"))
+            .expect("built-in Simulator v3 release pins")
+    })
+}
+
+pub(crate) const DEFENSE_V3_PROFILE: &str = "card-instance-simulator-v3-shared-20261127-defense";
+
+pub(crate) fn defense_v3_card_instance_contract() -> &'static Value {
+    static CONTRACT: OnceLock<Value> = OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        let mut contract = embedded_pins()["action_contract"].clone();
+        for (key, value) in [
+            ("profile_id", DEFENSE_V3_PROFILE),
+            ("gameplay_api", "v3"),
+            ("rule_set_version", "true-match-1v1-v3"),
+            ("catalog_version", "public-ja-v4"),
+            ("catalog_sha256", "c27c3341dcb0dfdf998322071641c32e9b5f22c8651427ab81a1a49fcb15cb27"),
+            ("simulator_revision", "997a0de59a456dd84699605c178f12ec74addf84"),
+        ] {
+            contract[key] = serde_json::json!(value);
+        }
+        contract["spec_inventory_sha256"] = defense_v3_release()["spec_inventory_sha256"].clone();
+        contract
+    })
+}
+
+/// Raw Simulator wire identity, independent of the shared numerical layout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum WireProfile {
+    #[default]
+    V2,
+    DefenseV3,
+}
+
+impl WireProfile {
+    pub(crate) fn expected(contract: &Value) -> Result<Self> {
+        if contract == defense_v3_card_instance_contract() {
+            Ok(Self::DefenseV3)
+        } else if contract == &embedded_pins()["action_contract"] {
+            Ok(Self::V2)
+        } else {
+            Err(Error::contract("unsupported expected card-instance contract"))
+        }
+    }
+
+    pub(crate) fn frame_contract(self) -> &'static Value {
+        match self {
+            Self::V2 => &embedded_pins()["action_contract"],
+            Self::DefenseV3 => defense_v3_card_instance_contract(),
+        }
+    }
+
+    pub(crate) fn gameplay_api(self) -> &'static str {
+        self.frame_contract()["gameplay_api"].as_str().unwrap()
+    }
+
+    pub(crate) fn rule_set(self) -> &'static str {
+        self.frame_contract()["rule_set_version"].as_str().unwrap()
+    }
+
+    pub(crate) fn event_schema(self) -> &'static str {
+        match self {
+            Self::V2 => "2",
+            Self::DefenseV3 => "3",
+        }
+    }
+
+    pub(crate) fn rule_signature(self) -> &'static Value {
+        static DEFENSE_V3_RULE_SIGNATURE: OnceLock<Value> = OnceLock::new();
+        match self {
+            Self::V2 => &embedded_pins()["rule_signature"],
+            Self::DefenseV3 => DEFENSE_V3_RULE_SIGNATURE.get_or_init(|| {
+                json::text("be963cce45e25982ecd0512ebd91fc7dba26c38b44bd66f726813ab88b8b28a2")
+            }),
+        }
+    }
+
+    pub(crate) fn catalog_metadata(self) -> Value {
+        let contract = self.frame_contract();
+        serde_json::json!({
+            "catalog_schema_version": 2, "catalog_version": contract["catalog_version"],
+            "content_sha256": contract["catalog_sha256"], "definition_count": 296,
+            "locale": "ja", "rule_set_version": self.rule_set(),
+        })
+    }
+}
+
 pub(crate) const KINDS: &[&str] = &[
     "pray",
     "play_sequence",
@@ -74,7 +164,7 @@ pub(crate) fn refresh_label(
         "refresh positive integer threshold required",
     )?;
     crate::structured_controls::actions3(actions, budget, control)?;
-    let pins = pins(budget, control)?;
+    let profile = WireProfile::expected(actions.require("action_contract")?)?;
     let identity = json::object([
         ("options", json::copy(options, control)?),
         (
@@ -83,7 +173,7 @@ pub(crate) fn refresh_label(
         ),
         (
             "rule_signature",
-            json::copy(pins.root.require("rule_signature")?, control)?,
+            json::copy(profile.rule_signature(), control)?,
         ),
         (
             "action_config_hash",
@@ -235,20 +325,13 @@ fn status(value: &Value) -> Result<()> {
 
 /// Original schema2 HTTP observation. Dataset/Replay representations are not
 /// accepted under this entry point, and no legality is inferred from syntax.
-pub(crate) fn observation(
-    value: &Value,
-    viewer: Option<i128>,
-    budget: &Arc<Budget>,
-    control: &Control,
-) -> Result<()> {
-    observation_context(value, viewer, budget, control, false)
-}
-pub(crate) fn observation_context(
+pub(crate) fn observation_for_profile(
     value: &Value,
     viewer: Option<i128>,
     budget: &Arc<Budget>,
     control: &Control,
     disabled: bool,
+    profile: WireProfile,
 ) -> Result<()> {
     control.check()?;
     let _containers = budget.reserve(65536)?;
@@ -277,7 +360,7 @@ pub(crate) fn observation_context(
         &[],
     )?;
     is(value, "observation_schema_version", "2")?;
-    is(value, "rule_set_version", "true-match-1v1-v2")?;
+    is(value, "rule_set_version", profile.rule_set())?;
     is(value, "card_ref_scheme", "aes256-card-ref-v1")?;
     value.require("action_schema_version")?.integer(2, 2)?;
     let actor = validation::player(value.require("viewer_player_id")?)?;
@@ -448,7 +531,17 @@ fn hint_entries<'a>(
     }
     Ok(seen)
 }
+#[cfg(test)]
 pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()> {
+    hints_for_profile(value, obs, control, WireProfile::V2)
+}
+
+pub(crate) fn hints_for_profile(
+    value: &Value,
+    obs: &Value,
+    control: &Control,
+    profile: WireProfile,
+) -> Result<()> {
     value.closed(
         &["state_revision", "viewer_player_id", "action_options"],
         &[],
@@ -488,7 +581,7 @@ pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()>
         &[],
     )?;
     is(v, "action_options_schema_version", "2")?;
-    is(v, "rule_set_version", "true-match-1v1-v2")?;
+    is(v, "rule_set_version", profile.rule_set())?;
     is(v, "card_ref_scheme", "aes256-card-ref-v1")?;
     require(
         validation::player(v.require("actor")?)?
@@ -505,12 +598,30 @@ pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()>
     for name in &CARD_LISTS[1..] {
         hint_entries(v.require(name)?, own, control)?;
     }
-    for (name, rows) in v.require("candidate_groups")?.object()? {
-        require(!name.is_empty(), "empty candidate group")?;
+    let groups = v.require("candidate_groups")?.object()?;
+    if profile == WireProfile::DefenseV3 {
         require(
-            hint_entries(rows, own, control)?.is_subset(&usable),
+            groups.contains_key("defense:direct") == (v["required_choice"] == "defense"),
+            "direct defense group differs from required choice",
+        )?;
+    }
+    for (name, rows) in groups {
+        require(!name.is_empty(), "empty candidate group")?;
+        let group_cards = hint_entries(rows, own, control)?;
+        require(
+            group_cards.is_subset(&usable),
             "group is not usable-card subset",
         )?;
+        if profile == WireProfile::DefenseV3 && name == "defense:direct" {
+            require(
+                v["usable_cards"]
+                    .array()?
+                    .iter()
+                    .filter(|row| group_cards.contains(row["card_ref"].as_str().unwrap()))
+                    .eq(rows.array()?),
+                "direct defense order differs from usable cards",
+            )?;
+        }
     }
     let mut targets = BTreeSet::new();
     for target in v.require("valid_targets")?.array()? {
@@ -527,17 +638,18 @@ pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()>
 /// Validates one original actionable own frame. Perceived definition hashes
 /// authenticate supplied definitions only; no missing values are looked up.
 pub(crate) fn frame(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
-    frame_with_pins(value, budget, control, false)
+    frame_for_profile(value, budget, control, WireProfile::V2, false)
 }
 
-pub(crate) fn frame_for_rollout(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
-    frame_with_pins(value, budget, control, true)
+pub(crate) fn frame_for_rollout(value: &Value, budget: &Arc<Budget>, control: &Control, profile: WireProfile) -> Result<()> {
+    frame_for_profile(value, budget, control, profile, true)
 }
 
-fn frame_with_pins(
+pub(crate) fn frame_for_profile(
     value: &Value,
     budget: &Arc<Budget>,
     control: &Control,
+    profile: WireProfile,
     reuse: bool,
 ) -> Result<()> {
     control.check()?;
@@ -586,7 +698,7 @@ fn frame_with_pins(
     require(raw.len() <= 64 * 1024 * 1024, "frame exceeds64MiB")?;
     let _copy = json::admit(raw.len() + 65536, budget)?;
     let obs = payload.require("observation")?;
-    observation(obs, Some(actor), budget, control)?;
+    observation_for_profile(obs, Some(actor), budget, control, false, profile)?;
     require(
         obs.require("actionable")?.boolean()?
             && obs.require("current_player")?.integer(1, 2)? == actor
@@ -597,7 +709,7 @@ fn frame_with_pins(
             && payload.require("typed_metadata")? == obs.require("typed_action_schema")?,
         "original actor/frame/metadata mismatch",
     )?;
-    hints(payload.require("action_options")?, obs, control)?;
+    hints_for_profile(payload.require("action_options")?, obs, control, profile)?;
     if !payload.require("history_end")?.is_null() {
         validation::text_value(payload.require("history_end")?)?;
     }
@@ -658,7 +770,7 @@ fn frame_with_pins(
     // DecisionFrame._binding() adds these layout identities even though they
     // are not fields in the serialized frame DTO. Historical card frames bind
     // recipe/policy only; corrected frames additionally bind the full contract.
-    let contract = pins.require("action_contract")?;
+    let contract = profile.frame_contract();
     for key in ["input_recipe", "policy_input_version"] {
         fields.insert(key.into(), json::copy(contract.require(key)?, control)?);
     }
@@ -780,11 +892,12 @@ pub(super) fn column_binding(
     descriptor: &Value,
     budget: &Arc<Budget>,
     control: &Control,
+    profile: WireProfile,
 ) -> Result<()> {
     let pins = pins(budget, control)?;
     contract(
         descriptor.require("action_contract")?,
-        pins.root.require("action_contract")?,
+        profile.frame_contract(),
     )?;
     let codebook = json::object([
         ("codec", json::text("candidate-columns-v2")),
@@ -878,12 +991,51 @@ pub(crate) fn event(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<()> {
+    event_for_profile(value, recipe, budget, control, WireProfile::V2, None)
+}
+
+pub(crate) fn event_for_profile(
+    value: &Value,
+    recipe: &crate::structured_tokens::Recipe,
+    budget: &Arc<Budget>,
+    control: &Control,
+    profile: WireProfile,
+    viewer: Option<i128>,
+) -> Result<()> {
     control.check()?;
     require(
         recipe.is_corrected(),
         "corrected event requires explicit recipe",
     )?;
     let tag = value.require("type")?.string()?;
+    if profile == WireProfile::DefenseV3
+        && ["attack_declared", "attack_missed"].contains(&tag)
+        && value.get("attacker").is_none()
+    {
+        let keys: &[&str] = if tag == "attack_declared" {
+            &["type", "target", "attack", "attribute", "definition_ids"]
+        } else {
+            &["type", "target"]
+        };
+        value.closed(keys, &[])?;
+        let target = validation::player(value.require("target")?)?;
+        require(viewer.is_none_or(|v| v == target), "anonymous attack requires target viewer")?;
+        if tag == "attack_declared" {
+            value.require("attack")?.integer(i32::MIN as i128, i32::MAX as i128)?;
+            require(
+                ["none", "fire", "water", "wood", "earth", "light", "dark"]
+                    .contains(&value.require("attribute")?.string()?),
+                "unknown attack attribute",
+            )?;
+            let definitions = recipe.definition_ids()?;
+            let guardians = recipe.guardian_ids()?;
+            for id in value.require("definition_ids")?.array()? {
+                control.check()?;
+                require(definitions.contains(id) || guardians.contains(id), "attack definition namespace mismatch")?;
+            }
+        }
+        return Ok(());
+    }
     if is_concealed_draw(value) {
         value.closed(&["type", "player", "definition_id"], &[])?;
         return validation::player(value.require("player")?).map(|_| ());
@@ -1010,13 +1162,11 @@ pub(crate) fn diagnostic_header_envelope(
     ] {
         is(value, key, text)?;
     }
-    let pins = pins(budget, control)?;
-    contract(
-        value.require("action_contract")?,
-        pins.root.require("action_contract")?,
-    )?;
+    let action_contract = expected.actions.require("action_contract")?;
+    let profile = WireProfile::expected(action_contract)?;
+    contract(value.require("action_contract")?, profile.frame_contract())?;
     require(
-        value.require("rule_signature")? == pins.root.require("rule_signature")?
+        value.require("rule_signature")? == profile.rule_signature()
             && value.require("layout_signature")?.string()?
                 == crate::structured_controls::CARD_INSTANCE_SIGNATURE
             && !value.require("synthetic_capacity")?.boolean()?
@@ -1031,35 +1181,7 @@ pub(crate) fn diagnostic_header_envelope(
             && value.require("runtime_evidence")? == expected.runtime_evidence,
         "J6 expected declaration mismatch",
     )?;
-    let catalog = value.require("catalog")?;
-    catalog.closed(
-        &[
-            "catalog_schema_version",
-            "catalog_version",
-            "rule_set_version",
-            "locale",
-            "content_sha256",
-            "definition_count",
-        ],
-        &[],
-    )?;
-    catalog.require("catalog_schema_version")?.integer(2, 2)?;
-    catalog.require("definition_count")?.integer(296, 296)?;
-    for (key, text) in [
-        ("catalog_version", "public-ja-v3"),
-        ("rule_set_version", "true-match-1v1-v2"),
-        ("locale", "ja"),
-    ] {
-        is(catalog, key, text)?;
-    }
-    require(
-        catalog.require("content_sha256")?
-            == pins
-                .root
-                .require("action_contract")?
-                .require("catalog_sha256")?,
-        "J6 catalog hash mismatch",
-    )?;
+    require(value.require("catalog")? == &profile.catalog_metadata(), "J6 catalog mismatch")?;
     for key in ["episode_id", "policy", "run_id", "game_id", "bank_episode"] {
         validation::text_value(value.require(key)?)?;
     }
@@ -1742,13 +1864,13 @@ mod tests {
         let original = fixture(&[("bronze-club", None)], 0, &budget, &control);
         assert_eq!(embedded_pins(), &pins(&budget, &control).unwrap().root);
         for reuse in [false, true] {
-            frame_with_pins(&original, &budget, &control, reuse).unwrap();
+            frame_for_profile(&original, &budget, &control, WireProfile::V2, reuse).unwrap();
         }
         let mut altered = original;
         altered["payload"]["catalog"]["bronze-club"]["attack"] = json::integer(999);
         seal(&mut altered, &budget, &control);
-        let baseline = frame_with_pins(&altered, &budget, &control, false).unwrap_err();
-        let reused = frame_with_pins(&altered, &budget, &control, true).unwrap_err();
+        let baseline = frame_for_profile(&altered, &budget, &control, WireProfile::V2, false).unwrap_err();
+        let reused = frame_for_profile(&altered, &budget, &control, WireProfile::V2, true).unwrap_err();
         assert_eq!(baseline, reused);
     }
 
@@ -2084,53 +2206,45 @@ pub(crate) fn runtime_receipt(
         ],
         &[],
     )?;
-    value.require("schema_version")?.integer(1, 1)?;
-    let p = pins(budget, control)?;
-    contract(
-        value.require("action_contract")?,
-        p.root.require("action_contract")?,
-    )?;
+    let expected = value.require("action_contract")?;
+    let profile = WireProfile::expected(expected)?;
+    let v3 = profile == WireProfile::DefenseV3;
+    let schema = if v3 { 2 } else { 1 };
+    value.require("schema_version")?.integer(schema, schema)?;
+    contract(expected, profile.frame_contract())?;
     let build = value.require("build")?;
-    build.closed(
-        &[
-            "binary_sha256",
-            "spec_inventory_sha256",
-            "change_inventory_sha256",
-            "spec_files",
-            "change_files",
-        ],
-        &[],
-    )?;
-    for (key, pin) in [
-        ("binary_sha256", "approved_binary_sha256"),
-        ("change_inventory_sha256", "approved_change_sha256"),
-        ("spec_files", "approved_spec_files"),
-        ("change_files", "approved_change_files"),
-    ] {
+    let parsed;
+    if v3 {
+        require(build == defense_v3_release(), "runtime approved v3 release mismatch")?;
+    } else {
+        parsed = pins(budget, control)?;
+        build.closed(
+            &["binary_sha256", "spec_inventory_sha256", "change_inventory_sha256", "spec_files", "change_files"],
+            &[],
+        )?;
+        for (key, pin) in [
+            ("binary_sha256", "approved_binary_sha256"),
+            ("change_inventory_sha256", "approved_change_sha256"),
+            ("spec_files", "approved_spec_files"),
+            ("change_files", "approved_change_files"),
+        ] {
+            require(build.require(key)? == parsed.root.require(pin)?, "runtime approved release mismatch")?;
+        }
         require(
-            build.require(key)? == p.root.require(pin)?,
-            "runtime approved release mismatch",
+            build.require("spec_inventory_sha256")? == expected.require("spec_inventory_sha256")?,
+            "runtime approved spec inventory mismatch",
         )?;
     }
-    require(
-        build.require("spec_inventory_sha256")?
-            == p.root
-                .require("action_contract")?
-                .require("spec_inventory_sha256")?,
-        "runtime approved spec inventory mismatch",
-    )?;
     let binary = value.require("binary")?;
     binary.closed(&["path", "sha256", "identity"], &[])?;
     let source = value.require("source")?;
-    source.closed(&["path", "revision", "spec_files", "change_files"], &[])?;
+    source.closed(&["path", "revision", "spec_files", "change_files"], if v3 { &["dirty"] } else { &[] })?;
     require(
-        binary.require("sha256")? == p.root.require("approved_binary_sha256")?
-            && source.require("revision")?
-                == p.root
-                    .require("action_contract")?
-                    .require("simulator_revision")?
-            && source.require("spec_files")? == p.root.require("approved_spec_files")?
-            && source.require("change_files")? == p.root.require("approved_change_files")?,
+        (!v3 || source.require("dirty")? == &Value::Bool(false))
+            && binary.require("sha256")? == build.require("binary_sha256")?
+            && source.require("revision")? == expected.require("simulator_revision")?
+            && source.require("spec_files")? == build.require("spec_files")?
+            && source.require("change_files")? == build.require("change_files")?,
         "runtime source/binary release mismatch",
     )?;
     for v in [binary, source] {
@@ -2154,7 +2268,7 @@ pub(crate) fn runtime_receipt(
     executed.require("start_time")?.integer(1, i128::MAX)?;
     identity(executed.require("identity")?)?;
     require(
-        executed.require("sha256")? == p.root.require("approved_binary_sha256")?,
+        executed.require("sha256")? == build.require("binary_sha256")?,
         "executed release mismatch",
     )
 }
@@ -2176,7 +2290,12 @@ pub(crate) fn header6(value: &Value, budget: &Arc<Budget>, control: &Control) ->
         budget,
         control,
     )?;
-    runtime_receipt(value.require("runtime_evidence")?, budget, control)?;
+    let receipt = value.require("runtime_evidence")?;
+    runtime_receipt(receipt, budget, control)?;
+    require(
+        receipt.require("action_contract")? == value.require("action_contract")?,
+        "J6 runtime receipt profile mismatch",
+    )?;
     let (caps, costs) = if value.require("model_version")?.string()? == "3"
         && value.require("model_id")?.string()? == "lightgbm"
     {
@@ -2299,6 +2418,39 @@ mod full_validation_tests {
             );
         }
     }
+    #[test]
+    fn defense_v3_journal6_header_binds_rule_signature_catalog_and_release() {
+        let (b, c) = owners();
+        let all = fixture(include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"), &b, &c);
+        let mut header = all.root["journals"][0]["rows"][0].clone();
+        let legacy = header.clone();
+        let profile = WireProfile::DefenseV3;
+        let served = defense_v3_release();
+        let action = profile.frame_contract();
+        let receipt = &mut header["runtime_evidence"];
+        receipt["schema_version"] = json::integer(2);
+        receipt["action_contract"] = action.clone();
+        receipt["build"] = served.clone();
+        receipt["source"]["dirty"] = Value::Bool(false);
+        receipt["source"]["revision"] = action["simulator_revision"].clone();
+        receipt["source"]["spec_files"] = served["spec_files"].clone();
+        receipt["source"]["change_files"] = served["change_files"].clone();
+        receipt["binary"]["sha256"] = served["binary_sha256"].clone();
+        receipt["executed"]["sha256"] = served["binary_sha256"].clone();
+        header["catalog"] = profile.catalog_metadata();
+        header["action_contract"] = action.clone();
+        header["actions"]["action_contract"] = action.clone();
+        header["action_config_hash"] = json::text(&digest(&header["actions"], &b, &c).unwrap());
+        header["rule_signature"] = profile.rule_signature().clone();
+        header6(&header, &b, &c).unwrap();
+        header6(&legacy, &b, &c).unwrap();
+        for key in ["rule_signature", "catalog", "runtime_evidence", "action_contract"] {
+            let mut mixed = header.clone();
+            mixed[key] = legacy[key].clone();
+            assert!(header6(&mixed, &b, &c).is_err(), "{key}");
+        }
+    }
+
     #[test]
     fn card_instance_tree3_full_j6_raw_tokens_and_closed_header_transactions() {
         let (b, c) = owners();
@@ -2959,7 +3111,7 @@ pub(crate) fn action_value2(value: &Value, obs: Option<&Value>) -> Result<()> {
 }
 /// Complete participant-visible Replay2 shape and own accepted-action closure.
 /// Replay is structural/control evidence only and never enters staged features.
-pub(crate) fn reconcile_replay2<'a>(
+pub(crate) fn reconcile_replay_for_profile<'a>(
     value: &'a Value,
     game: &str,
     viewer: i128,
@@ -2967,6 +3119,7 @@ pub(crate) fn reconcile_replay2<'a>(
     outcome: &Value,
     b: &Arc<Budget>,
     c: &Control,
+    profile: WireProfile,
 ) -> Result<Option<&'a Value>> {
     c.check()?;
     value.closed(
@@ -2989,9 +3142,9 @@ pub(crate) fn reconcile_replay2<'a>(
         "Replay2 game/viewer differs",
     )?;
     for (key, pin) in [
-        ("rule_set_version", "true-match-1v1-v2"),
+        ("rule_set_version", profile.rule_set()),
         ("observation_schema_version", "2"),
-        ("public_event_schema_version", "2"),
+        ("public_event_schema_version", profile.event_schema()),
         ("card_ref_scheme", "aes256-card-ref-v1"),
     ] {
         is(value, key, pin)?;
@@ -3054,7 +3207,7 @@ pub(crate) fn reconcile_replay2<'a>(
             let actor = validation::player(d.require("actor")?)?;
             let aborted = d.require("aborted")?.boolean()?;
             let obs = d.require("observation")?;
-            observation_context(obs, Some(viewer), b, c, aborted)?;
+            observation_for_profile(obs, Some(viewer), b, c, aborted, profile)?;
             require(
                 obs.require("current_player")?.integer(1, 2)? == actor,
                 "Replay2 actor/observation differs",
@@ -3062,7 +3215,7 @@ pub(crate) fn reconcile_replay2<'a>(
             if !d.require("action_options")?.is_null() {
                 let raw = json::canonical(d.require("action_options")?, b, c)?;
                 let _scratch = json::admit(raw.len() + 65536, b)?;
-                hints(
+                hints_for_profile(
                     &json::object([
                         (
                             "state_revision",
@@ -3076,6 +3229,7 @@ pub(crate) fn reconcile_replay2<'a>(
                     ]),
                     obs,
                     c,
+                    profile,
                 )?;
             }
             let visible = d.require("visible_action")?;
@@ -3093,7 +3247,7 @@ pub(crate) fn reconcile_replay2<'a>(
                 }
             }
             for e in d.require("visible_events")?.array()? {
-                event(e, &recipe, b, c)?;
+                event_for_profile(e, &recipe, b, c, profile, Some(viewer))?;
             }
             if actor == viewer {
                 if aborted {

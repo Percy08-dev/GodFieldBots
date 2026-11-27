@@ -1,4 +1,4 @@
-"""Closed original public v2 DTOs. Syntax and visibility checks, never legality.
+"""Closed original card-instance DTOs. Syntax and visibility checks, never legality.
 
 HTTP, replay control suppression, and Dataset observations have distinct entry
 points. No missing wire field is synthesized and opaque refs are never features.
@@ -10,7 +10,13 @@ import re
 import uuid
 from typing import Any
 
-from gf_common.card_instance import CATALOG_META, RULE_SET
+from gf_common.card_instance import (
+    _DEFENSE_V3_INFO,
+    CATALOG_META,
+    RULE_SET,
+    CardInstanceContract,
+    catalog_metadata,
+)
 from gf_common.card_instance_vocab import DEFINITION_SHA256
 from gf_common.domain import (
     ContractError,
@@ -52,6 +58,7 @@ _HTTP_FIELDS = {
 }
 _FLAGS = {"can_pray", "can_discard", "can_sacrifice", "can_allow"}
 _CARD_LISTS = {"usable_cards", "exchange_cards", "sell_cards", "buy_cards", "phenomenon_cards"}
+DIRECT_DEFENSE_GROUP = "defense:direct"
 _SUBCLASSES = {"weapon", "additional_weapon", "attack_support", "defense", "status", "utility"}
 _ROLES = {
     "weapon",
@@ -66,7 +73,15 @@ _ROLES = {
 
 def _pin(value: Json, name: str, expected: Any) -> None:
     if type(value[name]) is not type(expected) or value[name] != expected:
-        raise UnsupportedContract("unsupported public v2 " + name)
+        raise UnsupportedContract("unsupported public card-instance " + name)
+
+
+def _rule_set(action_contract: CardInstanceContract | None) -> str:
+    return RULE_SET if action_contract is None else action_contract.rule_set_version
+
+
+def _event_schema(action_contract: CardInstanceContract | None) -> str:
+    return "2" if action_contract is None else action_contract.public_event_schema_version
 
 
 def card_ref(value: Any) -> None:
@@ -114,7 +129,8 @@ def action_descriptors(choice: str | None) -> list[Json]:
 
 
 def _observation(
-    value: Any, viewer: int | None, *, representation: str, disabled: bool = False
+    value: Any, viewer: int | None, *, representation: str, disabled: bool = False,
+    action_contract: CardInstanceContract | None = None,
 ) -> Json:
     closed(value, _BASE_OBSERVATION | (_HTTP_FIELDS if representation != "dataset" else set()))
     _pin(value, "observation_schema_version", "2")
@@ -192,7 +208,7 @@ def _observation(
         raise ContractError("Fog opponent visibility mismatch")
     result(value["result"])
     if representation != "dataset":
-        _pin(value, "rule_set_version", RULE_SET)
+        _pin(value, "rule_set_version", _rule_set(action_contract))
         _pin(value, "card_ref_scheme", CARD_REF_SCHEME)
         _pin(value, "action_schema_version", 2)
         integer(value["turns_until_end_of_world"], 0, 2**32 - 1)
@@ -213,13 +229,17 @@ def _observation(
     return clone(value)
 
 
-def observation(value: Any, viewer: int | None = None) -> Json:
-    return _observation(value, viewer, representation="http")
+def observation(
+    value: Any, viewer: int | None = None, *, action_contract: CardInstanceContract | None = None,
+) -> Json:
+    return _observation(value, viewer, representation="http", action_contract=action_contract)
 
 
-def replay_observation(value: Any, viewer: int, *, aborted: bool) -> Json:
+def replay_observation(
+    value: Any, viewer: int, *, aborted: bool, action_contract: CardInstanceContract | None = None,
+) -> Json:
     boolean(aborted)
-    return _observation(value, viewer, representation="replay", disabled=aborted)
+    return _observation(value, viewer, representation="replay", disabled=aborted, action_contract=action_contract)
 
 
 def dataset_observation(value: Any, viewer: int | None = None) -> Json:
@@ -278,7 +298,9 @@ def validate_action(value: Any, obs: Json | None = None) -> Json:
     return clone(value)
 
 
-def _validate_action_options(value: Any, obs: Json) -> None:
+def _validate_action_options(
+    value: Any, obs: Json, *, action_contract: CardInstanceContract | None = None,
+) -> None:
     fields = (
         {
             "action_options_schema_version",
@@ -296,7 +318,7 @@ def _validate_action_options(value: Any, obs: Json) -> None:
     closed(value, fields)
     for name, expected in (
         ("action_options_schema_version", "2"),
-        ("rule_set_version", RULE_SET),
+        ("rule_set_version", _rule_set(action_contract)),
         ("card_ref_scheme", CARD_REF_SCHEME),
     ):
         _pin(value, name, expected)
@@ -327,10 +349,18 @@ def _validate_action_options(value: Any, obs: Json) -> None:
     lists = {name: entries(value[name]) for name in _CARD_LISTS}
     if not isinstance(value["candidate_groups"], dict):
         raise ContractError("candidate groups object required")
+    direct_required = action_contract is not None and action_contract.requires_direct_defense
+    if direct_required and ((DIRECT_DEFENSE_GROUP in value["candidate_groups"]) != (obs["required_choice"] == "defense")):
+        raise ContractError("defense:direct presence differs from required choice")
     for name, rows in value["candidate_groups"].items():
         text_value(name)
-        if not entries(rows) <= lists["usable_cards"]:
+        references = entries(rows)
+        if not references <= lists["usable_cards"]:
             raise ContractError("candidate group is not a usable-card subset")
+        if direct_required and name == DIRECT_DEFENSE_GROUP and rows != [
+            row for row in value["usable_cards"] if row["card_ref"] in references
+        ]:
+            raise ContractError("defense:direct order differs from usable cards")
     targets = value["valid_targets"]
     if not isinstance(targets, list):
         raise ContractError("target array required")
@@ -342,19 +372,25 @@ def _validate_action_options(value: Any, obs: Json) -> None:
         boolean(value[name])
 
 
-def action_options(value: Any, obs: Json) -> Json:
-    obs = observation(obs)
+def action_options(value: Any, obs: Json, *, action_contract: CardInstanceContract | None = None) -> Json:
+    obs = observation(obs, action_contract=action_contract)
     if not obs["actionable"]:
         raise ContractError("ActionOptions require the actionable actor")
-    _validate_action_options(value, obs)
+    _validate_action_options(value, obs, action_contract=action_contract)
     return clone(value)
 
 
-def actor_action_options(value: Any, obs: Json, *, raw: bool = True) -> Json:
-    return _actor_action_options(value, observation(obs), raw=raw)
+def actor_action_options(
+    value: Any, obs: Json, *, raw: bool = True, action_contract: CardInstanceContract | None = None,
+) -> Json:
+    return _actor_action_options(
+        value, observation(obs, action_contract=action_contract), raw=raw, action_contract=action_contract,
+    )
 
 
-def _actor_action_options(value: Any, obs: Json, *, raw: bool) -> Json:
+def _actor_action_options(
+    value: Any, obs: Json, *, raw: bool, action_contract: CardInstanceContract | None,
+) -> Json:
     # The observation is independently validated and owned by this record.
     closed(value, {"state_revision", "action_options"} | (set() if raw else {"viewer_player_id"}))
     integer(value["state_revision"])
@@ -366,13 +402,14 @@ def _actor_action_options(value: Any, obs: Json, *, raw: bool) -> Json:
             raise ContractError("ActionOptions wrapper actor mismatch")
     if not obs["actionable"]:
         raise ContractError("ActionOptions require the actionable actor")
-    _validate_action_options(value["action_options"], obs)
+    _validate_action_options(value["action_options"], obs, action_contract=action_contract)
     return clone(value)
 
 
-def catalog(value: Any) -> Json:
-    closed(value, set(CATALOG_META) | {"definitions"})
-    for name, expected in CATALOG_META.items():
+def catalog(value: Any, *, action_contract: CardInstanceContract | None = None) -> Json:
+    metadata = catalog_metadata(action_contract)
+    closed(value, set(metadata) | {"definitions"})
+    for name, expected in metadata.items():
         _pin(value, name, expected)
     if not isinstance(value["definitions"], list) or len(value["definitions"]) != 296:
         raise ContractError("catalog count mismatch")
@@ -410,7 +447,15 @@ def catalog(value: Any) -> Json:
     return {definition["definition_id"]: clone(definition) for definition in value["definitions"]}
 
 
-def public_info(value: Any) -> Json:
+def public_info(value: Any, *, action_contract: CardInstanceContract | None = None) -> Json:
+    if action_contract is not None and action_contract.requires_direct_defense:
+        closed(value, set(_DEFENSE_V3_INFO))
+        closed(value["card_catalog"], set(_DEFENSE_V3_INFO["card_catalog"]))
+        for name, expected in _DEFENSE_V3_INFO["card_catalog"].items():
+            _pin(value["card_catalog"], name, expected)
+        for name, expected in _DEFENSE_V3_INFO.items():
+            _pin(value, name, expected)
+        return clone(value)
     closed(
         value,
         {
@@ -452,11 +497,34 @@ def is_concealed_draw(event: Json) -> bool:
     return event["type"] == "artifact_drawn" and event["definition_id"] == "concealed"
 
 
-def validate_events(value: Any, *, corrected: bool | None = None) -> None:
+def validate_events(
+    value: Any, *, corrected: bool | None = None, action_contract: CardInstanceContract | None = None,
+    viewer: int | None = None,
+) -> None:
     """Validate the shared wire DTO or the narrower selected Bank layout."""
     if not isinstance(value, list):
         raise ContractError("event array required")
+    fog_projection = _event_schema(action_contract) == "3"
     for event in value:
+        if (fog_projection and isinstance(event, dict)
+                and event.get("type") in ("attack_declared", "attack_missed") and "attacker" not in event):
+            declared = event["type"] == "attack_declared"
+            closed(event, {"type", "target"} | ({"attack", "attribute", "definition_ids"} if declared else set()))
+            player(event["target"])
+            if viewer is not None and event["target"] != viewer:
+                raise ContractError("anonymous attack projection requires the target viewer")
+            if declared:
+                integer(event["attack"], -(2**31), 2**31 - 1)
+                if event["attribute"] not in ("none", "fire", "water", "wood", "earth", "light", "dark"):
+                    raise ContractError("unknown anonymous attack attribute")
+                definitions = event["definition_ids"]
+                if not isinstance(definitions, list):
+                    raise ContractError("ordered attack definition array required")
+                for definition in definitions:
+                    text_value(definition)
+                    if definition not in DEFINITION_SHA256 and definition not in GUARDIANS:
+                        raise ContractError("unknown public event-time definition namespace")
+            continue
         if isinstance(event, dict) and event.get("type") == "safe":
             closed(event, {"type", "player"})
             player(event["player"])
@@ -480,14 +548,16 @@ def validate_events(value: Any, *, corrected: bool | None = None) -> None:
                 raise ContractError("unknown public event-time definition namespace")
 
 
-def event_feed(value: Any) -> Json:
+def event_feed(
+    value: Any, *, action_contract: CardInstanceContract | None = None, viewer: int | None = None,
+) -> Json:
     closed(
         value,
         {"public_event_schema_version", "rule_set_version", "events", "next_cursor", "has_more"},
     )
-    _pin(value, "public_event_schema_version", "2")
-    _pin(value, "rule_set_version", RULE_SET)
-    validate_events(value["events"])
+    _pin(value, "public_event_schema_version", _event_schema(action_contract))
+    _pin(value, "rule_set_version", _rule_set(action_contract))
+    validate_events(value["events"], action_contract=action_contract, viewer=viewer)
     boolean(value["has_more"])
     if value["next_cursor"] is not None:
         text_value(value["next_cursor"])
@@ -532,7 +602,9 @@ def join_response(value: Any, game: str) -> Json:
     return clone(value)
 
 
-def act_response(value: Any, payload: Json, viewer: int) -> Json:
+def act_response(
+    value: Any, payload: Json, viewer: int, *, action_contract: CardInstanceContract | None = None,
+) -> Json:
     closed(
         value,
         {
@@ -549,8 +621,8 @@ def act_response(value: Any, payload: Json, viewer: int) -> Json:
             "action_options",
         },
     )
-    _pin(value, "public_event_schema_version", "2")
-    _pin(value, "rule_set_version", RULE_SET)
+    _pin(value, "public_event_schema_version", _event_schema(action_contract))
+    _pin(value, "rule_set_version", _rule_set(action_contract))
     _pin(value, "card_ref_scheme", CARD_REF_SCHEME)
     integer(value["previous_revision"])
     integer(value["state_revision"], value["previous_revision"] + 1)
@@ -564,10 +636,11 @@ def act_response(value: Any, payload: Json, viewer: int) -> Json:
     result(value["result"])
     if (value["status"] == "terminal") != (value["result"] is not None):
         raise ContractError("acknowledgement status/result mismatch")
-    validate_events(value["events"])
+    validate_events(value["events"], action_contract=action_contract, viewer=viewer)
     obs = value["next_observation"]
     if obs is not None:
-        _observation(obs, viewer, representation="http", disabled=value["status"] != "active")
+        _observation(obs, viewer, representation="http", disabled=value["status"] != "active",
+                     action_contract=action_contract)
         if obs["state_revision"] != value["state_revision"]:
             raise ContractError("acknowledgement observation revision mismatch")
         if obs["result"] != value["result"]:
@@ -575,7 +648,7 @@ def act_response(value: Any, payload: Json, viewer: int) -> Json:
     if value["action_options"] is not None:
         if obs is None:
             raise ContractError("ActionOptions lack corresponding acknowledgement observation")
-        action_options(value["action_options"], obs)
+        action_options(value["action_options"], obs, action_contract=action_contract)
     return clone(value)
 
 
@@ -602,7 +675,7 @@ def _closure(value: Any) -> None:
         raise UnsupportedContract("unknown closure kind")
 
 
-def replay(value: Any, game: str, viewer: int) -> Json:
+def replay(value: Any, game: str, viewer: int, *, action_contract: CardInstanceContract | None = None) -> Json:
     closed(
         value,
         {
@@ -621,9 +694,9 @@ def replay(value: Any, game: str, viewer: int) -> Json:
     if value["game_id"] != game or value["viewer_player_id"] != viewer:
         raise ContractError("replay identity mismatch")
     for name, expected in (
-        ("rule_set_version", RULE_SET),
+        ("rule_set_version", _rule_set(action_contract)),
         ("observation_schema_version", "2"),
-        ("public_event_schema_version", "2"),
+        ("public_event_schema_version", _event_schema(action_contract)),
         ("card_ref_scheme", CARD_REF_SCHEME),
     ):
         _pin(value, name, expected)
@@ -652,11 +725,12 @@ def replay(value: Any, game: str, viewer: int) -> Json:
             )
             player(decision["actor"])
             boolean(decision["aborted"])
-            obs = replay_observation(decision["observation"], viewer, aborted=decision["aborted"])
+            obs = replay_observation(decision["observation"], viewer, aborted=decision["aborted"],
+                                     action_contract=action_contract)
             if decision["actor"] != obs["current_player"]:
                 raise ContractError("replay actor differs from original observation")
             if decision["action_options"] is not None:
-                _validate_action_options(decision["action_options"], obs)
+                _validate_action_options(decision["action_options"], obs, action_contract=action_contract)
             visible = decision["visible_action"]
             if visible is not None:
                 if not isinstance(visible, dict):
@@ -668,7 +742,7 @@ def replay(value: Any, game: str, viewer: int) -> Json:
                     validate_action(visible["action"], obs if decision["actor"] == viewer else None)
                 else:
                     raise ContractError("unknown visible Action kind")
-            validate_events(decision["visible_events"])
+            validate_events(decision["visible_events"], action_contract=action_contract, viewer=viewer)
     return clone(value)
 
 
@@ -684,7 +758,7 @@ def dataset_action(value: Any, *, action_schema_version: Any) -> Json:
     return clone(value)
 
 
-def own_visible_input(value: Any) -> Any:
+def own_visible_input(value: Any, *, action_contract: CardInstanceContract | None = None) -> Any:
     """Validate an original participant input and its exact perceived subset.
 
     The immutable digest map authenticates supplied visible definitions only;
@@ -695,14 +769,15 @@ def own_visible_input(value: Any) -> Any:
 
     if type(value) is not DecisionInput:
         raise ContractError("original participant DecisionInput required")
-    obs = observation(value.observation)
+    obs = (observation(value.observation) if action_contract is None
+           else observation(value.observation, action_contract=action_contract))
     if not obs["actionable"]:
         raise ContractError("structured frame requires actionable own view")
     if canonical(value.typed_metadata) != canonical(obs["typed_action_schema"]):
         raise ContractError("original typed metadata mismatch")
     if not isinstance(value.events, tuple):
         raise ContractError("owned complete event tuple required")
-    validate_events(list(value.events))
+    validate_events(list(value.events), action_contract=action_contract, viewer=obs["viewer_player_id"])
     if value.history_end is not None:
         text_value(value.history_end)
     visible = {card["definition_id"] for card in obs["own"]["cards"]}
@@ -716,35 +791,42 @@ def own_visible_input(value: Any) -> Any:
         if (definition["classification"]["definition_class"] != "owned_card"
                 or (card["kind"] == "miracle") != (definition["kind"] == "miracles")):
             raise ContractError("observed kind/class differs from own perceived definition")
-    hints = _actor_action_options(value.action_options, obs, raw=False)
+    hints = _actor_action_options(value.action_options, obs, raw=False, action_contract=action_contract)
     return DecisionInput(obs, tuple(clone(list(value.events))), value.history_end,
                          tuple(clone(list(value.typed_metadata))), clone(value.catalog), hints)
 
 
-def decision_input(obs: Json, events: list[Json], history_end: str | None, definitions: Json,
-                   action_options: Json | None = None) -> Any:
+def decision_input(
+    obs: Json, events: list[Json], history_end: str | None, definitions: Json,
+    action_options: Json | None = None, *, action_contract: CardInstanceContract | None = None,
+) -> Any:
     """Bind validated raw HTTP hints to this original acting participant view."""
     from gf_common.domain import DecisionInput
-    original = observation(obs)
+    original = observation(obs, action_contract=action_contract)
     visible = {card["definition_id"] for card in original["own"]["cards"]}
     try:
         own_catalog = {name: clone(definitions[name]) for name in sorted(visible)}
     except KeyError as error:
         raise ContractError("missing own perceived definition") from error
-    raw_hints = actor_action_options(action_options, original, raw=True)
+    raw_hints = actor_action_options(action_options, original, raw=True, action_contract=action_contract)
     hints = {**raw_hints, "viewer_player_id": original["viewer_player_id"]}
     return own_visible_input(DecisionInput(original, tuple(clone(events)), history_end,
-        tuple(clone(original["typed_action_schema"])), own_catalog, hints))
+        tuple(clone(original["typed_action_schema"])), own_catalog, hints), action_contract=action_contract)
 
 
-def replay_closure(value: Json, game: str, viewer: int) -> Json | None:
-    return replay(value, game, viewer)["episode_end"]
+def replay_closure(
+    value: Json, game: str, viewer: int, *, action_contract: CardInstanceContract | None = None,
+) -> Json | None:
+    return replay(value, game, viewer, action_contract=action_contract)["episode_end"]
 
 
-def reconcile_replay(value: Json, viewer: int, accepted: list[Json], outcome: Any) -> None:
+def reconcile_replay(
+    value: Json, viewer: int, accepted: list[Json], outcome: Any, *,
+    action_contract: CardInstanceContract | None = None,
+) -> None:
     if type(value.get("game_id")) is not str:
         raise ContractError("replay game identity required")
-    checked = replay(value, value["game_id"], viewer)
+    checked = replay(value, value["game_id"], viewer, action_contract=action_contract)
     actual = []
     for turn in checked["turns"]:
         for decision in turn["decisions"]:

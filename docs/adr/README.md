@@ -14,6 +14,8 @@
 
 ## 一覧
 
+[0079](0079-simulator-v3-direct-defense.md) — Simulator v3 の防御候補と霧の攻撃イベントを、版を固定した Action profile で取り込む。
+
 [0078](0078-model-documentation.md) — モデル構造の一覧と個別ページを管理し、
 ニューラルモデルの代表 CPU 実行から SVG を生成する。
 

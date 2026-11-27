@@ -18,6 +18,7 @@ use crate::{
     error::{Error, Result},
     json::{self, Value, ValueExt},
     structured_controls::digest,
+    structured_journal::card_instance::{DEFENSE_V3_PROFILE, WireProfile, defense_v3_card_instance_contract, defense_v3_release},
 };
 use rules::{Card, Incoming};
 use serde::{Deserialize, Serialize};
@@ -114,13 +115,26 @@ fn sacrifice_card_instance_contract() -> &'static Value {
     &CONTRACT
 }
 
-fn is_shared_card_instance_contract(contract: &Value) -> bool {
+pub(crate) fn is_shared_card_instance_contract(contract: &Value) -> bool {
     contract == shared_card_instance_contract()
         || contract == strength_powder_card_instance_contract()
         || contract == dream_compat_card_instance_contract()
         || contract == moon_dream_card_instance_contract()
         || contract == pestle_mirage_card_instance_contract()
         || contract == sacrifice_card_instance_contract()
+        || contract == defense_v3_card_instance_contract()
+}
+
+fn wire_profile_for_runtime(contract: &Value) -> Result<WireProfile> {
+    ensure(
+        is_shared_card_instance_contract(contract),
+        "approved shared action contract required",
+    )?;
+    Ok(if contract["profile_id"] == DEFENSE_V3_PROFILE {
+        WireProfile::DefenseV3
+    } else {
+        WireProfile::V2
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -191,8 +205,8 @@ impl Config {
             "invalid channel weight",
         )?;
         let profile = c.action_contract["profile_id"].as_str();
-        let uses_pestle_build = matches!(profile, Some(PESTLE_MIRAGE_PROFILE | SACRIFICE_PROFILE));
-        c.protects_sacrifice_artifacts = profile == Some(SACRIFICE_PROFILE);
+        let uses_pestle_build = matches!(profile, Some(PESTLE_MIRAGE_PROFILE | SACRIFICE_PROFILE | DEFENSE_V3_PROFILE));
+        c.protects_sacrifice_artifacts = matches!(profile, Some(SACRIFICE_PROFILE | DEFENSE_V3_PROFILE));
         c.mirage_danger_requires_opponent = uses_pestle_build;
         c.requires_powder_weapon = uses_pestle_build
             || c.action_contract == *strength_powder_card_instance_contract()
@@ -200,8 +214,17 @@ impl Config {
             || c.action_contract == *moon_dream_card_instance_contract();
         Ok(c)
     }
+    pub(crate) fn wire_profile(&self) -> WireProfile {
+        if self.action_contract["profile_id"] == DEFENSE_V3_PROFILE {
+            WireProfile::DefenseV3
+        } else {
+            WireProfile::V2
+        }
+    }
     fn simulator_binary_sha256(&self) -> &'static str {
-        if matches!(
+        if self.wire_profile() == WireProfile::DefenseV3 {
+            defense_v3_release()["binary_sha256"].as_str().unwrap()
+        } else if matches!(
             self.action_contract["profile_id"].as_str(),
             Some(PESTLE_MIRAGE_PROFILE | SACRIFICE_PROFILE)
         ) {
@@ -242,6 +265,7 @@ pub struct Input {
     pub action_kinds: Vec<String>,
     pub cards: Vec<Card>,
     pub usable: Vec<bool>,
+    pub defense_direct: Option<u32>,
     pub targets: Vec<String>,
     pub trade: [Vec<usize>; 3],
     pub phenomena: Vec<usize>,
@@ -258,8 +282,7 @@ pub struct Input {
     pub events: Arc<Vec<VisibleEvent>>,
 }
 impl Input {
-    /// Original public DTO boundary. Corrected-layout frame hashes retain their
-    /// historical contract; Config independently binds the shared runtime contract.
+    /// Original public DTO boundary. The expected Config selects the raw profile.
     pub fn parse(
         frame: &Value,
         events: &Value,
@@ -267,7 +290,9 @@ impl Input {
         budget: &Arc<Budget>,
         control: &Control,
     ) -> Result<Self> {
-        crate::structured_journal::card_instance::frame(frame, budget, control)?;
+        use crate::structured_journal::card_instance;
+        let profile = config.wire_profile();
+        card_instance::frame_for_profile(frame, budget, control, profile, false)?;
         let actor = frame["actor"].as_u64().unwrap() as u8;
         let events = events.array()?;
         let boundary = frame["boundary"]["end"].as_u64().unwrap() as usize;
@@ -276,14 +301,10 @@ impl Input {
             events.len() == boundary,
             "own events must equal exact frame prefix",
         )?;
-        let pins: Value = serde_json::from_slice(include_bytes!(
-            "../../assets/card-instance-validation-pins-v2.json"
-        ))
-        .unwrap();
         let mut chain = crate::structured_journal::event_prefix_initial(
             actor as i128,
             &frame["episode"],
-            Some(&pins["action_contract"]),
+            Some(profile.frame_contract()),
             budget,
             control,
         )?;
@@ -291,7 +312,7 @@ impl Input {
         let recipe = crate::structured_tokens::Recipe::corrected(16, budget, control)?;
         let mut typed_events = Vec::with_capacity(events.len());
         for e in events {
-            crate::structured_journal::card_instance::event(e, &recipe, budget, control)?;
+            card_instance::event_for_profile(e, &recipe, budget, control, profile, Some(actor as i128))?;
             chain = crate::structured_journal::event_prefix_next(&chain, e, budget, control)?;
             hashes.push(chain);
             typed_events.push(match e["type"].as_str().unwrap() {
@@ -368,6 +389,12 @@ impl Input {
         for slot in slots("usable_cards") {
             usable[slot] = true;
         }
+        let defense_direct = (config.wire_profile() == WireProfile::DefenseV3
+            && obs["required_choice"] == "defense").then(|| {
+            hints["candidate_groups"]["defense:direct"].as_array().unwrap().iter().fold(0u32, |mask, row| {
+                mask | (1 << refs[row["card_ref"].as_str().unwrap()])
+            })
+        });
         let targets = config
             .targets
             .iter()
@@ -430,6 +457,7 @@ impl Input {
                 .collect(),
             cards,
             usable,
+            defense_direct,
             targets,
             trade: [
                 slots("exchange_cards"),

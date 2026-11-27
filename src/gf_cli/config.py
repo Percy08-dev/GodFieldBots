@@ -374,7 +374,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults = asdict(ActionConfigV2(action_contract=engineering_contract()))
     elif name == "actions" and values.get("version") == "3":
         defaults = asdict(ActionConfigV3(action_contract=card_instance_contract()))
-    elif name == "server" and values.get("gameplay_api") == "v2":
+    elif name == "server" and values.get("gameplay_api") in ("v2", "v3"):
         defaults = asdict(CorrectedServerConfigV2() if values.get("simulator_revision") == CORRECTED_SIMULATOR_REVISION else ServerConfigV2())
     elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
@@ -506,22 +506,23 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         data = _merge(data, overrides)
     structured_actions = data.get("actions", {}).get("version") == "2"
     card_instance_actions = data.get("actions", {}).get("version") == "3"
-    card_instance_server = data.get("server", {}).get("gameplay_api") == "v2"
+    gameplay_api = data.get("server", {}).get("gameplay_api")
+    card_instance_server = gameplay_api in ("v2", "v3")
     card_server_cls: type[ServerConfigV2] = ServerConfigV2
     card_revision = CARD_INSTANCE_SIMULATOR_REVISION
     if card_instance_actions != card_instance_server:
-        raise ContractError("actions3 requires an explicit Gameplay v2 server and conversely")
+        raise ContractError("actions3 requires an explicit card-instance Gameplay server and conversely")
     if card_instance_actions:
         if "action_contract" not in data["actions"]:
             raise ContractError("raw actions3 Config must explicitly declare an action_contract")
         selected_contract = parse_card_instance_contract(data["actions"]["action_contract"])
         card_revision = selected_contract.simulator_revision
-        if data["server"].get("simulator_revision") != card_revision:
-            raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
+        if data["server"].get("simulator_revision") != card_revision or gameplay_api != selected_contract.gameplay_api:
+            raise ContractError("Gameplay API and simulator revision must match the explicit pinned profile")
         if is_corrected_contract(selected_contract):
             card_server_cls = CorrectedServerConfigV2
         base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
-        base["server"] = asdict(card_server_cls())
+        base["server"] = asdict(card_server_cls(gameplay_api=selected_contract.gameplay_api))
         base["run"] = asdict(RunConfigV2())
         if "player_runtime" in data.get("run", {}):
             base["run"]["player_runtime"] = player_runtime(data["run"]["player_runtime"],game_concurrency=data["run"].get("concurrency",2))
@@ -569,11 +570,16 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
     """Existing normalized validation/construction shared with supervised input."""
     structured_actions = effective["actions"].get("version") == "2"
     card_instance_actions = effective["actions"].get("version") == "3"
-    card_instance_server = effective["server"].get("gameplay_api") == "v2"
+    gameplay_api = effective["server"].get("gameplay_api")
+    card_instance_server = gameplay_api in ("v2", "v3")
+    if card_instance_actions != card_instance_server:
+        raise ContractError("actions3 requires an explicit card-instance Gameplay server and conversely")
     card_server_cls: type[ServerConfigV2] = ServerConfigV2
     card_revision = CARD_INSTANCE_SIMULATOR_REVISION
     if card_instance_actions:
         selected_contract = parse_card_instance_contract(effective["actions"]["action_contract"])
+        if gameplay_api != selected_contract.gameplay_api:
+            raise ContractError("Gameplay API must match the explicit pinned profile")
         card_revision = selected_contract.simulator_revision
         if is_corrected_contract(selected_contract):
             card_server_cls = CorrectedServerConfigV2
@@ -790,7 +796,7 @@ def _validate_rust_player_profile(*, run: Json, server: Json, actions: Any,
             or type(opponent) is RefreshHeuristicConfig):
         raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
     if (type(actions) is not ActionConfigV3 or not is_shared_contract(actions.action_contract)
-            or server.get("gameplay_api") != "v2" or server["external_url"] is not None
+            or server.get("gameplay_api") != actions.action_contract.gameplay_api or server["external_url"] is not None
             or type(model) is not expected_model
             or model.checkpoint is not None or type(training) is not PPOTrainingConfig
             or run["split"] != "train" or preprocessing.backend != "python"

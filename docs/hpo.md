@@ -471,16 +471,17 @@ resumeせず、新しいcampaign名で`fresh`を使用してください。過�
 ### 保存先の設定
 
 新規の[1,000更新の収束診断](../configs/hpo/mlp-256-convergence-1000.toml)は、
-月神・〈夢〉・ちからの粉と、あぶないキネ＋〈蜃気楼〉の修正を含むSimulator
-`6d50603` と、「捨てる」「ささげる」の対象判定を揃えたBot候補生成を使います。
+固定版 Simulator v3 `997a0de` と、同じ revision の `defense:direct` を参照する
+Bot 候補生成を使います。
 収束診断のTOML先頭に新しいIDの生成と `tools/rust_player_operation.py` の起動例を
-記載しています。確定済み成果物は `ppo-hpo/mlp-256-convergence-1000-sacrifice`
+記載しています。確定済み成果物は `ppo-hpo/mlp-256-convergence-1000-defense-v3`
 配下に保存します。
 `uv sync --locked --inexact --extra torch-cuda --extra hpo --extra shared-inference`
 で `.venv` に依存関係を揃え、統合版に対応したNativeホイールを同じ環境に
 インストールします。起動時は `uv run --no-sync` でその環境を使います。
-検証済みwheelは `runs/sacrifice-eligibility/wheels` にあります。
-[実行版の検証記録](verification/sacrifice-eligibility.md)
+v3 対応 wheel は `runs/defense-v3-compat/wheels` にあります。
+以前の保存先と固定版は [Sacrifice 設定](../configs/hpo/mlp-256-convergence-1000-sacrifice.toml)
+で参照できます。 [v3 取り込みの検証](verification/simulator-v3-direct-defense.md)
 
 [版固定の256試合プローブ](../configs/hpo/mlp-256-update-budget-probe-dream.toml)と
 [プローブのテンプレート](../configs/hpo/mlp-256-update-budget-probe-dream-template.toml)は

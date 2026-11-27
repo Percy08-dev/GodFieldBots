@@ -1,6 +1,7 @@
 """Pure runtime selection cannot authorize old process or live host execution."""
 
 import asyncio
+import json
 import subprocess
 import sys
 import tomllib
@@ -75,14 +76,30 @@ def test_hpo_source_recipe_materializes_with_canonical_rust_encoder(tmp_path):
         campaign_config(raw | {"encoder": "canonical-python"}, origin=tmp_path)
 
 
-def test_default_convergence_preset_uses_sacrifice_stage_and_keeps_archived_base():
+def test_default_convergence_preset_uses_defense_v3_and_keeps_archived_configs():
     loaded = load_hpo_config(ROOT / "configs/hpo/mlp-256-convergence-1000.toml")
-    archived = load_config(ROOT / "configs/experiments/hpo-rust-mlp-pestle-mirage-base.toml")
-    release = sacrifice_card_instance_contract()
-    assert loaded.config.stage == "mlp-256-convergence-1000-sacrifice"
-    assert loaded.base.config.actions.action_contract == release
+    archived = load_hpo_config(ROOT / "configs/hpo/mlp-256-convergence-1000-sacrifice.toml")
+    pestle = load_config(ROOT / "configs/experiments/hpo-rust-mlp-pestle-mirage-base.toml")
+    release = loaded.base.config.actions.action_contract
+    assert loaded.config.stage == "mlp-256-convergence-1000-defense-v3"
+    assert release.profile_id == "card-instance-simulator-v3-shared-20261127-defense"
+    assert loaded.base.config.server.gameplay_api == release.gameplay_api == "v3"
     assert loaded.base.config.server.simulator_revision == release.simulator_revision
-    assert archived.config.actions.action_contract == pestle_mirage_card_instance_contract()
+    assert loaded.config.storage.parent_root != archived.config.storage.parent_root
+    assert loaded.config.storage.originals_root != archived.config.storage.originals_root
+    assert loaded.config.storage.optuna_path != archived.config.storage.optuna_path
+    assert loaded.config.decision_budget == archived.config.decision_budget
+    assert loaded.config.operating.max_updates == archived.config.operating.max_updates == 1000
+    assert archived.base.config.actions.action_contract == sacrifice_card_instance_contract()
+    assert pestle.config.actions.action_contract == pestle_mirage_card_instance_contract()
+
+
+def test_defense_v3_release_inventories_match_in_both_languages():
+    python = json.loads((ROOT / "src/gf_common/contracts/simulator-defense-v3.json").read_bytes())
+    native = json.loads((ROOT / "native/assets/card-instance-defense-v3-release.json").read_bytes())
+    assert native == {key: value for key, value in python.items() if key not in (
+        "contract", "simulator_revision",
+    )}
 
 
 def test_normal_explicit_runtime_normalizes_wait_and_keeps_effective_hash():

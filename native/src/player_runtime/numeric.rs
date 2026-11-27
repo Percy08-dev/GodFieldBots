@@ -195,7 +195,9 @@ impl ServingRow {
         let tokens = if owned {
             structured_tokens::frame_tokens_owned(frame, events, &recipe, budget, control)?
         } else {
-            structured_tokens::frame_tokens(frame, events, &recipe, budget, control)?
+            structured_tokens::frame_tokens_for_profile(
+                frame, events, &recipe, budget, control, config.wire_profile(),
+            )?
         };
         let t = &tokens.value;
         let layout: Value =

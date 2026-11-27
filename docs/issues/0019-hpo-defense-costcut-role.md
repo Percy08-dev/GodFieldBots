@@ -1,6 +1,8 @@
 # HPO6 の防御候補で CostCut 専用のカードを区別する
 
-状態は Simulator の公開仕様と検証済みリリース待ち。
+Simulator v3 `997a0de` を Bots に取り込み、p46 の候補照合と CUDA 上の収集・保存を確認した。
+[採用した Action profile](../adr/0079-simulator-v3-direct-defense.md) ·
+[検証記録](../verification/simulator-v3-direct-defense.md)
 
 ## 再現と確認済みの挙動
 

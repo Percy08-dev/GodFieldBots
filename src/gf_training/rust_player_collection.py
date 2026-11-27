@@ -275,14 +275,14 @@ class RustPlayerCollector:
         return result
 
     def _uses_native_journal(self, plan: Any) -> bool:
-        from gf_common.card_instance import sacrifice_card_instance_contract
+        from gf_common.card_instance import DEFENSE_V3_PROFILE, SACRIFICE_PROFILE
 
         games = sum(len(group.episodes) for group in plan.groups)
         return (
             self.registry.hpo
             and self.mode is not None
             and self.registry.state["model_id"] == "mlp"
-            and self.config.actions.action_contract == sacrifice_card_instance_contract()
+            and self.config.actions.action_contract.profile_id in (SACRIFICE_PROFILE, DEFENSE_V3_PROFILE)
             and 0 < games <= self.declaration["game_concurrency"]
             and all(binding.model_id in ("mlp", "random", "heuristic", "heuristic_refresh")
                     for binding in plan.bindings.values())

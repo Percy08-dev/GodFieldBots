@@ -330,7 +330,7 @@ def prepare_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
     from gf_models.rust_player import sampling_runtime_identity
     from gf_simulator_client.rust_player_companion import discover_companion
     from gf_training.lineage import run_lock
-    from gf_training.native_backend import binary_identity
+    from gf_training.native_backend import binary_identity, require_native_defense_v3
     from gf_training.rust_player_supervision import (
         read_control_record,
         runtime_producer,
@@ -344,6 +344,7 @@ def prepare_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
     check_native_collection_storage(cfg.storage, Path(directory).absolute())
     startup_preview(loaded)
     native = binary_identity()
+    require_native_defense_v3(native['build'], cfg.actions.action_contract)
     companion = discover_companion(native)
     # Established actual build metadata only; no CUDA availability/init/tensors.
     producer = runtime_producer(companion, sampling_runtime_sha256=sampling_runtime_identity())
@@ -485,19 +486,21 @@ def require_native_hpo_storage(storage: Any, identity: Json) -> None:
 
 def require_native_hpo_action_profile(actions: object, build: Json) -> None:
     from gf_common.card_instance import (
+        DEFENSE_V3_PROFILE,
         DREAM_COMPAT_PROFILE,
         MOON_DREAM_PROFILE,
         PESTLE_MIRAGE_PROFILE,
         SACRIFICE_PROFILE,
         ActionConfigV3,
     )
-    from gf_training.native_backend import require_native_concealed_draw
+    from gf_training.native_backend import require_native_concealed_draw, require_native_defense_v3
 
     if not isinstance(actions, ActionConfigV3):
         return
     profile = actions.action_contract.profile_id
-    if profile in (DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
+    if profile in (DREAM_COMPAT_PROFILE, MOON_DREAM_PROFILE, PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE, DEFENSE_V3_PROFILE):
         require_native_concealed_draw(build)
+    require_native_defense_v3(build, actions.action_contract)
     if profile == MOON_DREAM_PROFILE and build.get('card_instance_moon_dream') != MOON_DREAM_PROFILE:
         raise ContractError('Moon God and Dream profile requires a matching native runtime wheel')
     if profile == PESTLE_MIRAGE_PROFILE and build.get('card_instance_pestle_mirage') != PESTLE_MIRAGE_PROFILE:

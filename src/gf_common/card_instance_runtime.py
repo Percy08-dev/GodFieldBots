@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any
 
 from gf_common.card_instance import (
+    _DEFENSE_V3_RELEASE,
     CORRECTED_REVIEWED_SPEC_HASHES,
     DREAM_COMPAT_PROFILE,
     MOON_DREAM_PROFILE,
@@ -127,6 +128,8 @@ def require_corrected_contract(contract: CardInstanceContract) -> None:
 
 def approved_binary_sha256(contract: CardInstanceContract) -> str:
     require_corrected_contract(contract)
+    if contract.requires_direct_defense:
+        return str(_DEFENSE_V3_RELEASE["binary_sha256"])
     if contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
         return PESTLE_MIRAGE_BINARY_SHA256
     if contract.profile_id == MOON_DREAM_PROFILE:
@@ -142,7 +145,11 @@ def approved_binary_sha256(contract: CardInstanceContract) -> str:
 
 def approved_runtime_build(contract: CardInstanceContract) -> Json:
     binary_sha256 = approved_binary_sha256(contract)
-    if contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
+    if contract.requires_direct_defense:
+        change_hash, change_files = (
+            _DEFENSE_V3_RELEASE["change_inventory_sha256"], _DEFENSE_V3_RELEASE["change_files"]
+        )
+    elif contract.profile_id in (PESTLE_MIRAGE_PROFILE, SACRIFICE_PROFILE):
         change_hash, change_files = PESTLE_MIRAGE_CHANGE_SHA256, PESTLE_MIRAGE_CHANGE_FILES
     elif contract.profile_id == MOON_DREAM_PROFILE:
         change_hash, change_files = MOON_DREAM_CHANGE_SHA256, MOON_DREAM_CHANGE_FILES

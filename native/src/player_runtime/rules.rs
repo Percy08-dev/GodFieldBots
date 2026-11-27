@@ -150,6 +150,7 @@ pub fn analyze(
     flash: bool,
     maximum: usize,
     usable: &[bool],
+    defense_direct: Option<u32>,
     context: Incoming,
     requires_powder_weapon: bool,
     mirage_danger_requires_opponent: bool,
@@ -206,11 +207,22 @@ pub fn analyze(
             {
                 return empty();
             }
+            let rainbow_first = defense_direct.is_some_and(|direct| {
+                cards[refs[0]].ability == "filterAtkElement" && direct & (1 << refs[0]) != 0
+            });
             for &r in &effective {
                 let c = &cards[r];
                 let Some(mut exclusive) = defense_kind(c) else {
                     return empty();
                 };
+                if c.ability == "cutCost" && defense_direct.is_some_and(|direct| direct & (1 << r) == 0) {
+                    // First Rainbow Curtain clears the attribute. Ordinary CutCost
+                    // armor can reduce neutral damage if still usable.
+                    let clears_for_armor = rainbow_first && c.kind == "armor" && c.defense > 0;
+                    if !clears_for_armor {
+                        return empty();
+                    }
+                }
                 if c.defense > 0
                     && ["blockMiracle", "bounceMiracle", "reflectMiracle"]
                         .contains(&c.ability.as_str())

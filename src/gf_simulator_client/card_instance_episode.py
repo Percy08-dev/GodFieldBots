@@ -180,8 +180,10 @@ class CardInstanceEpisode:
         )
         if tree:
             policy.retained_bytes((None if bank is None else vars(bank), previous, message))
-        frame = parse_frame(message["frame"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
-        delta = parse_delta(message["delta"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+        frame = parse_frame(message["frame"], layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+                            action_contract=actions.action_contract)
+        delta = parse_delta(message["delta"], layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+                            action_contract=actions.action_contract)
         integer(frame.boundary.end, 0, caps.max_episode_events)
         integer(frame.boundary.end - frame.interval_start, 0, caps.max_interval_events)
         if caps.max_decisions is not None:
@@ -201,6 +203,7 @@ class CardInstanceEpisode:
                 frame.episode,
                 caps.max_episode_events,
                 layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+                action_contract=actions.action_contract,
             )
         if tree:
             # Account raw parsed copies and the complete active bank before mutation.

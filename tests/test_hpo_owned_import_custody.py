@@ -158,9 +158,11 @@ def test_decode_admission_failure_does_not_leave_unbacked_live_receipt(paused_pa
 
 
 def test_optional_legacy_capture_hooks_default_to_strict_replay():
+    from gf_common.card_instance import corrected_card_instance_contract
     from gf_common.domain import ContractError, EpisodeResult
     from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
     environment=object.__new__(CardInstanceSimulatorEnvironment)
+    environment.action_contract = corrected_card_instance_contract()
     episode=EpisodeResult('e','p','s',('random','heuristic'))
     environment._episode_opened(episode)
     environment._act_acknowledged(episode,1,{}, {})
