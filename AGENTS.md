@@ -13,6 +13,15 @@ accepted records in `docs/adr/`. Check the simulator's current normative specs
 when changing its integration. Record the revision and schema versions used;
 do not silently reinterpret an older dataset using current semantics.
 
+## Model documentation
+
+Follow the [model catalog guide](docs/models/README.md) when adding a model or
+changing its network blocks, default tensor shapes, policy-input contract, or
+compatibility. In the same change, update the catalog and affected model pages.
+Regenerate the affected neural SVGs when their graph or representative profile
+changes and run the catalog check before acceptance. Link existing run records
+for trial-specific settings and verification records for claims about results.
+
 ## Engineering efficiency and resource discipline
 
 - Trust documented library guarantees, type invariants, and

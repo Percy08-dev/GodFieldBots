@@ -289,6 +289,10 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
 ]
+model-docs = [
+    { name = "graphviz" },
+    { name = "torchview" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -315,6 +319,10 @@ dev = [
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "ruff", specifier = ">=0.14,<1" },
 ]
+model-docs = [
+    { name = "graphviz", specifier = ">=0.21" },
+    { name = "torchview", specifier = ">=0.2.7" },
+]
 
 [[package]]
 name = "godfieldbots-native"
@@ -326,6 +334,15 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "numpy", specifier = "==2.5.4" }]
+
+[[package]]
+name = "graphviz"
+version = "0.21"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b3/3ac91e9be6b761a4b30d66ff165e54439dcd48b83f4e20d644867215f6ca/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78", size = 200434, upload-time = "2025-06-15T09:35:05.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/4c/e0ce1ef95d4000ebc1c11801f9b944fa5910ecc15b5e351865763d8657f8/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42", size = 47300, upload-time = "2025-06-15T09:35:04.433Z" },
+]
 
 [[package]]
 name = "grpcio"
@@ -1393,6 +1410,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/83/bd7ac22e292520aedbe4512c9161b454c1ffafac33582dbf7e0ab963bd2b/torchrl-0.15.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:91ba3c703025b763807d6ee9c31c425d7cab7aed00af50ccbe7599346822f7e4", size = 3582139, upload-time = "2026-11-10T01:34:28.205Z" },
     { url = "https://files.pythonhosted.org/packages/94/f6/4910360be19745fcad20faf65670f2643072cf9177633328289fcb43c7a9/torchrl-0.15.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:c1311b08869d0059535d7449a91bad7db48e02495109920ed71a137c90a2db05", size = 3596488, upload-time = "2026-11-10T01:34:29.984Z" },
     { url = "https://files.pythonhosted.org/packages/ef/79/7bd75956b3b33533155f251b3cc74aa8e0c5cc37fda0290bf1bc9a2a9927/torchrl-0.15.0-cp314-cp314-win_amd64.whl", hash = "sha256:fe2bbefeee71e849f09b72e69aef5de790acc0fb7ff5f0e4f828dfe15aa9a78d", size = 3561564, upload-time = "2026-11-10T01:34:31.997Z" },
+]
+
+[[package]]
+name = "torchview"
+version = "0.2.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "graphviz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/45/f76ac5a2a49f3a5831ddde2e7e6b58fe423b434075e812559976a2122560/torchview-0.2.7.tar.gz", hash = "sha256:c5898fd03d256333c9827000c1f83e1052fbcfc1066032d86b30d429dd942f7c", size = 25697, upload-time = "2025-04-22T20:47:27.49Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/66/b87d835f664f0f99a0bf1e2e294c45d286545fed35b96f2c99e700915dd9/torchview-0.2.7-py3-none-any.whl", hash = "sha256:c7f3a9d16138c20b606900ecbf46d01489f2b8c77ed97e71293883bc606c2be0", size = 26103, upload-time = "2025-04-22T20:47:26.12Z" },
 ]
 
 [[package]]

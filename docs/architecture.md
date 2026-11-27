@@ -2,6 +2,11 @@
 
 ## Status and scope
 
+[ADR0078](adr/0078-model-documentation.md) defines the [model catalog](models/README.md).
+The documentation tool reads existing CPU model factories and representative
+synthetic inputs. An opt-in `model-docs` uv group provides torchview and its
+Python Graphviz dependency. Rendering uses the system `dot` executable.
+
 [ADR0074](adr/0074-rust-player-sequence-hpo.md) extends the Rust HPO6
 collection and save/resume path to Model4 GRU and Transformer by explicit
 CUDA recipe. The [verification record](verification/rust-player-sequence-hpo.md)

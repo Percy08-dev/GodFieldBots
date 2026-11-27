@@ -24,6 +24,7 @@ tensorboard = ["tensorboard==2.21.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.4,<10", "pytest-xdist==3.8.0", "ruff>=0.14,<1", "mypy>=1.18,<2"]
+model-docs = ["torchview>=0.2.7", "graphviz>=0.21"]
 
 [project.scripts]
 godfieldbots = "godfieldbots:main"

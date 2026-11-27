@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0078](0078-model-documentation.md) — モデル構造の一覧と個別ページを管理し、
+ニューラルモデルの代表 CPU 実行から SVG を生成する。
+
 [0074](0074-rust-player-sequence-hpo.md) — CUDA HPO6 の Model4 系列推論を
 Rust の試合進行、要求の受理と退役、既存 Numeric6 学習へ接続する。
 

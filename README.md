@@ -20,6 +20,7 @@ CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装し�
 [ハイパーパラメータ探索調査](docs/research/hyperparameter-search.md)に整理しています。
 会話で提案された候補範囲拡張・エンコーダーと、その根拠・訂正・未決事項は
 [独立した議論整理](docs/research/discussion-review.md)を参照してください。
+既存モデルの構成図、代表入力、対応する設定は[モデル一覧](docs/models/README.md)にあります。
 
 Python **3.14（GIL有効）** とuvを使用します。ゲームルールと最終合法性は外部の
 `../GodFieldSimurator`が所有します。Simulatorをビルド・変更する機能は含みません。
