@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "purpose": "diagnostic-replay-not-training-data",
+  "simulator_revision": "6d50603dab3f6d2df34ea4e433bab7dca96f52c1",
+  "original_profile": "card-instance-simulator-v2-shared-20261125-sacrifice",
+  "original_run_id": "0f9a6874-1e26-4290-b34c-8b757884f6d4",
+  "http_log_sha256": "5bdea00a4762950646e633b7c44ce32a55b33bf159161a8702f73c7ca6735e7c",
+  "rejected": {
+    "actor": 2,
+    "revision": 32,
+    "action": {
+      "ordered_card_refs": [
+        "c1_f8e7fc87010ae19944835b4b79b9c134"
+      ],
+      "type": "respond"
+    },
+    "http_status": 422,
+    "rejection_code": "unavailable_artifact"
+  },
+  "accepted_response": {
+    "action": {
+      "type": "respond",
+      "ordered_card_refs": [
+        "c1_e7b45493fef5d7bcf140ca8248002e15",
+        "c1_f8e7fc87010ae19944835b4b79b9c134"
+      ]
+    },
+    "revision": 33,
+    "miracle_mp_spent": 0
+  },
+  "replay_controls": {
+    "game_seed": "e5a87bc9-f0f0-55cb-a4a4-888775c9d8ba",
+    "seed_fingerprint": "v1-fc1a674e7a84ace67a73ff14a788b6dfaaf06c46fc3cc43346c4526d26bed5c9",
+    "accepted": [
+      {"actor":2,"revision":0,"action":{"type":"pray"}},
+      {"actor":1,"revision":1,"action":{"ordered_card_refs":["c1_6ade98bf8518003d676495e5ce026807"],"target":1,"type":"play_sequence"}},
+      {"actor":2,"revision":2,"action":{"type":"pray"}},
+      {"actor":1,"revision":3,"action":{"ordered_card_refs":["c1_bad7ee1ebf855485670c474865d9f868"],"target":1,"type":"play_sequence"}},
+      {"actor":2,"revision":4,"action":{"type":"pray"}},
+      {"actor":1,"revision":5,"action":{"card_refs":["c1_84cd2daaf264dd14d952272612216c5a"],"type":"discard"}},
+      {"actor":2,"revision":6,"action":{"type":"pray"}},
+      {"actor":1,"revision":7,"action":{"ordered_card_refs":["c1_38ce93c8c6d1d6190e43af5d41623f87"],"target":2,"type":"play_sequence"}},
+      {"actor":2,"revision":8,"action":{"ordered_card_refs":["c1_a8bba7d61d33e733b5a93043ef16daf3","c1_0e23c36dbc2c0be98cca0e805f7900d5","c1_ee8104014ba3a7fb4d3335267a424dc8","c1_dd684707101e96de787bc726744d8504","c1_fb3f1318f963cbc78e5c079e5c8daadf","c1_a0128beeaf042c604ba2918ef26fd951"],"type":"respond"}},
+      {"actor":2,"revision":9,"action":{"ordered_card_refs":["c1_3054811dd3af93d905d8ba1c9edfd049","c1_c6f862fc0020398753a3266c9af435dc"],"target":1,"type":"play_sequence"}},
+      {"actor":1,"revision":10,"action":{"ordered_card_refs":["c1_2ee04c650db855ec7bad89db103ed998","c1_75cf1fe464949eb5698dea3ce68d2ab4","c1_e0f81ff6857e5dacc710db83563b6609"],"type":"respond"}},
+      {"actor":1,"revision":11,"action":{"ordered_card_refs":["c1_8fad98793c7f35619f8b837da3d2ae11"],"target":1,"type":"play_sequence"}},
+      {"actor":2,"revision":12,"action":{"ordered_card_refs":["c1_6c4d16ee5c9c42ed6e87d3de8a233383"],"target":1,"type":"play_sequence"}},
+      {"actor":1,"revision":13,"action":{"ordered_card_refs":["c1_20c2f7c17523db1a5eefaf8e35f85d40","c1_1a9a1182365ce0ce0c0068396b0305d0"],"type":"respond"}},
+      {"actor":1,"revision":14,"action":{"ordered_card_refs":["c1_aec4051d179537b8bd90b7618465d8d6"],"target":2,"type":"play_sequence"}},
+      {"actor":2,"revision":15,"action":{"ordered_card_refs":["c1_de638203407450ecbc44cfc7e06f6aa6","c1_7d43785b9f0996e2e7e2958fd55453e5","c1_fef8983824874249032d2ea364bb6e9d","c1_cc7b726f2881721a0aa2bed932e29f0e"],"type":"respond"}},
+      {"actor":2,"revision":16,"action":{"ordered_card_refs":["c1_928b20ed9924aeb64ed2de24b9d5a79b"],"target":1,"type":"play_sequence"}},
+      {"actor":1,"revision":17,"action":{"card_refs":["c1_6f37df634aa6bd85b4c48e4f0dbfccb5","c1_a7f1b836de739220ba84cc4ad74eccc8","c1_29cda65929c611f312f1a9f0e8f12ebc","c1_e6ef47a55f38fcc7af401ec8aa575aa8"],"type":"discard"}},
+      {"actor":2,"revision":18,"action":{"type":"pray"}},
+      {"actor":1,"revision":19,"action":{"ordered_card_refs":["c1_8452bffc4e705a8fae27341a20140039"],"target":2,"type":"play_sequence"}},
+      {"actor":2,"revision":20,"action":{"ordered_card_refs":["c1_8628bad76da187a5e21e11c126671d0c"],"type":"respond"}},
+      {"actor":2,"revision":21,"action":{"ordered_card_refs":["c1_e38933665da924604dec961927f3f103"],"target":1,"type":"play_sequence"}},
+      {"actor":1,"revision":22,"action":{"ordered_card_refs":[],"type":"respond"}},
+      {"actor":1,"revision":23,"action":{"ordered_card_refs":["c1_2ab9e979e3c7e6dcf140b96b3797e24a"],"target":2,"type":"play_sequence"}},
+      {"actor":2,"revision":24,"action":{"ordered_card_refs":["c1_49facff3492a0846b9c69bd9e3c8533f"],"type":"respond"}},
+      {"actor":2,"revision":25,"action":{"card_ref":"c1_124a7af27e4d8bae6dd61e50eee040ff","hp":70,"money":0,"mp":0,"type":"exchange"}},
+      {"actor":1,"revision":26,"action":{"type":"pray"}},
+      {"actor":2,"revision":27,"action":{"ordered_card_refs":["c1_8d8843712e9d42db5366cb3a60af6df7"],"target":1,"type":"play_sequence"}},
+      {"actor":1,"revision":28,"action":{"ordered_card_refs":["c1_ae39d2679fd79f040f1c7a2470106833","c1_e793ce018f03dc6e3f518e7a2f6a5076"],"type":"respond"}},
+      {"actor":1,"revision":29,"action":{"ordered_card_refs":["c1_c6119deb2c8300127ae2fe1996a40196"],"target":1,"type":"play_sequence"}},
+      {"actor":2,"revision":30,"action":{"type":"pray"}},
+      {"actor":1,"revision":31,"action":{"ordered_card_refs":["c1_809a7390dec729bff92d7e0f9253eb55"],"target":2,"type":"play_sequence"}}
+    ]
+  },
+  "actor_public": {
+    "observation": {
+      "observation_schema_version": "2",
+      "rule_set_version": "true-match-1v1-v2",
+      "card_ref_scheme": "aes256-card-ref-v1",
+      "action_schema_version": 2,
+      "actionable": true,
+      "typed_action_schema": [
+        {
+          "type": "respond",
+          "required_fields": {
+            "ordered_card_refs": {
+              "items": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "ordered": true,
+              "type": "array",
+              "unique": true
+            }
+          },
+          "optional_fields": {},
+          "additional_fields": false
+        }
+      ],
+      "state_revision": 32,
+      "viewer_player_id": 2,
+      "turn": 24,
+      "turns_until_end_of_world": 126,
+      "first_player": 2,
+      "active_player": 1,
+      "current_player": 2,
+      "phase": "awaiting_response",
+      "required_choice": "defense",
+      "end_times": false,
+      "own": {
+        "player_id": 2,
+        "hp": 70,
+        "mp": 0,
+        "money": 0,
+        "cards": [
+          {
+            "kind": "artifact",
+            "card_ref": "c1_8ea7f4d1ada85ab5c492cb8c2bd99298",
+            "definition_id": "guardian-pot"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_35e2747cc99b99c1da9bf2a618c8b8ce",
+            "definition_id": "buy"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_74bd0f7a731ba1e00aa30f61d9017127",
+            "definition_id": "guardian-pot"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_9433e91ced934d81d6392a71108b2ba6",
+            "definition_id": "buy"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_5d448bc25eab2b56dbb3f98c05602bbf",
+            "definition_id": "thump-thump-tear"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_6376dfa14499dc6baca8b88eaa99f449",
+            "definition_id": "buy"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_cdadf55baf889319941f0940dfa90926",
+            "definition_id": "heart-shell"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_f143b3aecd37177c27f87297d9379cb4",
+            "definition_id": "heart-dew"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_2eab90468ea7cb970636ca8bc688d2ea",
+            "definition_id": "smile-shell"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_115f7eb42212ae6a35c3ce608afadd0c",
+            "definition_id": "sell"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_f8e7fc87010ae19944835b4b79b9c134",
+            "definition_id": "spiritual-hood"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_67449c1b5146946060e299659a557ef0",
+            "definition_id": "smile-dew"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_bacff51c8d05230b11e2b9a6c8b27214",
+            "definition_id": "buy"
+          },
+          {
+            "kind": "miracle",
+            "card_ref": "c1_e7b45493fef5d7bcf140ca8248002e15",
+            "definition_id": "turbulence",
+            "state": "unused"
+          },
+          {
+            "kind": "artifact",
+            "card_ref": "c1_6ca3cea794158d0a8a30a68de7006626",
+            "definition_id": "exchange"
+          }
+        ],
+        "status": {
+          "disease": null,
+          "fog": false,
+          "flash": false,
+          "dream": false,
+          "dark_cloud": false
+        },
+        "guardian": null,
+        "ascended": false
+      },
+      "opponent": {
+        "player_id": 1,
+        "hp": 37,
+        "mp": 27,
+        "money": 20,
+        "learned_miracles": [
+          "big-tree"
+        ],
+        "status": {
+          "disease": null,
+          "fog": false,
+          "flash": false,
+          "dream": true,
+          "dark_cloud": false
+        },
+        "ascended": false
+      },
+      "result": null
+    },
+    "action_options": {
+      "state_revision": 32,
+      "action_options": {
+        "action_options_schema_version": "2",
+        "rule_set_version": "true-match-1v1-v2",
+        "card_ref_scheme": "aes256-card-ref-v1",
+        "actor": 2,
+        "state_revision": 32,
+        "required_choice": "defense",
+        "usable_cards": [
+          {
+            "card_ref": "c1_f8e7fc87010ae19944835b4b79b9c134",
+            "definition_id": "spiritual-hood"
+          },
+          {
+            "card_ref": "c1_e7b45493fef5d7bcf140ca8248002e15",
+            "definition_id": "turbulence"
+          }
+        ],
+        "candidate_groups": {
+          "armor": [
+            {
+              "card_ref": "c1_f8e7fc87010ae19944835b4b79b9c134",
+              "definition_id": "spiritual-hood"
+            }
+          ],
+          "cost_cut": [
+            {
+              "card_ref": "c1_f8e7fc87010ae19944835b4b79b9c134",
+              "definition_id": "spiritual-hood"
+            }
+          ],
+          "defense": [
+            {
+              "card_ref": "c1_e7b45493fef5d7bcf140ca8248002e15",
+              "definition_id": "turbulence"
+            }
+          ],
+          "miracle:defense": [
+            {
+              "card_ref": "c1_e7b45493fef5d7bcf140ca8248002e15",
+              "definition_id": "turbulence"
+            }
+          ],
+          "numeric_defense": [
+            {
+              "card_ref": "c1_f8e7fc87010ae19944835b4b79b9c134",
+              "definition_id": "spiritual-hood"
+            }
+          ]
+        },
+        "exchange_cards": [],
+        "sell_cards": [],
+        "buy_cards": [],
+        "phenomenon_cards": [],
+        "valid_targets": [],
+        "can_pray": false,
+        "can_discard": false,
+        "can_sacrifice": false,
+        "can_allow": true
+      }
+    },
+    "events": [
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"steel-armor"},
+      {"type":"turn_started","turn":2,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"heart-flower"},
+      {"type":"resource_changed","player":1,"hp_delta":0,"mp_delta":10,"money_delta":0},
+      {"type":"turn_started","turn":3,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"buy"},
+      {"type":"turn_started","turn":4,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"smile-flower"},
+      {"type":"resource_changed","player":1,"hp_delta":0,"mp_delta":5,"money_delta":0},
+      {"type":"turn_started","turn":5,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"core-protector"},
+      {"type":"turn_started","turn":6,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"turn_started","turn":7,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"blowgun"},
+      {"type":"turn_started","turn":8,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"punch"},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":3},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"core-protector"},
+      {"type":"artifact_used","player":2,"definition_id":"steel-armor"},
+      {"type":"artifact_used","player":2,"definition_id":"iron-shield"},
+      {"type":"artifact_used","player":2,"definition_id":"leather-clothes"},
+      {"type":"artifact_used","player":2,"definition_id":"terra-gauntlet"},
+      {"type":"artifact_used","player":2,"definition_id":"spiritual-hood"},
+      {"type":"artifact_drawn","player":2,"definition_id":"angel-armor"},
+      {"type":"artifact_drawn","player":2,"definition_id":"bronze-club"},
+      {"type":"artifact_drawn","player":2,"definition_id":"iron-gauntlet"},
+      {"type":"artifact_drawn","player":2,"definition_id":"steel-helm"},
+      {"type":"artifact_drawn","player":2,"definition_id":"hard-hammer"},
+      {"type":"artifact_drawn","player":2,"definition_id":"ice-helm"},
+      {"type":"turn_started","turn":9,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"hard-hammer"},
+      {"type":"artifact_used","player":2,"definition_id":"blowgun"},
+      {"type":"attack_declared","attacker":2,"target":1,"attack":7},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"forest-shield"},
+      {"type":"artifact_used","player":1,"definition_id":"iron-shield"},
+      {"type":"artifact_used","player":1,"definition_id":"flame-boots"},
+      {"type":"artifact_drawn","player":2,"definition_id":"heart-shell"},
+      {"type":"artifact_drawn","player":2,"definition_id":"energy-helm"},
+      {"type":"turn_started","turn":10,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"guardian-pot"},
+      {"type":"guardian_set","player":1,"definition_id":"pluto"},
+      {"type":"turn_started","turn":11,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"bronze-club"},
+      {"type":"attack_declared","attacker":2,"target":1,"attack":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"dreaming-hat"},
+      {"type":"artifact_used","player":1,"definition_id":"spiritual-hood"},
+      {"type":"status_changed","player":1,"status":"dream","active":true},
+      {"type":"artifact_drawn","player":2,"definition_id":"heart-dew"},
+      {"type":"guardian_acted","player":1,"definition_id":"thinking"},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":1},
+      {"type":"attack_missed","attacker":1,"target":2},
+      {"type":"turn_started","turn":12,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"spiked-belt"},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":4},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"energy-helm"},
+      {"type":"artifact_used","player":2,"definition_id":"ice-helm"},
+      {"type":"artifact_used","player":2,"definition_id":"steel-helm"},
+      {"type":"artifact_used","player":2,"definition_id":"iron-gauntlet"},
+      {"type":"artifact_drawn","player":2,"definition_id":"smile-shell"},
+      {"type":"artifact_drawn","player":2,"definition_id":"flame-helm"},
+      {"type":"artifact_drawn","player":2,"definition_id":"cliff-hammer"},
+      {"type":"artifact_drawn","player":2,"definition_id":"sell"},
+      {"type":"turn_started","turn":13,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"cliff-hammer"},
+      {"type":"attack_declared","attacker":2,"target":1,"attack":6},
+      {"type":"attack_missed","attacker":2,"target":1},
+      {"type":"artifact_drawn","player":2,"definition_id":"spiritual-hood"},
+      {"type":"turn_started","turn":14,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"turn_started","turn":15,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"fire-whip"},
+      {"type":"turn_started","turn":16,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"direct-smash-axe"},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":12},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"angel-armor"},
+      {"type":"artifact_drawn","player":2,"definition_id":"smile-dew"},
+      {"type":"turn_started","turn":17,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"fire-whip"},
+      {"type":"attack_declared","attacker":2,"target":1,"attack":3},
+      {"type":"action_accepted","player":1},
+      {"type":"damage_applied","player":1,"amount":3,"remaining_hp":37},
+      {"type":"guardian_left","player":1,"definition_id":"pluto"},
+      {"type":"artifact_drawn","player":2,"definition_id":"buy"},
+      {"type":"turn_started","turn":18,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"icicle"},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":1},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"flame-helm"},
+      {"type":"artifact_drawn","player":2,"definition_id":"exchange"},
+      {"type":"turn_started","turn":19,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"exchange"},
+      {"type":"artifact_drawn","player":2,"definition_id":"bronze-club"},
+      {"type":"turn_started","turn":20,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"turn_started","turn":21,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_used","player":2,"definition_id":"bronze-club"},
+      {"type":"attack_declared","attacker":2,"target":1,"attack":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"iron-gauntlet"},
+      {"type":"artifact_used","player":1,"definition_id":"crystal-board"},
+      {"type":"artifact_drawn","player":2,"definition_id":"turbulence"},
+      {"type":"turn_started","turn":22,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"smile-flower"},
+      {"type":"resource_changed","player":1,"hp_delta":0,"mp_delta":5,"money_delta":0},
+      {"type":"turn_started","turn":23,"active_player":2},
+      {"type":"action_accepted","player":2},
+      {"type":"artifact_drawn","player":2,"definition_id":"exchange"},
+      {"type":"turn_started","turn":24,"active_player":1},
+      {"type":"action_accepted","player":1},
+      {"type":"artifact_used","player":1,"definition_id":"big-tree"},
+      {"type":"miracle_used","player":1,"definition_id":"big-tree","mp_spent":3},
+      {"type":"attack_declared","attacker":1,"target":2,"attack":6}
+    ],
+    "history_end": "v1-98a446057c7d2918-e89696d549fbc50daa03d0c1ee20cf9b"
+  }
+}
